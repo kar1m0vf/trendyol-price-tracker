@@ -1,0 +1,10 @@
+aiogram==3.4.1
+requests==2.31.0
+beautifulsoup4==4.12.2
+apscheduler==3.10.4
+matplotlib==3.8.0
+cloudscraper==1.2.71
+python-dotenv==1.0.0
+# Development / testing
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
