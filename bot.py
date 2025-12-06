@@ -146,6 +146,35 @@ def parse_date_flexible(date_str: str) -> Optional[datetime]:
     return None
 
 
+def safe_ts_to_iso(ts_val) -> str:
+    """Convert a timestamp-like value to ISO date string safely.
+    Accepts int/float (epoch), ISO strings, or common date formats (dd.mm.YYYY).
+    Falls back to str(ts_val) if parsing fails.
+    """
+    if ts_val is None:
+        return ""
+    if isinstance(ts_val, (int, float)):
+        try:
+            return datetime.fromtimestamp(int(ts_val)).isoformat()
+        except Exception:
+            return str(ts_val)
+    if isinstance(ts_val, str):
+        try:
+            # if already ISO-like
+            datetime.fromisoformat(ts_val)
+            return ts_val
+        except Exception:
+            try:
+                dt = datetime.strptime(ts_val, "%d.%m.%Y")
+                return dt.isoformat()
+            except Exception:
+                return ts_val
+    try:
+        return str(ts_val)
+    except Exception:
+        return ""
+
+
 async def send_notification_safe(
     user_id: int,
     text: str,
@@ -492,8 +521,8 @@ async def cmd_history(message: types.Message):
         # First try local DB history
         db_hist = get_price_history(sid, limit=1000)
         if db_hist and len(db_hist) >= 2:
-            # convert (ts, price) -> [(iso_date, price), ...]
-            hist = [(datetime.fromtimestamp(r[0]).isoformat(), r[1]) for r in db_hist]
+            # convert (ts, price) -> [(iso_date, price), ...] using safe conversion
+            hist = [(safe_ts_to_iso(r[0]), r[1]) for r in db_hist]
             await send_history_plot(message.from_user.id, url, hist)
             return
 
@@ -1198,7 +1227,7 @@ async def callback_handler(cq: CallbackQuery):
                 # Prefer DB history
                 db_hist = get_price_history(sid, limit=1000)
                 if db_hist and len(db_hist) >= 2:
-                    hist = [(datetime.fromtimestamp(r[0]).isoformat(), r[1]) for r in db_hist]
+                    hist = [(safe_ts_to_iso(r[0]), r[1]) for r in db_hist]
                     await send_history_plot(user_id, url, hist)
                     return
 
