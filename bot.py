@@ -962,13 +962,18 @@ async def cmd_history_export(message: types.Message):
     try:
         parts = (message.text or "").split()
         if len(parts) < 2 or not parts[1].isdigit():
-            await message.answer("ℹ️ Использование: /history_export <ID> [csv|json]")
+            await message.answer("ℹ️ Использование: /history_export <ID> [days] [csv|json]")
             return
 
         sub_id = int(parts[1])
         fmt = "csv"
-        if len(parts) > 2 and parts[2].lower() in {"csv", "json"}:
-            fmt = parts[2].lower()
+        days = None
+        # parse optional args: any numeric => days, csv/json => fmt
+        for p in parts[2:]:
+            if p.lower() in {"csv", "json"}:
+                fmt = p.lower()
+            elif p.isdigit():
+                days = int(p)
 
         sub = get_subscription(sub_id)
         if not sub:
@@ -978,17 +983,27 @@ async def cmd_history_export(message: types.Message):
             await message.answer(t(message.from_user.id, "error_not_your_sub"))
             return
 
-        # Получаем всю историю (ограничение 10000 точек по умолчанию в save_price_point)
-        rows = get_price_history(sub_id, limit=10000)
+        # Получаем историю: если days задан — используем локальную резонную выборку по дням,
+        # иначе берём полный dump (limit)
+        if days is not None:
+            rows = get_local_price_history(sub_id, days=days)
+        else:
+            rows = get_price_history(sub_id, limit=10000)
+
         if not rows:
             await message.answer("📊 История для этой подписки отсутствует.")
             return
 
         os.makedirs("backups", exist_ok=True)
         ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+
+        # JSON payload: adapt depending on row type (ts int or iso string)
         if fmt == "json":
+            if isinstance(rows[0][0], str):
+                payload = json.dumps([{"iso": r[0], "price": r[1]} for r in rows], ensure_ascii=False, indent=2)
+            else:
+                payload = json.dumps([{"ts": r[0], "price": r[1]} for r in rows], ensure_ascii=False, indent=2)
             fname = f"backups/history_{sub_id}_{ts}.json"
-            payload = json.dumps([{"ts": r[0], "price": r[1]} for r in rows], ensure_ascii=False, indent=2)
             with open(fname, "w", encoding="utf-8") as f:
                 f.write(payload)
             with open(fname, "rb") as f:
@@ -1002,11 +1017,16 @@ async def cmd_history_export(message: types.Message):
             writer = csv.writer(f)
             writer.writerow(["ts", "iso_datetime", "price"])
             for ts_val, price in rows:
-                try:
-                    iso = datetime.utcfromtimestamp(int(ts_val)).isoformat()
-                except Exception:
-                    iso = str(ts_val)
-                writer.writerow([ts_val, iso, price])
+                if isinstance(ts_val, str):
+                    iso = ts_val
+                    raw_ts = ""
+                else:
+                    try:
+                        iso = datetime.utcfromtimestamp(int(ts_val)).isoformat()
+                    except Exception:
+                        iso = ""
+                    raw_ts = ts_val
+                writer.writerow([raw_ts, iso, price])
 
         with open(fname, "rb") as f:
             await bot.send_document(message.from_user.id, types.InputFile(f, filename=os.path.basename(fname)))
@@ -1015,6 +1035,58 @@ async def cmd_history_export(message: types.Message):
 
     except Exception as e:
         logger.exception("history_export error: %s", e)
+        await message.answer(t(message.from_user.id, "error_generic"))
+
+
+# /history_plot <ID> [days] - build and send PNG price history plot
+@dp.message(Command("history_plot"))
+async def cmd_history_plot(message: types.Message):
+    try:
+        parts = (message.text or "").split()
+        if len(parts) < 2 or not parts[1].isdigit():
+            await message.answer("ℹ️ Использование: /history_plot <ID> [days]")
+            return
+
+        sub_id = int(parts[1])
+        days = None
+        if len(parts) > 2 and parts[2].isdigit():
+            days = int(parts[2])
+
+        sub = get_subscription(sub_id)
+        if not sub:
+            await message.answer(t(message.from_user.id, "no_subs"))
+            return
+        if len(sub) >= 2 and sub[1] != message.from_user.id:
+            await message.answer(t(message.from_user.id, "error_not_your_sub"))
+            return
+
+        # get history (prefer local summary for days)
+        if days is not None:
+            rows = get_local_price_history(sub_id, days=days)
+        else:
+            rows = get_price_history(sub_id, limit=10000)
+
+        if not rows:
+            await message.answer("📊 История для этой подписки отсутствует.")
+            return
+
+        # normalize to list of (iso, price) for send_history_plot
+        hist = []
+        for ts_val, price in rows:
+            if isinstance(ts_val, str):
+                hist.append((ts_val, price))
+            else:
+                try:
+                    iso = datetime.utcfromtimestamp(int(ts_val)).isoformat()
+                except Exception:
+                    iso = str(ts_val)
+                hist.append((iso, price))
+
+        url = sub[2] if len(sub) > 2 else ""
+        await send_history_plot(message.from_user.id, url, hist)
+
+    except Exception as e:
+        logger.exception("history_plot error: %s", e)
         await message.answer(t(message.from_user.id, "error_generic"))
 
 # --- callback handler (languages, modes, unsubscribe, history)
