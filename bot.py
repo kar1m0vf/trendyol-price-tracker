@@ -5,6 +5,8 @@ from typing import Optional, List, Tuple
 from datetime import datetime, timedelta
 import io
 import re
+import os
+import csv
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
@@ -29,6 +31,7 @@ from database import (
     get_user_language,
     remove_subscriptions_by_user,
     get_subscription,
+    export_user_subscriptions,
     get_user_settings,
     update_notify_time,
     update_subscription_settings,
@@ -896,6 +899,61 @@ async def cmd_top_drops(message: types.Message):
     except Exception as e:
         logger.exception("Top drops command error: %s", e)
         await message.answer(f"❌ Ошибка: {e}")
+
+
+# /export [csv|json] - Export user's subscriptions to CSV or JSON and save backup
+@dp.message(Command("export"))
+async def cmd_export(message: types.Message):
+    try:
+        parts = (message.text or "").split()
+        fmt = "csv"
+        if len(parts) > 1 and parts[1].lower() in {"csv", "json"}:
+            fmt = parts[1].lower()
+
+        user_id = message.from_user.id
+        subs = export_user_subscriptions(user_id)
+        if not subs:
+            await message.answer(t(user_id, "no_subs"))
+            return
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        os.makedirs("backups", exist_ok=True)
+
+        if fmt == "json":
+            fname = f"backups/subscriptions_{user_id}_{ts}.json"
+            payload = json.dumps(subs, ensure_ascii=False, indent=2)
+            with open(fname, "w", encoding="utf-8") as f:
+                f.write(payload)
+            # send to user
+            with open(fname, "rb") as f:
+                await bot.send_document(user_id, types.InputFile(f, filename=os.path.basename(fname)))
+            await message.answer(t(user_id, "export_done").format(path=fname))
+            return
+
+        # csv
+        fname = f"backups/subscriptions_{user_id}_{ts}.csv"
+        # determine columns (stable order)
+        cols = [
+            'id','user_id','url','mode','last_price','product_title','product_image',
+            'min_price','max_price','notify_percent','notify_interval','last_notify_time','price_alert','tags'
+        ]
+        # write CSV with BOM for Excel compatibility
+        with open(fname, "w", encoding="utf-8-sig", newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=cols)
+            writer.writeheader()
+            for row in subs:
+                # ensure all keys present
+                safe_row = {k: row.get(k, "") for k in cols}
+                writer.writerow(safe_row)
+
+        with open(fname, "rb") as f:
+            await bot.send_document(user_id, types.InputFile(f, filename=os.path.basename(fname)))
+
+        await message.answer(t(user_id, "export_done").format(path=fname))
+
+    except Exception as e:
+        logger.exception("Export command error: %s", e)
+        await message.answer(t(message.from_user.id, "error_generic"))
 
 # --- callback handler (languages, modes, unsubscribe, history)
 @dp.callback_query()

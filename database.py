@@ -180,6 +180,12 @@ def init_db():
             logger.info("Migration: Added price_alert column to subscriptions table")
         except sqlite3.OperationalError:
             pass  # Column already exists
+        # Миграция: добавляем поле tags (комма-разделённый список меток)
+        try:
+            cur.execute("ALTER TABLE subscriptions ADD COLUMN tags TEXT")
+            logger.info("Migration: Added tags column to subscriptions table")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
 
 def add_user_if_not_exists(user_id: int, language: str = "ru") -> None:
     with sqlite3.connect(DB) as conn:
@@ -336,14 +342,86 @@ def get_user_subscriptions(user_id: int) -> List[Tuple]:
         cur = conn.cursor()
         cur.execute("""
             SELECT id, user_id, url, notify_mode, last_price, product_title, product_image,
-                   min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert
-            FROM subscriptions 
+                   min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert, tags
+            FROM subscriptions
             WHERE user_id = ?
             ORDER BY updated_at DESC
-            LIMIT 1000
         """, (user_id,))
         rows = cur.fetchall()
     return rows
+
+def set_subscription_tags(sub_id: int, tags: List[str]) -> bool:
+    """Set comma-separated tags for a subscription. Tags should be list of strings."""
+    try:
+        tags_clean = ",".join([t.strip() for t in tags if t and t.strip()])
+        with sqlite3.connect(DB) as conn:
+            cur = conn.cursor()
+            cur.execute("UPDATE subscriptions SET tags = ? WHERE id = ?", (tags_clean, sub_id))
+            conn.commit()
+            return cur.rowcount > 0
+    except Exception as e:
+        logger.exception("Error setting tags for sub %s: %s", sub_id, e)
+        return False
+
+
+def get_subscription_tags(sub_id: int) -> List[str]:
+    with sqlite3.connect(DB) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT tags FROM subscriptions WHERE id = ?", (sub_id,))
+        row = cur.fetchone()
+        if not row or row[0] is None:
+            return []
+        return [t for t in (row[0] or "").split(',') if t]
+
+
+def get_user_subscriptions_by_tag(user_id: int, tag: str) -> List[Tuple]:
+    """Return subscriptions for user that have the given tag (exact match in comma-separated tags)."""
+    with sqlite3.connect(DB) as conn:
+        cur = conn.cursor()
+        # Match as substring with separators to avoid partial matches
+        cur.execute("""
+            SELECT id, user_id, url, notify_mode, last_price, product_title, product_image,
+                   min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert, tags
+            FROM subscriptions
+            WHERE user_id = ? AND (',' || IFNULL(tags, '') || ',') LIKE ?
+            ORDER BY updated_at DESC
+        """, (user_id, '%,' + tag + ',%'))
+        return cur.fetchall()
+
+
+def export_user_subscriptions(user_id: int) -> List[dict]:
+    """Return list of subscription dicts for export (all fields)."""
+    rows = get_user_subscriptions(user_id)
+    out = []
+    for r in rows:
+        # r expected to be (id,user_id,url,mode,last_price,product_title,product_image,min_price,max_price,notify_percent,notify_interval,last_notify_time,price_alert,tags)
+        try:
+            (sub_id, uid, url, mode, last_price, product_title, product_image,
+             min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert, tags) = r
+        except ValueError:
+            # Fallback for older rows
+            vals = list(r)
+            while len(vals) < 14:
+                vals.append(None)
+            (sub_id, uid, url, mode, last_price, product_title, product_image,
+             min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert, tags) = vals[:14]
+        out.append({
+            'id': sub_id,
+            'user_id': uid,
+            'url': url,
+            'mode': mode,
+            'last_price': last_price,
+            'product_title': product_title,
+            'product_image': product_image,
+            'min_price': min_price,
+            'max_price': max_price,
+            'notify_percent': notify_percent,
+            'notify_interval': notify_interval,
+            'last_notify_time': last_notify_time,
+            'price_alert': price_alert,
+            'tags': (tags or "")
+        })
+    return out
 
 def get_all_subscriptions(batch_size: int = 1000) -> List[Tuple[int, int, str, str, Optional[float]]]:
     """
