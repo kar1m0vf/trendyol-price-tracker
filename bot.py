@@ -955,6 +955,68 @@ async def cmd_export(message: types.Message):
         logger.exception("Export command error: %s", e)
         await message.answer(t(message.from_user.id, "error_generic"))
 
+
+# /history_export <ID> [csv|json] - экспорт истории цен по подписке
+@dp.message(Command("history_export"))
+async def cmd_history_export(message: types.Message):
+    try:
+        parts = (message.text or "").split()
+        if len(parts) < 2 or not parts[1].isdigit():
+            await message.answer("ℹ️ Использование: /history_export <ID> [csv|json]")
+            return
+
+        sub_id = int(parts[1])
+        fmt = "csv"
+        if len(parts) > 2 and parts[2].lower() in {"csv", "json"}:
+            fmt = parts[2].lower()
+
+        sub = get_subscription(sub_id)
+        if not sub:
+            await message.answer(t(message.from_user.id, "no_subs"))
+            return
+        if len(sub) >= 2 and sub[1] != message.from_user.id:
+            await message.answer(t(message.from_user.id, "error_not_your_sub"))
+            return
+
+        # Получаем всю историю (ограничение 10000 точек по умолчанию в save_price_point)
+        rows = get_price_history(sub_id, limit=10000)
+        if not rows:
+            await message.answer("📊 История для этой подписки отсутствует.")
+            return
+
+        os.makedirs("backups", exist_ok=True)
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        if fmt == "json":
+            fname = f"backups/history_{sub_id}_{ts}.json"
+            payload = json.dumps([{"ts": r[0], "price": r[1]} for r in rows], ensure_ascii=False, indent=2)
+            with open(fname, "w", encoding="utf-8") as f:
+                f.write(payload)
+            with open(fname, "rb") as f:
+                await bot.send_document(message.from_user.id, types.InputFile(f, filename=os.path.basename(fname)))
+            await message.answer(f"✅ Экспорт готов: {fname}")
+            return
+
+        # CSV
+        fname = f"backups/history_{sub_id}_{ts}.csv"
+        with open(fname, "w", encoding="utf-8-sig", newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(["ts", "iso_datetime", "price"])
+            for ts_val, price in rows:
+                try:
+                    iso = datetime.utcfromtimestamp(int(ts_val)).isoformat()
+                except Exception:
+                    iso = str(ts_val)
+                writer.writerow([ts_val, iso, price])
+
+        with open(fname, "rb") as f:
+            await bot.send_document(message.from_user.id, types.InputFile(f, filename=os.path.basename(fname)))
+
+        await message.answer(f"✅ Экспорт готов: {fname}")
+
+    except Exception as e:
+        logger.exception("history_export error: %s", e)
+        await message.answer(t(message.from_user.id, "error_generic"))
+
 # --- callback handler (languages, modes, unsubscribe, history)
 @dp.callback_query()
 async def callback_handler(cq: CallbackQuery):
