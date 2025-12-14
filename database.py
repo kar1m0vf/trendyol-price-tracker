@@ -1,6 +1,7 @@
 import sqlite3
 import time
 import logging
+import threading
 from typing import List, Tuple, Optional
 from datetime import datetime
 
@@ -8,6 +9,92 @@ from datetime import datetime
 logger = logging.getLogger('database')
 
 DB = "trendyol_bot.db"
+
+# Connection pooling for better performance
+_connection_pool = {}
+_pool_lock = threading.Lock()
+_current_db = None
+
+def get_connection():
+    """Get database connection from pool or create new one"""
+    thread_id = threading.get_ident()
+    global _current_db
+    # If DB path changed (tests may monkeypatch `database.DB`), reset pool
+    if _current_db != DB:
+        with _pool_lock:
+            for conn in _connection_pool.values():
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            _connection_pool.clear()
+            _current_db = DB
+    with _pool_lock:
+        if thread_id not in _connection_pool:
+            _connection_pool[thread_id] = sqlite3.connect(DB, timeout=30.0, check_same_thread=False)
+            _connection_pool[thread_id].execute("PRAGMA journal_mode=WAL")
+            _connection_pool[thread_id].execute("PRAGMA synchronous=NORMAL")
+            _connection_pool[thread_id].execute("PRAGMA cache_size=10000")
+            _connection_pool[thread_id].execute("PRAGMA temp_store=MEMORY")
+        return _connection_pool[thread_id]
+
+def close_all_connections():
+    """Close all connections in the pool"""
+    with _pool_lock:
+        for conn in _connection_pool.values():
+            try:
+                conn.close()
+            except Exception:
+                pass
+        _connection_pool.clear()
+
+# Context manager for database operations with connection pooling
+class DatabaseConnection:
+    """Context manager for database operations using connection pooling"""
+    def __enter__(self):
+        self.conn = get_connection()
+        return self.conn
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        # Connection stays in pool, just commit if needed
+        if exc_type is None:
+            self.conn.commit()
+        else:
+            self.conn.rollback()
+
+def execute_batch(queries: List[Tuple[str, Tuple]], commit_every: int = 100):
+    """Execute batch of queries with periodic commits for performance"""
+    with DatabaseConnection() as conn:
+        cur = conn.cursor()
+        for i, (query, params) in enumerate(queries):
+            cur.execute(query, params)
+            if (i + 1) % commit_every == 0:
+                conn.commit()
+        conn.commit()
+
+def save_price_points_batch(price_points: List[Tuple[int, float, int, str]]):
+    """
+    Batch save multiple price points efficiently.
+    Format: [(subscription_id, price, timestamp, url), ...]
+    """
+    if not price_points:
+        return
+
+    queries = []
+    current_time = int(time.time())
+
+    for sub_id, price, ts, url in price_points:
+        if ts is None:
+            ts = current_time
+        queries.append((
+            """
+            INSERT INTO price_history (subscription_id, price, ts, url, source)
+            VALUES (?, ?, ?, ?, 'batch')
+            """,
+            (sub_id, price, ts, url)
+        ))
+
+    execute_batch(queries, commit_every=50)
 
 def init_db():
     # Проверяем существующую схему и добавляем недостающие колонки
@@ -187,11 +274,43 @@ def init_db():
         except sqlite3.OperationalError:
             pass  # Column already exists
 
+        # Дополнительные индексы для оптимизации производительности
+        try:
+            # Проверяем существующие индексы и создаем недостающие
+            existing_indexes = set()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='index'")
+            existing_indexes = {row[0] for row in cur.fetchall()}
+
+            indexes_to_create = [
+                ("idx_users_language", "CREATE INDEX idx_users_language ON users(language)"),
+                ("idx_subscriptions_user_id", "CREATE INDEX idx_subscriptions_user_id ON subscriptions(user_id)"),
+                ("idx_subscriptions_url", "CREATE INDEX idx_subscriptions_url ON subscriptions(url)"),
+                ("idx_subscriptions_mode", "CREATE INDEX idx_subscriptions_mode ON subscriptions(notify_mode)"),
+                ("idx_subscriptions_notify_time", "CREATE INDEX idx_subscriptions_notify_time ON subscriptions(last_notify_time)"),
+                ("idx_subscriptions_url_mode", "CREATE INDEX idx_subscriptions_url_mode ON subscriptions(url, notify_mode)"),
+                ("idx_price_history_ts", "CREATE INDEX idx_price_history_ts ON price_history(ts DESC)"),
+                ("idx_price_history_source", "CREATE INDEX idx_price_history_source ON price_history(source)"),
+            ]
+
+            for index_name, create_sql in indexes_to_create:
+                if index_name not in existing_indexes:
+                    try:
+                        cur.execute(create_sql)
+                        logger.debug(f"Created index: {index_name}")
+                    except Exception as idx_e:
+                        logger.warning(f"Could not create index {index_name}: {idx_e}")
+
+            logger.info("Database indexes verified/created")
+        except Exception as e:
+            logger.warning(f"Error managing indexes: {e}")
+
+        conn.commit()
+        logger.info("Database initialized with optimizations")
+
 def add_user_if_not_exists(user_id: int, language: str = "ru") -> None:
-    with sqlite3.connect(DB) as conn:
+    with DatabaseConnection() as conn:
         cur = conn.cursor()
         cur.execute("INSERT OR IGNORE INTO users (user_id, language) VALUES (?, ?)", (user_id, language))
-        conn.commit()
 
 def set_user_language(user_id: int, language: str) -> None:
     with sqlite3.connect(DB) as conn:
@@ -281,17 +400,6 @@ def delete_price_history_for_subscription(subscription_id: int) -> int:
     return cnt
 
 
-def get_subscription_by_url(url: str):
-    """Return subscription row by exact url match, canonical tuple or None."""
-    with sqlite3.connect(DB) as conn:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT id, user_id, url, notify_mode, last_price, product_title, product_image,
-                   min_price, max_price, notify_percent, notify_interval, last_notify_time
-            FROM subscriptions WHERE url = ? LIMIT 1
-        """, (url,))
-        row = cur.fetchone()
-    return row
 
 
 def update_subscription_meta(sub_id: int, title: Optional[str], image: Optional[str]) -> None:
@@ -336,9 +444,9 @@ def remove_subscriptions_by_user(user_id: int) -> int:
 def get_user_subscriptions(user_id: int) -> List[Tuple]:
     """Returns rows in canonical order:
     (id, user_id, url, notify_mode, last_price, product_title, product_image,
-     min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert)
+     min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert, tags)
     """
-    with sqlite3.connect(DB) as conn:
+    with DatabaseConnection() as conn:
         cur = conn.cursor()
         cur.execute("""
             SELECT id, user_id, url, notify_mode, last_price, product_title, product_image,
@@ -436,7 +544,7 @@ def get_all_subscriptions(batch_size: int = 1000) -> List[Tuple[int, int, str, s
         # to provide deterministic ordering when values may be NULL.
         cur.execute("""
             SELECT id, user_id, url, notify_mode, last_price, product_title, product_image,
-                   min_price, max_price, notify_percent, notify_interval, last_notify_time
+                   min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert
             FROM subscriptions
             ORDER BY COALESCE(last_notify_time, 0) ASC
         """)
@@ -717,9 +825,9 @@ def save_price_point(subscription_id: int, price: float, ts: int = None, max_poi
     """
     if ts is None:
         ts = int(time.time())
-    
+
     try:
-        with sqlite3.connect(DB) as conn:
+        with DatabaseConnection() as conn:
             cur = conn.cursor()
             
             # Проверяем дубликат в последний час

@@ -4,7 +4,7 @@ from bs4 import BeautifulSoup
 import re
 from datetime import datetime
 from urllib.parse import quote_plus
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Any
 import asyncio
 import json
 import time
@@ -21,6 +21,37 @@ logger = setup_logger('scraper', 'scraper.log')
 # Rate limiter для запросов к Trendyol (максимум 30 запросов в минуту)
 TRENDYOL_LIMITER = RateLimiter(max_requests=30, time_window=60)
 ASYNC_TRENDYOL_LIMITER = AsyncRateLimiter(max_requests=30, time_window=60)
+
+# Простой кэш для результатов поиска (чтобы не искать одно и то же)
+SEARCH_CACHE = {}
+CACHE_EXPIRY = 3600  # 1 час
+
+
+def _get_cache_key(query: str, source: str) -> str:
+    """Генерирует ключ кэша для запроса."""
+    return f"{source}:{hash(query)}"
+
+
+def _get_cached_result(cache_key: str):
+    """Получает результат из кэша если он ещё актуален."""
+    if cache_key in SEARCH_CACHE:
+        cached_data, timestamp = SEARCH_CACHE[cache_key]
+        if time.time() - timestamp < CACHE_EXPIRY:
+            return cached_data
+        else:
+            # Удаляем просроченный кэш
+            del SEARCH_CACHE[cache_key]
+    return None
+
+
+def _set_cached_result(cache_key: str, data):
+    """Сохраняет результат в кэш."""
+    SEARCH_CACHE[cache_key] = (data, time.time())
+    # Ограничиваем размер кэша
+    if len(SEARCH_CACHE) > 100:
+        # Удаляем самый старый элемент
+        oldest_key = min(SEARCH_CACHE.keys(), key=lambda k: SEARCH_CACHE[k][1])
+        del SEARCH_CACHE[oldest_key]
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -97,10 +128,11 @@ def get_price(url: str) -> Optional[float]:
     """
     Возвращает цену (float) или None.
     Порядок источников:
-      1) meta product:price:amount
-    def get_price(url: str) -> Optional[float]:
-      3) Явные селекторы скидочной/обычной цены (prc-dsc, prc-org и др.)
-      4) Регекс по '... TL' в тексте страницы (ограниченный, чтобы не брать произвольные числа)
+      1) window.__PRODUCT_DETAIL_APP_INITIAL_STATE__ (JavaScript переменная)
+      2) meta product:price:amount
+      3) JSON-LD (offers.price)
+      4) Явные селекторы скидочной/обычной цены (prc-dsc, prc-org и др.)
+      5) Регекс по '... TL' в тексте страницы
     """
     try:
         if not TRENDYOL_LIMITER.can_proceed():
@@ -108,18 +140,82 @@ def get_price(url: str) -> Optional[float]:
             time.sleep(2)  # Ждем немного перед повторной попыткой
             
         TRENDYOL_LIMITER.add_request()
-        r = requests.get(url, headers=HEADERS, timeout=15)
-        r.raise_for_status()  # Вызовет HTTPError если статус не 200
+        
+        # ИСПРАВЛЕНИЕ: Используем cloudscraper по умолчанию, если доступен (для обхода Cloudflare)
+        if SCRAPER is not None:
+            r = SCRAPER.get(url, headers=HEADERS, timeout=20)
+        else:
+            r = requests.get(url, headers=HEADERS, timeout=20)
         
         if r.status_code != 200:
             logger.error(f"HTTP {r.status_code} when fetching price for {url}")
-            # Use cloudscraper when available to bypass Cloudflare challenges
-            if SCRAPER is not None:
-                r = SCRAPER.get(url, headers=HEADERS, timeout=15)
-            else:
-                r = requests.get(url, headers=HEADERS, timeout=15)
+            return None
 
-        soup = BeautifulSoup(r.text, "html.parser")
+        html = r.text
+        soup = BeautifulSoup(html, "html.parser")
+        
+        # 0) Попытка извлечь цену из JavaScript переменной (самый надежный способ)
+        # Trendyol часто хранит данные в window.__PRODUCT_DETAIL_APP_INITIAL_STATE__
+        js_vars = [
+            'window.__PRODUCT_DETAIL_APP_INITIAL_STATE__',
+            'window.__INITIAL_STATE__',
+            'window.__PRODUCT_INITIAL_STATE__',
+            '__PRODUCT_DETAIL_APP_INITIAL_STATE__',
+        ]
+        for var_name in js_vars:
+            data_obj = _extract_json_from_js_var(html, var_name)
+            if data_obj:
+                # Рекурсивно ищем цену в объекте
+                def find_price_in_obj(obj):
+                    if isinstance(obj, dict):
+                        # Проверяем прямые ключи с ценой
+                        for key in ['price', 'sellingPrice', 'discountedPrice', 'originalPrice', 'currentPrice', 'finalPrice']:
+                            if key in obj:
+                                val = obj[key]
+                                if isinstance(val, (int, float)):
+                                    return float(val)
+                                elif isinstance(val, dict):
+                                    # Вложенный объект цены
+                                    nested_price = val.get('value') or val.get('amount') or val.get('price')
+                                    if nested_price:
+                                        p = parse_price_text(str(nested_price))
+                                        if p is not None:
+                                            return p
+                                else:
+                                    p = parse_price_text(str(val))
+                                    if p is not None:
+                                        return p
+                        # Проверяем offers
+                        if 'offers' in obj:
+                            offers = obj['offers']
+                            if isinstance(offers, dict):
+                                price = offers.get('price') or offers.get('lowPrice') or offers.get('highPrice')
+                                if price:
+                                    p = parse_price_text(str(price))
+                                    if p is not None:
+                                        return p
+                            elif isinstance(offers, list) and offers:
+                                price = offers[0].get('price') if isinstance(offers[0], dict) else None
+                                if price:
+                                    p = parse_price_text(str(price))
+                                    if p is not None:
+                                        return p
+                        # Рекурсивный поиск
+                        for v in obj.values():
+                            res = find_price_in_obj(v)
+                            if res is not None:
+                                return res
+                    elif isinstance(obj, list):
+                        for item in obj:
+                            res = find_price_in_obj(item)
+                            if res is not None:
+                                return res
+                    return None
+                
+                price = find_price_in_obj(data_obj)
+                if price is not None:
+                    logger.debug(f"Found price {price} in JS var {var_name} for {url}")
+                    return price
 
         # 1) meta product:price:amount (чаще всего корректно)
         meta = soup.find("meta", {"property": "product:price:amount"})
@@ -168,31 +264,63 @@ def get_price(url: str) -> Optional[float]:
                 return val
 
         # 3) Популярные селекторы Trendyol (актуальные классы могут меняться)
+        # Расширенный список селекторов для лучшего покрытия
         selectors = [
-            "span.prc-dsc",        # скидочная цена
-            "span.prc-org",        # обычная цена
-            'span[class*="prc"]',  # любые цены с префиксом prc-
-            'span[class*="price"]',
-            'div[class*="price"] span',
+            "span.prc-dsc",                    # скидочная цена
+            "span.prc-org",                    # обычная цена
+            "span.pr-new-br",                  # новая цена
+            'span[class*="prc"]',              # любые цены с префиксом prc-
+            'span[class*="price"]',            # любые цены
+            'div[class*="price"] span',        # цена в div
+            'div[class*="prc"] span',          # цена в div с prc
+            '[data-testid*="price"]',          # data-testid с price
+            '[data-testid*="Price"]',          # data-testid с Price
+            'div.product-price-container span', # контейнер цены
+            'div.price-container span',        # контейнер цены
+            'div[class*="ProductPrice"] span', # ProductPrice
+            'span[data-testid="price"]',       # прямой data-testid
         ]
         for sel in selectors:
-            el = soup.select_one(sel)
-            if el:
-                p = parse_price_text(el.get_text(" ", strip=True))
-                if p is not None and p > 0:
-                    return p
+            try:
+                el = soup.select_one(sel)
+                if el:
+                    p = parse_price_text(el.get_text(" ", strip=True))
+                    if p is not None and p > 0:
+                        logger.debug(f"Found price {p} using selector {sel} for {url}")
+                        return p
+            except Exception:
+                continue
 
-        # 4) Регекс по шаблону "<число> TL"
+        # 4) Регекс по шаблону "<число> TL" в тексте страницы
         #    Находим числа только рядом с "TL", чтобы не брать посторонние значения
         text = soup.get_text(" ", strip=True)
-        for m in re.finditer(r"(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)\s*TL", text):
-            p = parse_price_text(m.group(1))
-            if p is not None and p > 0:
-                return p
+        # Ищем цены в формате "1234,56 TL" или "1.234,56 TL"
+        price_matches = list(re.finditer(r"(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)\s*TL", text))
+        if price_matches:
+            # Берем первое разумное значение (обычно это цена товара)
+            for m in price_matches[:5]:  # Проверяем первые 5 совпадений
+                p = parse_price_text(m.group(1))
+                if p is not None and p > 0 and p < 1000000:  # Разумный диапазон цен
+                    logger.debug(f"Found price {p} using regex for {url}")
+                    return p
 
+        # 5) Последняя попытка: поиск в data-атрибутах
+        try:
+            price_attrs = soup.find_all(attrs={"data-price": True})
+            for el in price_attrs:
+                price_val = el.get("data-price")
+                if price_val:
+                    p = parse_price_text(str(price_val))
+                    if p is not None and p > 0:
+                        logger.debug(f"Found price {p} in data-price attribute for {url}")
+                        return p
+        except Exception:
+            pass
+
+        logger.warning(f"Could not extract price from {url} using any method")
         return None
     except Exception as e:
-        print("scraper.get_price error:", e)
+        logger.exception(f"scraper.get_price error for {url}: {e}")
         return None
 
 
@@ -206,34 +334,797 @@ def get_trending_sample() -> List[str]:
 
 # ----------------- History / Akakçe helpers -----------------
 
+def _extract_title_from_json(html: str) -> Optional[str]:
+    """
+    Извлекает название товара из JSON данных Trendyol на странице.
+    """
+    try:
+        # Ищем JSON объекты в HTML
+        varnames = [
+            'window.__PRODUCT_DETAIL_APP_INITIAL_STATE__',
+            'window.__INITIAL_STATE__',
+            'window.__PRODUCT_INITIAL_STATE__',
+            '__PRODUCT_DETAIL_APP_INITIAL_STATE__',
+            '__INITIAL_STATE__'
+        ]
+
+        for vn in varnames:
+            data_obj = _extract_json_from_js_var(html, vn)
+            if data_obj and isinstance(data_obj, dict):
+                # Ищем название в разных местах структуры
+                title_candidates = [
+                    lambda: data_obj.get('product', {}).get('name'),
+                    lambda: data_obj.get('product', {}).get('title'),
+                    lambda: data_obj.get('product', {}).get('productName'),
+                    lambda: data_obj.get('product', {}).get('brand', {}).get('name') + ' ' + data_obj.get('product', {}).get('name', ''),
+                    lambda: _find_in_nested_dict(data_obj, 'name'),
+                    lambda: _find_in_nested_dict(data_obj, 'title'),
+                    lambda: _find_in_nested_dict(data_obj, 'productName'),
+                ]
+
+                for candidate_func in title_candidates:
+                    try:
+                        title = candidate_func()
+                        if title and isinstance(title, str) and len(title.strip()) > 5:
+                            return title.strip()
+                    except Exception:
+                        continue
+
+    except Exception as e:
+        logger.debug("_extract_title_from_json error: %s", e)
+
+    return None
+
+
+def _try_alternative_price_sources(title: str, trendyol_url: str) -> Optional[List[Tuple[str, float]]]:
+    """
+    Пытается получить историю цен из альтернативных источников.
+    """
+    try:
+        logger.info("Trying alternative price sources for '%s'", title)
+
+        # Источник 1: Попробуем поиск на Hepsiburada
+        hist = _try_hepsiburada_price_history(title)
+        if hist:
+            logger.info("Found price history on Hepsiburada: %d points", len(hist))
+            return hist
+
+        # Источник 2: Попробуем поиск на N11
+        hist = _try_n11_price_history(title)
+        if hist:
+            logger.info("Found price history on N11: %d points", len(hist))
+            return hist
+
+        # Источник 3: Попробуем поиск на GittiGidiyor
+        hist = _try_gittigidiyor_price_history(title)
+        if hist:
+            logger.info("Found price history on GittiGidiyor: %d points", len(hist))
+            return hist
+
+        # Источник 4: Попробуем альтернативные методы для Trendyol
+        hist = _try_trendyol_alternative_methods(trendyol_url)
+        if hist:
+            logger.info("Found price history using Trendyol alternative method: %d points", len(hist))
+            return hist
+
+    except Exception as e:
+        logger.debug("_try_alternative_price_sources error: %s", e)
+
+    return None
+
+
+def _try_hepsiburada_price_history(title: str) -> Optional[List[Tuple[str, float]]]:
+    """
+    Пытается получить историю цен с Hepsiburada.
+    """
+    try:
+        if not ASYNC_TRENDYOL_LIMITER.can_proceed():
+            return None
+        ASYNC_TRENDYOL_LIMITER.add_request()
+
+        # Поиск на Hepsiburada
+        q = quote_plus(title)
+        search_url = f"https://www.hepsiburada.com/ara?q={q}"
+        r = requests.get(search_url, headers=HEADERS, timeout=15)
+        if r.status_code != 200:
+            return None
+
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        # Ищем первую подходящую ссылку
+        product_link = None
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if "/product/" in href and "hepsiburada.com" in href:
+                product_link = href
+                break
+
+        if not product_link:
+            return None
+
+        # Загружаем страницу товара и ищем историю цен
+        r2 = requests.get(product_link, headers=HEADERS, timeout=15)
+        if r2.status_code != 200:
+            return None
+
+        soup2 = BeautifulSoup(r2.text, "html.parser")
+
+        # Ищем JSON с историей цен в скриптах
+        for script in soup2.find_all("script"):
+            if script.string and "priceHistory" in script.string:
+                try:
+                    # Пытаемся извлечь JSON
+                    json_match = re.search(r'priceHistory\s*:\s*(\[[^\]]*\])', script.string)
+                    if json_match:
+                        hist_data = json.loads(json_match.group(1))
+                        if hist_data:
+                            return _normalize_price_history(hist_data, "Hepsiburada")
+                except Exception:
+                    continue
+
+    except Exception as e:
+        logger.debug("_try_hepsiburada_price_history error: %s", e)
+
+    return None
+
+
+def _try_n11_price_history(title: str) -> Optional[List[Tuple[str, float]]]:
+    """
+    Пытается получить историю цен с N11.
+    """
+    try:
+        if not ASYNC_TRENDYOL_LIMITER.can_proceed():
+            return None
+        ASYNC_TRENDYOL_LIMITER.add_request()
+
+        # Поиск на N11
+        q = quote_plus(title)
+        search_url = f"https://www.n11.com/arama?q={q}"
+        r = requests.get(search_url, headers=HEADERS, timeout=15)
+        if r.status_code != 200:
+            return None
+
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        # Ищем первую подходящую ссылку
+        product_link = None
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if "/urun/" in href and "n11.com" in href:
+                product_link = href
+                break
+
+        if not product_link:
+            return None
+
+        # N11 не всегда имеет историю цен, просто возвращаем текущую цену как fallback
+        return None
+
+    except Exception as e:
+        logger.debug("_try_n11_price_history error: %s", e)
+
+    return None
+
+
+def _try_gittigidiyor_price_history(title: str) -> Optional[List[Tuple[str, float]]]:
+    """
+    Пытается получить историю цен с GittiGidiyor.
+    """
+    try:
+        if not ASYNC_TRENDYOL_LIMITER.can_proceed():
+            return None
+        ASYNC_TRENDYOL_LIMITER.add_request()
+
+        # Поиск на GittiGidiyor
+        q = quote_plus(title)
+        search_url = f"https://www.gittigidiyor.com/arama?q={q}"
+        r = requests.get(search_url, headers=HEADERS, timeout=15)
+        if r.status_code != 200:
+            return None
+
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        # Ищем первую подходящую ссылку
+        product_link = None
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if "/urun/" in href and "gittigidiyor.com" in href:
+                product_link = href
+                break
+
+        if not product_link:
+            return None
+
+        # GittiGidiyor редко имеет историю цен
+        return None
+
+    except Exception as e:
+        logger.debug("_try_gittigidiyor_price_history error: %s", e)
+
+    return None
+
+
+def _try_trendyol_alternative_methods(trendyol_url: str) -> Optional[List[Tuple[str, float]]]:
+    """
+    Альтернативные методы получения истории с Trendyol.
+    """
+    try:
+        # Метод 1: Попробуем получить историю из других JSON переменных
+        if SCRAPER is not None:
+            r = SCRAPER.get(trendyol_url, headers=HEADERS, timeout=20)
+        else:
+            r = requests.get(trendyol_url, headers=HEADERS, timeout=20)
+
+        if r.status_code != 200:
+            return None
+
+        html = r.text
+
+        # Ищем другие возможные JSON переменные
+        alt_varnames = [
+            'window.__PRODUCT_DATA__',
+            'window.__PRODUCT_DETAIL__',
+            'window.productData',
+            'window.productDetail',
+            '__PRODUCT_DATA__',
+            '__PRODUCT_DETAIL__'
+        ]
+
+        for vn in alt_varnames:
+            data_obj = _extract_json_from_js_var(html, vn)
+            if data_obj and isinstance(data_obj, dict):
+                hist = _extract_price_history_from_object(data_obj)
+                if hist:
+                    logger.debug("Found price history in alternative JSON var %s", vn)
+                    return hist
+
+        # Метод 2: Ищем в inline JSON
+        hist = _try_extract_inline_price_history(html)
+        if hist:
+            return hist
+
+    except Exception as e:
+        logger.debug("_try_trendyol_alternative_methods error: %s", e)
+
+    return None
+
+
+def _extract_price_history_from_object(obj: dict) -> Optional[List[Tuple[str, float]]]:
+    """
+    Извлекает историю цен из JSON объекта.
+    """
+    try:
+        # Ищем поля с историей цен
+        candidates = ['priceHistory', 'price_history', 'prices', 'priceChanges', 'price_changes']
+
+        for candidate in candidates:
+            if candidate in obj:
+                hist_data = obj[candidate]
+                if isinstance(hist_data, list) and hist_data:
+                    return _normalize_price_history(hist_data, "Trendyol_alt")
+
+        # Рекурсивный поиск в вложенных объектах
+        for value in obj.values():
+            if isinstance(value, dict):
+                result = _extract_price_history_from_object(value)
+                if result:
+                    return result
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, dict):
+                        result = _extract_price_history_from_object(item)
+                        if result:
+                            return result
+
+    except Exception as e:
+        logger.debug("_extract_price_history_from_object error: %s", e)
+
+    return None
+
+
+def _try_extract_inline_price_history(html: str) -> Optional[List[Tuple[str, float]]]:
+    """
+    Ищет историю цен в inline JSON на странице.
+    """
+    try:
+        # Ищем JSON объекты содержащие ключевые слова
+        patterns = [
+            r'"priceHistory"\s*:\s*(\[[^\]]*\])',
+            r'"price_history"\s*:\s*(\[[^\]]*\])',
+            r'"prices"\s*:\s*(\[[^\]]*\])',
+            r'priceHistory\s*:\s*(\[[^\]]*\])',
+            r'price_history\s*:\s*(\[[^\]]*\])'
+        ]
+
+        for pattern in patterns:
+            matches = re.findall(pattern, html, re.IGNORECASE)
+            for match in matches:
+                try:
+                    hist_data = json.loads(match)
+                    if hist_data and isinstance(hist_data, list):
+                        normalized = _normalize_price_history(hist_data, "Trendyol_inline")
+                        if normalized and len(normalized) >= 3:
+                            return normalized
+                except Exception:
+                    continue
+
+    except Exception as e:
+        logger.debug("_try_extract_inline_price_history error: %s", e)
+
+    return None
+
+
+def _normalize_price_history(hist_data: list, source: str) -> Optional[List[Tuple[str, float]]]:
+    """
+    Нормализует данные истории цен в стандартный формат (date_str, price).
+    """
+    try:
+        result = []
+        for item in hist_data:
+            if isinstance(item, dict):
+                # Определяем формат данных
+                date_keys = ['date', 'timestamp', 'time', 'created_at', 'updated_at']
+                price_keys = ['price', 'value', 'amount', 'selling_price', 'current_price']
+
+                date_val = None
+                price_val = None
+
+                # Ищем дату
+                for dk in date_keys:
+                    if dk in item:
+                        date_val = item[dk]
+                        break
+
+                # Ищем цену
+                for pk in price_keys:
+                    if pk in item:
+                        price_val = item[pk]
+                        break
+
+                if date_val and price_val:
+                    # Нормализуем дату
+                    if isinstance(date_val, (int, float)):
+                        # Timestamp
+                        dt = datetime.utcfromtimestamp(int(date_val))
+                        date_str = dt.strftime('%d.%m.%Y')
+                    elif isinstance(date_val, str):
+                        # Строка даты
+                        try:
+                            if len(date_val) == 10:  # DD.MM.YYYY
+                                date_str = date_val
+                            else:
+                                # Пытаемся распарсить
+                                dt = datetime.fromisoformat(date_val.replace('Z', '+00:00'))
+                                date_str = dt.strftime('%d.%m.%Y')
+                        except Exception:
+                            date_str = str(date_val)
+                    else:
+                        date_str = str(date_val)
+
+                    # Нормализуем цену
+                    try:
+                        price_float = float(price_val)
+                        result.append((date_str, price_float))
+                    except Exception:
+                        continue
+
+        if result:
+            # Сортируем по дате
+            result.sort(key=lambda x: x[0])
+            return result
+
+    except Exception as e:
+        logger.debug("_normalize_price_history error for %s: %s", source, e)
+
+    return None
+
+
+def find_similar_products(product_title: str, product_url: str, limit: int = 5) -> List[Dict[str, Any]]:
+    """
+    Ищет похожие товары на Trendyol.
+    Возвращает список словарей с информацией о товарах.
+    """
+    try:
+        if not product_title:
+            return []
+
+        # Очищаем название от лишнего
+        clean_title = re.sub(r'[^\w\s]', ' ', product_title.lower())
+        # Берем ключевые слова (убираем стоп-слова)
+        stop_words = {'ve', 'ile', 'bir', 'bu', 'şu', 'o', 'the', 'and', 'or', 'a', 'an', 'for', 'to', 'in', 'on', 'at', 'by', 'with'}
+        keywords = [word for word in clean_title.split() if len(word) > 2 and word not in stop_words]
+
+        if len(keywords) < 2:
+            # Если мало ключевых слов, берем первые слова
+            keywords = clean_title.split()[:3]
+
+        # Ищем на Trendyol
+        search_query = ' '.join(keywords[:3])  # Максимум 3 ключевых слова
+        search_url = f"https://www.trendyol.com/sr?q={quote_plus(search_query)}"
+
+        logger.debug(f"Searching for similar products: '{search_query}'")
+
+        if SCRAPER is not None:
+            r = SCRAPER.get(search_url, headers=HEADERS, timeout=15)
+        else:
+            r = requests.get(search_url, headers=HEADERS, timeout=15)
+
+        if r.status_code != 200:
+            return []
+
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        similar_products = []
+        current_product_id = None
+
+        # Извлекаем ID текущего товара из URL
+        if '-p-' in product_url:
+            try:
+                current_product_id = product_url.split('-p-')[-1].split('-')[0]
+            except:
+                pass
+
+        # Ищем товары в результатах поиска
+        for link in soup.find_all('a', href=True):
+            href = link['href']
+            if '/p-' in href and 'trendyol.com' in href:
+                # Извлекаем ID товара
+                try:
+                    product_id = href.split('-p-')[-1].split('-')[0]
+                    if product_id == current_product_id:
+                        continue  # Пропускаем тот же товар
+                except:
+                    continue
+
+                # Получаем название товара
+                title = link.get('title', '') or link.get_text(strip=True)
+                if not title:
+                    continue
+
+                # Проверяем релевантность
+                title_lower = title.lower()
+                relevance_score = 0
+
+                # Проверяем наличие ключевых слов
+                for keyword in keywords:
+                    if keyword in title_lower:
+                        relevance_score += 1
+
+                # Минимальный порог релевантности
+                if relevance_score < 1:
+                    continue
+
+                # Полная ссылка
+                full_url = f"https://www.trendyol.com{href}" if href.startswith('/') else href
+
+                similar_products.append({
+                    'title': title[:100],  # Ограничиваем длину
+                    'url': full_url,
+                    'relevance': relevance_score,
+                    'product_id': product_id
+                })
+
+                if len(similar_products) >= limit:
+                    break
+
+        # Сортируем по релевантности
+        similar_products.sort(key=lambda x: x['relevance'], reverse=True)
+
+        logger.debug(f"Found {len(similar_products)} similar products")
+        return similar_products[:limit]
+
+    except Exception as e:
+        logger.debug(f"find_similar_products error: {e}")
+        return []
+
+
+async def get_comparison_report(user_id: int, subscription_id: int, limit: int = 5) -> Optional[str]:
+    """
+    Получает сравнение цен для похожих товаров.
+    Возвращает отформатированное сообщение или None если не удалось.
+    """
+    try:
+        # Получаем информацию о текущем товаре
+        sub = get_subscription(subscription_id)
+        if not sub:
+            return None
+
+        _, _, current_url, _, current_price, current_title, _, _, _, _, _, _, _ = sub[:13]
+
+        if not current_title:
+            return None
+
+        # Ищем похожие товары
+        similar_products = await asyncio.to_thread(find_similar_products, current_title, current_url, limit)
+
+        if not similar_products:
+            return t(user_id, "compare_no_similar")
+
+        # Получаем цены для похожих товаров
+        comparison_data = []
+
+        # Добавляем текущий товар
+        comparison_data.append({
+            'title': current_title[:50] + "..." if len(current_title) > 50 else current_title,
+            'price': current_price,
+            'url': current_url,
+            'is_current': True
+        })
+
+        # Добавляем похожие товары
+        for product in similar_products:
+            try:
+                # Получаем цену товара
+                price = await get_price_async(product['url'])
+                if price:
+                    comparison_data.append({
+                        'title': product['title'][:50] + "..." if len(product['title']) > 50 else product['title'],
+                        'price': price,
+                        'url': product['url'],
+                        'is_current': False
+                    })
+            except Exception as e:
+                logger.debug(f"Failed to get price for similar product {product['url']}: {e}")
+                continue
+
+        if len(comparison_data) < 2:  # Только текущий товар
+            return t(user_id, "compare_no_similar")
+
+        # Сортируем по цене
+        comparison_data.sort(key=lambda x: x['price'] or 999999)
+
+        # Форматируем результат
+        result = t(user_id, "compare_header")
+
+        # Текущий товар
+        current_item = next((item for item in comparison_data if item['is_current']), None)
+        if current_item:
+            price_str = f"{current_item['price']:.0f} TL" if current_item['price'] else t(user_id, "compare_no_price")
+            result += f"🎯 *{t(user_id, 'compare_current_product')}:*\n"
+            result += f"📦 {current_item['title']}\n"
+            result += f"💰 {price_str}\n\n"
+
+        # Похожие товары
+        result += f"🔍 *{t(user_id, 'compare_similar_products')}:*\n"
+        for i, item in enumerate([item for item in comparison_data if not item['is_current']], 1):
+            price_str = f"{item['price']:.0f} TL" if item['price'] else t(user_id, "compare_no_price")
+            marker = "🟢" if item['price'] and current_item and current_item['price'] and item['price'] < current_item['price'] else "⚪"
+            result += f"{i}. {marker} {item['title']}\n   {price_str}\n"
+
+        return result
+
+    except Exception as e:
+        logger.exception(f"get_similar_products_comparison error: {e}")
+        return None
+
+
+# Legacy alias for backward compatibility: some modules/tests expect this name
+async def get_similar_products_comparison(user_id: int, subscription_id: int, limit: int = 5) -> Optional[str]:
+    """Wrapper kept for backward compatibility with older imports/tests."""
+    return await get_comparison_report(user_id, subscription_id, limit)
+
+def _find_best_akakce_product_link(soup: BeautifulSoup, search_title: str) -> Optional[str]:
+    """
+    Находит лучшую ссылку на товар на странице результатов поиска Akakçe.
+    """
+    if not search_title:
+        return None
+
+    try:
+        # Нормализуем поисковый запрос
+        search_lower = search_title.lower().strip()
+
+        # Ищем все ссылки на товары
+        product_links = []
+
+        # Разные паттерны ссылок на товары
+        patterns = [
+            "/p-",
+            "/urun/",
+            "/product/",
+            "/urunler/"
+        ]
+
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if any(pattern in href for pattern in patterns):
+                # Получаем текст ссылки и окружающий текст
+                link_text = a.get_text(strip=True)
+                parent = a.find_parent()
+                if parent:
+                    # Ищем название товара в родительском элементе
+                    title_elem = parent.find("h3") or parent.find("h4") or parent.find("div", class_=re.compile("title"))
+                    if title_elem:
+                        link_text = title_elem.get_text(strip=True)
+
+                # Вычисляем релевантность
+                relevance = _calculate_relevance(search_lower, link_text.lower() if link_text else "")
+
+                product_links.append({
+                    'href': href,
+                    'text': link_text or '',
+                    'relevance': relevance
+                })
+
+        if not product_links:
+            return None
+
+        # Сортируем по релевантности и возвращаем лучшую
+        product_links.sort(key=lambda x: x['relevance'], reverse=True)
+        best_link = product_links[0]
+
+        logger.debug("Best Akakçe match: '%s' (relevance: %.2f) for search: '%s'",
+                    best_link['text'][:50], best_link['relevance'], search_title[:50])
+
+        # Минимальная релевантность для принятия результата
+        if best_link['relevance'] >= 0.3:
+            return best_link['href']
+
+    except Exception as e:
+        logger.debug("_find_best_akakce_product_link error: %s", e)
+
+    return None
+
+
+def _calculate_relevance(search_text: str, candidate_text: str) -> float:
+    """
+    Вычисляет релевантность между поисковым запросом и кандидатом.
+    Возвращает значение от 0.0 до 1.0.
+    """
+    if not search_text or not candidate_text:
+        return 0.0
+
+    try:
+        # Разбиваем на слова
+        search_words = set(re.findall(r'\w+', search_text))
+        candidate_words = set(re.findall(r'\w+', candidate_text))
+
+        if not search_words:
+            return 0.0
+
+        # Вычисляем пересечение
+        intersection = search_words & candidate_words
+        union = search_words | candidate_words
+
+        # Jaccard similarity
+        jaccard = len(intersection) / len(union) if union else 0.0
+
+        # Бонус за порядок слов (если слова идут подряд)
+        consecutive_bonus = 0.0
+        search_str = ' '.join(search_words)
+        if search_str in candidate_text:
+            consecutive_bonus = 0.3
+
+        # Бонус за точное совпадение
+        exact_bonus = 0.0
+        if search_text in candidate_text:
+            exact_bonus = 0.4
+
+        relevance = min(1.0, jaccard + consecutive_bonus + exact_bonus)
+
+        return relevance
+
+    except Exception:
+        return 0.0
+
+
+def _find_in_nested_dict(obj: dict, key: str) -> Optional[str]:
+    """
+    Рекурсивно ищет ключ в вложенной структуре словаря.
+    """
+    if not isinstance(obj, dict):
+        return None
+
+    if key in obj and isinstance(obj[key], str):
+        return obj[key]
+
+    for value in obj.values():
+        if isinstance(value, dict):
+            result = _find_in_nested_dict(value, key)
+            if result:
+                return result
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    result = _find_in_nested_dict(item, key)
+                    if result:
+                        return result
+
+    return None
+
+
 def get_product_title(url: str) -> Optional[str]:
     """
     Пытаемся вытащить название товара со страницы Trendyol.
+    Использует множественные методы: HTML, JSON, meta tags.
+    Всегда использует cloudscraper для обхода защиты.
     Возвращает строку или None.
     """
     try:
+        # Всегда используем cloudscraper для обхода защиты Trendyol
         if SCRAPER is not None:
-            r = SCRAPER.get(url, headers=HEADERS, timeout=15)
+            r = SCRAPER.get(url, headers=HEADERS, timeout=20)
         else:
-            r = requests.get(url, headers=HEADERS, timeout=15)
+            r = requests.get(url, headers=HEADERS, timeout=20)
         if r.status_code != 200:
+            logger.debug(f"get_product_title: HTTP {r.status_code} for {url}")
             return None
-        soup = BeautifulSoup(r.text, "html.parser")
-        # пробуем несколько селекторов
+
+        html = r.text
+        soup = BeautifulSoup(html, "html.parser")
+
+        # Метод 1: Извлечение из JSON данных Trendyol
+        title = _extract_title_from_json(html)
+        if title:
+            return title
+
+        # Метод 2: Множественные HTML селекторы (расширенный список)
         candidates = [
+            # Основные селекторы
+            ("h1", {"class": re.compile(r"pr-new-br", re.I)}),
+            ("h1", {"class": re.compile(r"product-name", re.I)}),
+            ("h1", {"class": re.compile(r"title", re.I)}),
+            ("h1", {"data-testid": re.compile(r"product-name", re.I)}),
             ("h1", None),
-            ("h1", {"class": re.compile("product", re.I)}),
-            ("h1", {"class": re.compile("title", re.I)}),
-            ("title", None)
+
+            # Альтернативные селекторы
+            ("div", {"class": re.compile(r"product-info", re.I)}),
+            ("div", {"class": re.compile(r"product-detail", re.I)}),
+            ("span", {"class": re.compile(r"product-name", re.I)}),
+            ("meta", {"property": "og:title"}),
+            ("meta", {"name": "title"}),
+            ("title", None),
         ]
+
         for tag, attrs in candidates:
-            el = soup.find(tag, attrs=attrs) if attrs else soup.find(tag)
-            if el:
-                txt = el.get_text(strip=True)
-                if txt:
-                    return txt
+            try:
+                if tag == "meta":
+                    el = soup.find(tag, attrs=attrs)
+                    if el and el.get("content"):
+                        content = el["content"].strip()
+                        # Очистка от лишнего (убираем " | Trendyol")
+                        if " | Trendyol" in content:
+                            content = content.split(" | Trendyol")[0].strip()
+                        if len(content) > 10:  # Минимум 10 символов
+                            return content
+                else:
+                    el = soup.find(tag, attrs=attrs) if attrs else soup.find(tag)
+                    if el:
+                        txt = el.get_text(strip=True)
+                        if txt and len(txt) > 5:  # Минимум 5 символов
+                            # Очистка от лишнего
+                            txt = re.sub(r'\s+', ' ', txt)  # Множественные пробелы -> один
+                            return txt
+            except Exception:
+                continue
+
+        # Метод 3: Извлечение из Open Graph meta tags
+        og_title = soup.find("meta", {"property": "og:title"})
+        if og_title and og_title.get("content"):
+            content = og_title["content"].strip()
+            if " | Trendyol" in content:
+                content = content.split(" | Trendyol")[0].strip()
+            if len(content) > 10:
+                return content
+
+        # Метод 4: Извлечение из URL (последняя часть)
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            path_parts = parsed.path.strip('/').split('/')
+            if path_parts:
+                last_part = path_parts[-1]
+                if '-p-' in last_part and len(last_part) > 10:
+                    # Преобразуем slug обратно в читаемое название
+                    title = last_part.replace('-p-', '').replace('-', ' ').title()
+                    if len(title) > 10:
+                        return title
+        except Exception:
+            pass
+
     except Exception as e:
-        print("get_product_title error:", e)
+        logger.debug("get_product_title error for %s: %s", url, e)
+
     return None
 
 
@@ -361,29 +1252,29 @@ def get_price_history_from_akakce(trendyol_url: str) -> Optional[List[Tuple[str,
             logger.warning(f"Could not get product title for {trendyol_url}")
             return None
 
-        q = quote_plus(title)
-        search_url = f"https://www.akakce.com/arama?q={q}"
-        logger.info(f"Searching price history for '{title}'...")
-        r = requests.get(search_url, headers=HEADERS, timeout=15)
-        if r.status_code != 200:
-            return None
-        soup = BeautifulSoup(r.text, "html.parser")
+        # Проверяем кэш
+        cache_key = _get_cache_key(title, "akakce_search")
+        cached_result = _get_cached_result(cache_key)
+        if cached_result:
+            logger.debug("Using cached Akakçe search result for '%s'", title)
+            link, soup = cached_result
+        else:
+            q = quote_plus(title)
+            search_url = f"https://www.akakce.com/arama?q={q}"
+            logger.info(f"Searching price history for '{title}'...")
+            r = requests.get(search_url, headers=HEADERS, timeout=15)
+            if r.status_code != 200:
+                return None
+            soup = BeautifulSoup(r.text, "html.parser")
 
-        # попробуем найти первую релевантную ссылку на товар
-        link = None
-        # ищем ссылки с типичными паттернами
-        for a in soup.find_all("a", href=True):
-            href = a["href"]
-            if any(seg in href for seg in ("/p-", "/urun/", "/product/", "/urunler/")):
-                link = href
-                break
-        if not link:
-            a = soup.select_one("a[href*='/p-'], a[href*='/urun/'], a[href*='/product/']")
-            if a:
-                link = a.get("href")
+            # Ищем ссылку и кэшируем результат
+            link = _find_best_akakce_product_link(soup, title)
+            _set_cached_result(cache_key, (link, soup))
 
         if not link:
-            return None
+            logger.warning("No suitable product found on Akakçe for '%s'", title)
+            # Попробуем альтернативные источники
+            return _try_alternative_price_sources(title, trendyol_url)
 
         # нормализуем ссылку
         if link.startswith("/"):
@@ -447,9 +1338,13 @@ async def get_price_async(url: str) -> Optional[float]:
         
     await ASYNC_TRENDYOL_LIMITER.add_request()
     try:
-        return await asyncio.to_thread(get_price, url)
+        return await asyncio.wait_for(asyncio.to_thread(get_price, url), timeout=20.0)
+    except asyncio.TimeoutError:
+        logger.warning("Timeout fetching price for %s", url)
+        return None
     except Exception as e:
         logger.error(f"Error fetching price for {url}: {e}")
+        return None
         raise
 
 
@@ -468,7 +1363,11 @@ async def get_product_info_async(url: str) -> Tuple[Optional[float], Optional[st
         image = get_product_image(url)
         return price, title, image
 
-    return await asyncio.to_thread(_sync)
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(_sync), timeout=30.0)  # 30 second timeout
+    except asyncio.TimeoutError:
+        logger.warning("Timeout fetching product info for %s", url)
+        return None, None, None
 
 
 @async_retry(
@@ -489,7 +1388,7 @@ async def get_price_history_from_akakce_async(trendyol_url: str) -> Optional[Lis
         
     await ASYNC_TRENDYOL_LIMITER.add_request()
     try:
-        res = await asyncio.to_thread(get_price_history_from_akakce, trendyol_url)
+        res = await asyncio.wait_for(asyncio.to_thread(get_price_history_from_akakce, trendyol_url), timeout=45.0)
         if res:
             logger.info("get_price_history_from_akakce_async: found %d points for %s", len(res), trendyol_url)
             return res
@@ -508,26 +1407,51 @@ async def get_price_history_from_akakce_async(trendyol_url: str) -> Optional[Lis
 def _extract_json_from_js_var(text: str, varname: str) -> Optional[dict]:
     """Find JavaScript assignment like window.__VAR__ = {...}; and return parsed dict if possible."""
     try:
-        pattern = re.compile(rf"{re.escape(varname)}\s*=\s*(\{{.*?\}})\s*;", re.S)
-        m = pattern.search(text)
-        if not m:
-            return None
-        json_text = m.group(1)
-        # Try to make JSON-safe: remove JS trailing commas
-        json_text = re.sub(r",\s*([}\]])", r"\1", json_text)
-        # Replace single quotes with double where likely
-        json_text = json_text.replace("\'", "\\'")
-        try:
-            return json.loads(json_text)
-        except Exception:
-            # Attempt more tolerant eval via simple replacements
-            cleaned = json_text
-            cleaned = re.sub(r"(\w+)\s*:\s*", r'"\1":', cleaned)  # convert keys without quotes
-            cleaned = cleaned.replace("'", '"')
-            cleaned = re.sub(r",\s*([}\]])", r"\1", cleaned)
-            return json.loads(cleaned)
-    except Exception:
-        logger.debug("_extract_json_from_js_var failed for %s", varname, exc_info=True)
+        # Улучшенный паттерн: ищем различные варианты присваивания
+        patterns = [
+            rf"{re.escape(varname)}\s*=\s*(\{{.*?\}})\s*;",  # window.__VAR__ = {...};
+            rf"{re.escape(varname)}\s*=\s*(\{{.*?\}})\s*$",  # без точки с запятой в конце
+            rf"var\s+{re.escape(varname)}\s*=\s*(\{{.*?\}})\s*;",  # var __VAR__ = {...};
+            rf"let\s+{re.escape(varname)}\s*=\s*(\{{.*?\}})\s*;",  # let __VAR__ = {...};
+            rf"const\s+{re.escape(varname)}\s*=\s*(\{{.*?\}})\s*;",  # const __VAR__ = {...};
+        ]
+        
+        for pattern_str in patterns:
+            pattern = re.compile(pattern_str, re.S | re.M)
+            m = pattern.search(text)
+            if m:
+                json_text = m.group(1)
+                # Try to make JSON-safe: remove JS trailing commas
+                json_text = re.sub(r",\s*([}\]])", r"\1", json_text)
+                # Replace single quotes with double where likely (но не внутри строк)
+                # Сначала попробуем прямой парсинг
+                try:
+                    return json.loads(json_text)
+                except json.JSONDecodeError:
+                    # Попробуем более агрессивную очистку
+                    try:
+                        # Удаляем комментарии
+                        json_text = re.sub(r'//.*?$', '', json_text, flags=re.M)
+                        json_text = re.sub(r'/\*.*?\*/', '', json_text, flags=re.S)
+                        # Удаляем trailing commas
+                        json_text = re.sub(r",\s*([}\]])", r"\1", json_text)
+                        # Пробуем снова
+                        return json.loads(json_text)
+                    except Exception:
+                        # Последняя попытка: замена одинарных кавычек на двойные (осторожно)
+                        try:
+                            cleaned = json_text
+                            # Заменяем только одинарные кавычки вокруг ключей и значений
+                            cleaned = re.sub(r"'(\w+)'\s*:", r'"\1":', cleaned)  # 'key': -> "key":
+                            cleaned = re.sub(r":\s*'([^']*)'", r': "\1"', cleaned)  # : 'value' -> : "value"
+                            cleaned = re.sub(r",\s*([}\]])", r"\1", cleaned)
+                            return json.loads(cleaned)
+                        except Exception:
+                            continue
+        
+        return None
+    except Exception as e:
+        logger.debug("_extract_json_from_js_var failed for %s: %s", varname, e)
     return None
 
 
@@ -826,7 +1750,7 @@ async def get_price_history_from_trendyol_async(trendyol_url: str) -> Optional[L
         await asyncio.sleep(2)
     await ASYNC_TRENDYOL_LIMITER.add_request()
     try:
-        return await asyncio.to_thread(get_price_history_from_trendyol, trendyol_url)
+        return await asyncio.wait_for(asyncio.to_thread(get_price_history_from_trendyol, trendyol_url), timeout=45.0)
     except Exception as e:
         logger.error(f"Error fetching Trendyol price history for {trendyol_url}: {e}")
         raise
@@ -1109,12 +2033,12 @@ def get_trending_by_category_top3(category_key: str) -> List[Tuple[str, Optional
 
 # Async wrappers
 async def get_trending_all_top3_async() -> List[Tuple[str, Optional[float], str]]:
-    return await asyncio.to_thread(get_trending_all_top3)
+    return await asyncio.wait_for(asyncio.to_thread(get_trending_all_top3), timeout=30.0)
 
 
 async def get_trending_by_search_top3_async(query: str) -> List[Tuple[str, Optional[float], str]]:
-    return await asyncio.to_thread(get_trending_by_search_top3, query)
+    return await asyncio.wait_for(asyncio.to_thread(get_trending_by_search_top3, query), timeout=30.0)
 
 
 async def get_trending_by_category_top3_async(category_key: str) -> List[Tuple[str, Optional[float], str]]:
-    return await asyncio.to_thread(get_trending_by_category_top3, category_key)
+    return await asyncio.wait_for(asyncio.to_thread(get_trending_by_category_top3, category_key), timeout=30.0)
