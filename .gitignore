@@ -1,3 +1,31 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+ENV/
+env/
+
+# Pytest
+.pytest_cache/
+
+# IDEs
+.vscode/
+.idea/
+
+# SQLite artifacts and backups
+trendyol_bot.db
+trendyol_bot.db-shm
+trendyol_bot.db-wal
+*.db.backup
+
+# Logs
+logs/
+
+# OS
+.DS_Store
 # Environment variables
 .env
 .env.local
