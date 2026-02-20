@@ -63,17 +63,19 @@ class AntiSpamMiddleware(BaseMiddleware):
             if isinstance(event, CallbackQuery):
                 # Используем локализацию, если доступна
                 try:
-                    from bot import t
+                    from localization import t
                     msg = t(user_id, "rate_limit_exceeded")
-                except Exception:
+                except Exception as e:
+                    logger.exception("Failed to get localized rate limit message for user %s: %s", user_id, e)
                     msg = "Пожалуйста, подождите немного перед следующим действием"
                 await event.answer(msg, show_alert=True)
             # Для сообщений отправляем ответ
             else:
                 try:
-                    from bot import t
+                    from localization import t
                     msg = t(user_id, "rate_limit_exceeded")
-                except Exception:
+                except Exception as e:
+                    logger.exception("Failed to get localized rate limit message for user %s: %s", user_id, e)
                     msg = "Слишком много сообщений. Пожалуйста, подождите немного."
                 await event.answer(msg)
             return None

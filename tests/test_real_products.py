@@ -8,7 +8,7 @@ import os
 import asyncio
 import time
 import pytest
-sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from scraper import get_price_history_from_akakce_async, get_product_title
 import logging

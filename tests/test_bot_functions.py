@@ -10,7 +10,7 @@ import sqlite3
 from pathlib import Path
 
 # Добавляем корневую директорию в путь
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 # Создаем временную БД для тестов
@@ -171,6 +171,7 @@ finally:
     try:
         if os.path.exists(TEST_DB):
             os.remove(TEST_DB)
-    except:
+    except Exception as e:
+        # Best-effort cleanup; ignore errors
         pass
 

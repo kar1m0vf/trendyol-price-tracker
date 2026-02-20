@@ -4,7 +4,7 @@
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 print("=" * 60)
@@ -71,7 +71,8 @@ for url, should_be_valid in test_urls:
             issues.append(f"URL валидация: '{url}' - ожидалось {should_be_valid}, получено {is_valid}")
             print(f"⚠️  URL '{url}': ожидалось {should_be_valid}, получено {is_valid}")
         else:
-            print(f"✅ URL '{url[:50]}...': {is_valid}")
+            url_display = str(url)[:50] if url else "None"
+            print(f"✅ URL '{url_display}': {is_valid}")
     except Exception as e:
         issues.append(f"Ошибка валидации URL '{url}': {e}")
         print(f"❌ Ошибка валидации URL '{url}': {e}")

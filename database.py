@@ -2,7 +2,7 @@ import sqlite3
 import time
 import logging
 import threading
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Any
 from datetime import datetime
 
 # Настройка логирования
@@ -274,6 +274,34 @@ def init_db():
         except sqlite3.OperationalError:
             pass  # Column already exists
 
+        # Создаем таблицу рекомендуемых продуктов
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS recommended_products (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            url TEXT NOT NULL UNIQUE,
+            price TEXT,
+            category TEXT,
+            brand TEXT,
+            reason_template TEXT,
+            priority INTEGER DEFAULT 0,
+            is_active BOOLEAN DEFAULT 1,
+            created_at INTEGER DEFAULT (strftime('%s', 'now')),
+            updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+        )
+        """)
+
+        # Глобальные тексты/настройки бота (например, текст рекомендаций)
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS bot_texts (
+            key TEXT NOT NULL,
+            language TEXT NOT NULL DEFAULT '*',
+            value TEXT NOT NULL,
+            updated_at INTEGER DEFAULT (strftime('%s', 'now')),
+            PRIMARY KEY (key, language)
+        )
+        """)
+
         # Дополнительные индексы для оптимизации производительности
         try:
             # Проверяем существующие индексы и создаем недостающие
@@ -313,17 +341,19 @@ def add_user_if_not_exists(user_id: int, language: str = "ru") -> None:
         cur.execute("INSERT OR IGNORE INTO users (user_id, language) VALUES (?, ?)", (user_id, language))
 
 def set_user_language(user_id: int, language: str) -> None:
-    with sqlite3.connect(DB) as conn:
+    with DatabaseConnection() as conn:
         cur = conn.cursor()
-        cur.execute("INSERT OR REPLACE INTO users (user_id, language) VALUES (?, ?)", (user_id, language))
-        conn.commit()
+        # IMPORTANT: avoid INSERT OR REPLACE because REPLACE deletes and recreates
+        # the row, which resets other user settings (quiet hours, created_at, etc.).
+        cur.execute("INSERT OR IGNORE INTO users (user_id, language) VALUES (?, ?)", (user_id, language))
+        cur.execute("UPDATE users SET language = ? WHERE user_id = ?", (language, user_id))
 
 def get_user_language(user_id: int) -> str:
-    with sqlite3.connect(DB) as conn:
+    with DatabaseConnection() as conn:
         cur = conn.cursor()
         cur.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
         row = cur.fetchone()
-    return row[0] if row else "ru"
+    return row[0] if row else "en"
 
 def add_subscription(
     user_id: int, 
@@ -340,7 +370,7 @@ def add_subscription(
     Добавляет новую подписку с расширенными параметрами.
     Возвращает ID новой подписки.
     """
-    with sqlite3.connect(DB) as conn:
+    with DatabaseConnection() as conn:
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO subscriptions (
@@ -348,7 +378,6 @@ def add_subscription(
                 notify_percent, notify_interval
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (user_id, url, product_title, product_image, mode, min_price, max_price, notify_percent, notify_interval))
-        conn.commit()
         sub_id = cur.lastrowid
     return sub_id
 
@@ -357,11 +386,10 @@ def add_price_point(subscription_id: int, url: str, price: float, ts: int = None
     """Insert a price point for a subscription. Returns inserted id."""
     if ts is None:
         ts = int(time.time())
-    with sqlite3.connect(DB) as conn:
+    with DatabaseConnection() as conn:
         cur = conn.cursor()
         cur.execute("INSERT INTO price_history (subscription_id, url, price, ts, source) VALUES (?, ?, ?, ?, ?)",
                     (subscription_id, url, price, ts, source))
-        conn.commit()
         return cur.lastrowid
 
 
@@ -369,7 +397,7 @@ def get_price_history(subscription_id: int, limit: int = 500, since_ts: int = No
     """Return list of (ts, price) ordered ascending by ts (oldest first).
     If since_ts provided, only points with ts >= since_ts are returned.
     """
-    with sqlite3.connect(DB) as conn:
+    with DatabaseConnection() as conn:
         cur = conn.cursor()
         if since_ts:
             cur.execute("SELECT ts, price FROM price_history WHERE subscription_id = ? AND ts >= ? ORDER BY ts ASC LIMIT ?",
@@ -383,7 +411,7 @@ def get_price_history(subscription_id: int, limit: int = 500, since_ts: int = No
 
 def get_last_price_point(subscription_id: int):
     """Return (ts, price) for last stored point or None."""
-    with sqlite3.connect(DB) as conn:
+    with DatabaseConnection() as conn:
         cur = conn.cursor()
         cur.execute("SELECT ts, price FROM price_history WHERE subscription_id = ? ORDER BY ts DESC LIMIT 1", (subscription_id,))
         row = cur.fetchone()
@@ -392,11 +420,10 @@ def get_last_price_point(subscription_id: int):
 
 def delete_price_history_for_subscription(subscription_id: int) -> int:
     """Delete history for a given subscription. Returns deleted count."""
-    with sqlite3.connect(DB) as conn:
+    with DatabaseConnection() as conn:
         cur = conn.cursor()
         cur.execute("DELETE FROM price_history WHERE subscription_id = ?", (subscription_id,))
         cnt = cur.rowcount
-        conn.commit()
     return cnt
 
 
@@ -419,10 +446,15 @@ def remove_subscription(sub_id: int) -> bool:
         with sqlite3.connect(DB) as conn:
             cur = conn.cursor()
             cur.execute("DELETE FROM subscriptions WHERE id = ?", (sub_id,))
+            deleted = cur.rowcount
             conn.commit()
-            return cur.rowcount > 0
+            if deleted:
+                logger.info("Removed subscription id=%s", sub_id)
+            else:
+                logger.debug("No subscription removed for id=%s (not found)", sub_id)
+            return deleted > 0
     except sqlite3.Error as e:
-        logger.error(f"Error removing subscription {sub_id}: {e}")
+        logger.exception("Error removing subscription %s: %s", sub_id, e)
         return False
 
 def remove_subscriptions_by_user(user_id: int) -> int:
@@ -436,9 +468,10 @@ def remove_subscriptions_by_user(user_id: int) -> int:
             cur.execute("DELETE FROM subscriptions WHERE user_id = ?", (user_id,))
             deleted_count = cur.rowcount
             conn.commit()
+            logger.info("Removed %d subscription(s) for user=%s", deleted_count, user_id)
             return deleted_count
     except sqlite3.Error as e:
-        logger.error(f"Error removing subscriptions for user {user_id}: {e}")
+        logger.exception("Error removing subscriptions for user %s: %s", user_id, e)
         return 0
 
 def get_user_subscriptions(user_id: int) -> List[Tuple]:
@@ -647,13 +680,19 @@ def get_user_settings(user_id: int):
 
 def update_user_settings(user_id: int, **kwargs):
     """Обновляет настройки пользователя"""
-    allowed_fields = {'notify_quiet_hours_start', 'notify_quiet_hours_end'}
+    allowed_fields = {
+        'language',
+        'notify_quiet_hours_start',
+        'notify_quiet_hours_end'
+    }
     
     if not kwargs or not any(k in allowed_fields for k in kwargs):
         return
         
     with sqlite3.connect(DB) as conn:
         cur = conn.cursor()
+        # Гарантируем существование пользователя перед обновлением.
+        cur.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
         sets = []
         params = []
         for k, v in kwargs.items():
@@ -666,55 +705,6 @@ def update_user_settings(user_id: int, **kwargs):
         query = f"UPDATE users SET {', '.join(sets)} WHERE user_id = ?"
         cur.execute(query, params)
         conn.commit()
-
-
-def save_price_point(subscription_id: int, price: float, timestamp: int = None) -> Optional[int]:
-    """
-    Сохраняет точку цены с дедупликацией и ограничением количества точек по подписке.
-    Правила:
-      - Не сохранять, если последняя цена == текущая и прошло < 1 часа
-      - Ограничение точек: если точек > 500, удалить самые старые
-    Возвращает id вставленной записи или None, если запись не добавлена.
-    """
-    try:
-        if timestamp is None:
-            timestamp = int(time.time())
-        with sqlite3.connect(DB) as conn:
-            cur = conn.cursor()
-            # Проверяем последнюю точку
-            cur.execute("SELECT id, ts, price FROM price_history WHERE subscription_id = ? ORDER BY ts DESC LIMIT 1", (subscription_id,))
-            last = cur.fetchone()
-            if last:
-                last_id, last_ts, last_price = last
-                try:
-                    if float(last_price) == float(price) and (int(timestamp) - int(last_ts)) < 3600:
-                        # Считаем дубликатом — не сохраняем
-                        return None
-                except Exception:
-                    pass
-
-            # Вставляем новую точку
-            cur.execute("INSERT INTO price_history (subscription_id, url, price, ts, source) VALUES (?, ?, ?, ?, ?)",
-                        (subscription_id, '', float(price), int(timestamp), 'collector'))
-            inserted_id = cur.lastrowid
-
-            # Ограничение количества точек (cap = 500)
-            cur.execute("SELECT COUNT(1) FROM price_history WHERE subscription_id = ?", (subscription_id,))
-            cnt = cur.fetchone()[0]
-            if cnt > 500:
-                to_delete = cnt - 500
-                # Удаляем самые старые записи — используем подзапрос по id
-                cur.execute("SELECT id FROM price_history WHERE subscription_id = ? ORDER BY ts ASC LIMIT ?", (subscription_id, to_delete))
-                ids = [r[0] for r in cur.fetchall()]
-                if ids:
-                    q = ','.join('?' for _ in ids)
-                    cur.execute(f"DELETE FROM price_history WHERE id IN ({q})", ids)
-
-            conn.commit()
-            return inserted_id
-    except Exception as e:
-        logger.exception("save_price_point error: %s", e)
-        return None
 
 
 def get_local_price_history(subscription_id: int, days: int = 90):
@@ -744,73 +734,13 @@ def get_local_price_history(subscription_id: int, days: int = 90):
         return []
 
 
-def get_user_settings(user_id: int):
-    """
-    Получает настройки пользователя с безопасными значениями по умолчанию.
-    
-    Returns:
-        Tuple[str, int, int]: (language, notify_quiet_hours_start, notify_quiet_hours_end)
-        Возвращает значения по умолчанию если пользователь не найден
-    """
-    try:
-        with sqlite3.connect(DB) as conn:
-            cur = conn.cursor()
-            cur.execute("""
-                SELECT language, notify_quiet_hours_start, notify_quiet_hours_end
-                FROM users WHERE user_id = ?
-            """, (user_id,))
-            row = cur.fetchone()
-        
-        if row:
-            return row
-        else:
-            # Возвращаем безопасные значения по умолчанию
-            return ("ru", 23, 7)
-    except Exception as e:
-        logger.exception(f"Error getting user settings for {user_id}: {e}")
-        return ("ru", 23, 7)
-
-
-def update_user_settings(user_id: int, **kwargs) -> None:
-    """
-    Обновляет настройки пользователя.
-    
-    Args:
-        user_id: ID пользователя
-        **kwargs: Поля для обновления (language, notify_quiet_hours_start, notify_quiet_hours_end)
-    """
-    allowed_fields = {
-        'language',
-        'notify_quiet_hours_start',
-        'notify_quiet_hours_end'
-    }
-    
-    update_dict = {k: v for k, v in kwargs.items() if k in allowed_fields}
-    
-    if not update_dict:
-        logger.warning(f"No valid fields to update for user {user_id}")
-        return
-    
-    try:
-        with sqlite3.connect(DB) as conn:
-            cur = conn.cursor()
-            
-            # Убедимся, что пользователь существует
-            cur.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
-            
-            # Обновляем поля
-            set_clause = ", ".join(f"{k} = ?" for k in update_dict.keys())
-            values = list(update_dict.values()) + [user_id]
-            
-            cur.execute(f"UPDATE users SET {set_clause} WHERE user_id = ?", values)
-            conn.commit()
-            
-            logger.info(f"Updated user {user_id} settings: {update_dict}")
-    except Exception as e:
-        logger.exception(f"Error updating user settings for {user_id}: {e}")
-
-
-def save_price_point(subscription_id: int, price: float, ts: int = None, max_points: int = 10000) -> int:
+def save_price_point(
+    subscription_id: int,
+    price: float,
+    ts: int = None,
+    max_points: int = 10000,
+    timestamp: int = None,
+) -> int:
     """
     Сохраняет точку цены для подписки с дедупликацией.
     
@@ -819,10 +749,13 @@ def save_price_point(subscription_id: int, price: float, ts: int = None, max_poi
         price: Цена товара
         ts: Timestamp (по умолчанию текущее время)
         max_points: Максимум точек в истории (старые удаляются)
+        timestamp: Совместимость со старым именем аргумента
     
     Returns:
         ID вставленной строки или -1 при ошибке
     """
+    if timestamp is not None and ts is None:
+        ts = timestamp
     if ts is None:
         ts = int(time.time())
 
@@ -1001,6 +934,132 @@ def get_top_price_drops(user_id: int, limit: int = 10) -> List[tuple]:
             ORDER BY drop_percent ASC
             LIMIT ?
         """, (user_id, month_ago, month_ago, limit))
-        
+
         return cur.fetchall()
 
+# --- Recommended Products Management ---
+
+def add_recommended_product(title: str, url: str, price: str = "",
+                          category: str = "", brand: str = "",
+                          reason_template: str = "", priority: int = 0) -> bool:
+    """Добавить рекомендуемый продукт"""
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO recommended_products
+                (title, url, price, category, brand, reason_template, priority)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (title, url, price, category, brand, reason_template, priority))
+            conn.commit()
+            return True
+    except Exception as e:
+        logger.error(f"Error adding recommended product: {e}")
+        return False
+
+def remove_recommended_product(product_id: int) -> bool:
+    """Удалить рекомендуемый продукт"""
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM recommended_products WHERE id = ?", (product_id,))
+            conn.commit()
+            return cur.rowcount > 0
+    except Exception as e:
+        logger.error(f"Error removing recommended product: {e}")
+        return False
+
+def get_recommended_products() -> List[Dict[str, Any]]:
+    """Получить все рекомендуемые продукты"""
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT id, title, url, price, category, brand, reason_template, priority, is_active
+                FROM recommended_products
+                WHERE is_active = 1
+                ORDER BY priority DESC, created_at DESC
+            """)
+            rows = cur.fetchall()
+
+            return [{
+                "id": row[0],
+                "title": row[1],
+                "url": row[2],
+                "price": row[3] or "Цена не указана",
+                "category": row[4] or "other",
+                "brand": row[5] or "",
+                "reason_template": row[6] or "Рекомендуемый товар",
+                "priority": row[7],
+                "is_active": bool(row[8])
+            } for row in rows]
+    except Exception as e:
+        logger.error(f"Error getting recommended products: {e}")
+        return []
+
+def update_recommended_product_priority(product_id: int, priority: int) -> bool:
+    """Обновить приоритет рекомендуемого продукта"""
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                UPDATE recommended_products
+                SET priority = ?, updated_at = strftime('%s', 'now')
+                WHERE id = ?
+            """, (priority, product_id))
+            conn.commit()
+            return cur.rowcount > 0
+    except Exception as e:
+        logger.error(f"Error updating recommended product priority: {e}")
+        return False
+
+# --- Bot text settings ---
+
+def get_bot_text(key: str, language: Optional[str] = None) -> Optional[str]:
+    """Получить кастомный текст по ключу (с fallback на '*' язык)."""
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            if language:
+                cur.execute(
+                    "SELECT value FROM bot_texts WHERE key = ? AND language = ?",
+                    (key, language),
+                )
+                row = cur.fetchone()
+                if row and row[0]:
+                    return row[0]
+            cur.execute(
+                "SELECT value FROM bot_texts WHERE key = ? AND language = '*'",
+                (key,),
+            )
+            row = cur.fetchone()
+            return row[0] if row else None
+    except Exception as e:
+        logger.error(f"Error getting bot text: {e}")
+        return None
+
+
+def set_bot_text(key: str, value: str, language: Optional[str] = None) -> None:
+    """Установить кастомный текст по ключу. Пустое значение удаляет запись."""
+    lang = (language or "*").strip() or "*"
+    text = (value or "").strip()
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            if not text:
+                cur.execute(
+                    "DELETE FROM bot_texts WHERE key = ? AND language = ?",
+                    (key, lang),
+                )
+                conn.commit()
+                return
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO bot_texts (key, language, value, updated_at)
+                VALUES (?, ?, ?, strftime('%s', 'now'))
+                """,
+                (key, lang, text),
+            )
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Error setting bot text: {e}")

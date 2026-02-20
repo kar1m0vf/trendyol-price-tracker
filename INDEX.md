@@ -23,7 +23,7 @@
 | Файл | Содержание | Для кого |
 |------|-----------|---------|
 | **RUN_BOT.md** | Полная инструкция по запуску | Все пользователи |
-| **STATUS_REPORT.md** | Статус исправлений и готовность | Все пользователи |
+| **docs/reports/STATUS_REPORT.md** | Статус исправлений и готовность | Все пользователи |
 | **check_bot_ready.py** | Скрипт проверки готовности | Все пользователи |
 
 ---
@@ -32,14 +32,14 @@
 
 | Файл | Содержание | Для кого |
 |------|-----------|---------|
-| **FIXES_COMPLETED.md** | Детальное описание всех исправлений | Разработчики |
-| **FIXES_APPLIED.md** | Краткая сводка примененных исправлений | Разработчики |
-| **CODE_REVIEW_ANALYSIS.md** | Полный анализ кода и проблем | Разработчики |
-| **FIXES_AND_CODE_SAMPLES.md** | Примеры кода с исправлениями | Разработчики |
-| **QUICK_FIX_GUIDE.md** | Быстрое руководство по исправлениям | Разработчики |
-| **PER_FILE_AUDIT.md** | Аудит по каждому файлу | Разработчики |
-| **ANALYSIS_SUMMARY.md** | Сводка анализа проблем | Разработчики |
-| **FINAL_REPORT.md** | Финальный отчет с рекомендациями | Разработчики |
+| **docs/fixes/FIXES_COMPLETED.md** | Детальное описание всех исправлений | Разработчики |
+| **docs/fixes/FIXES_APPLIED.md** | Краткая сводка примененных исправлений | Разработчики |
+| **docs/reports/CODE_REVIEW_ANALYSIS.md** | Полный анализ кода и проблем | Разработчики |
+| **docs/fixes/FIXES_AND_CODE_SAMPLES.md** | Примеры кода с исправлениями | Разработчики |
+| **docs/fixes/QUICK_FIX_GUIDE.md** | Быстрое руководство по исправлениям | Разработчики |
+| **docs/reports/PER_FILE_AUDIT.md** | Аудит по каждому файлу | Разработчики |
+| **docs/reports/ANALYSIS_SUMMARY.md** | Сводка анализа проблем | Разработчики |
+| **docs/reports/FINAL_REPORT.md** | Финальный отчет с рекомендациями | Разработчики |
 
 ---
 
@@ -106,16 +106,16 @@ telegrambot/
 ├── backups/                    # Резервные копии БД
 ├── tools/                      # Дополнительные инструменты
 │
-├── STATUS_REPORT.md            # Статус и результаты ✅
+├── docs/reports/STATUS_REPORT.md            # Статус и результаты ✅
 ├── RUN_BOT.md                  # Инструкции по запуску ✅
-├── FIXES_COMPLETED.md          # Описание исправлений ✅
-├── CODE_REVIEW_ANALYSIS.md     # Анализ кода
-├── FIXES_AND_CODE_SAMPLES.md   # Примеры кода
-├── FIXES_APPLIED.md            # Краткая сводка исправлений
-├── QUICK_FIX_GUIDE.md          # Быстрое руководство
-├── PER_FILE_AUDIT.md           # Аудит по файлам
-├── ANALYSIS_SUMMARY.md         # Сводка анализа
-└── FINAL_REPORT.md             # Финальный отчет
+├── docs/fixes/FIXES_COMPLETED.md          # Описание исправлений ✅
+├── docs/reports/CODE_REVIEW_ANALYSIS.md     # Анализ кода
+├── docs/fixes/FIXES_AND_CODE_SAMPLES.md   # Примеры кода
+├── docs/fixes/FIXES_APPLIED.md            # Краткая сводка исправлений
+├── docs/fixes/QUICK_FIX_GUIDE.md          # Быстрое руководство
+├── docs/reports/PER_FILE_AUDIT.md           # Аудит по файлам
+├── docs/reports/ANALYSIS_SUMMARY.md         # Сводка анализа
+└── docs/reports/FINAL_REPORT.md             # Финальный отчет
 ```
 
 ---
@@ -123,19 +123,19 @@ telegrambot/
 ## 🚀 Рекомендуемый порядок чтения
 
 ### Для пользователей (Non-programmers)
-1. **STATUS_REPORT.md** - Что было исправлено и статус
+1. **docs/reports/STATUS_REPORT.md** - Что было исправлено и статус
 2. **RUN_BOT.md** - Как запустить бота
 3. **check_bot_ready.py** - Проверить что всё готово
 
 ### Для разработчиков
-1. **FIXES_COMPLETED.md** - Что было исправлено
-2. **CODE_REVIEW_ANALYSIS.md** - Полный анализ проблем
-3. **FIXES_AND_CODE_SAMPLES.md** - Примеры кода
-4. **PER_FILE_AUDIT.md** - Изменения в каждом файле
+1. **docs/fixes/FIXES_COMPLETED.md** - Что было исправлено
+2. **docs/reports/CODE_REVIEW_ANALYSIS.md** - Полный анализ проблем
+3. **docs/fixes/FIXES_AND_CODE_SAMPLES.md** - Примеры кода
+4. **docs/reports/PER_FILE_AUDIT.md** - Изменения в каждом файле
 
 ### Для код-ревью
-1. **CODE_REVIEW_ANALYSIS.md** - Выявленные проблемы
-2. **FINAL_REPORT.md** - Рекомендации и итоги
+1. **docs/reports/CODE_REVIEW_ANALYSIS.md** - Выявленные проблемы
+2. **docs/reports/FINAL_REPORT.md** - Рекомендации и итоги
 3. Просмотр самих файлов (bot.py, config.py, database.py)
 
 ---
@@ -176,7 +176,7 @@ telegrambot/
 Запустите: `python check_bot_ready.py`
 
 ### Что изменилось в кодe?
-Прочитайте: `FIXES_COMPLETED.md`
+Прочитайте: `docs/fixes/FIXES_COMPLETED.md`
 
 ### Где находится BOT_TOKEN?
 В файле `.env` (не коммитится в git)
@@ -185,7 +185,7 @@ telegrambot/
 Отредактируйте переменную `ADMIN_IDS` в `.env`
 
 ### Как изменить язык бота?
-Прочитайте: `QUICK_FIX_GUIDE.md`
+Прочитайте: `docs/fixes/QUICK_FIX_GUIDE.md`
 
 ---
 

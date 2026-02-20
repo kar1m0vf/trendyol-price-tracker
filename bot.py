@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import sqlite3
+import html
 from typing import Optional, List, Tuple, Dict, Any
 from datetime import datetime, timedelta
 import io
@@ -12,6 +13,7 @@ import time
 import aiohttp
 import shutil
 from pathlib import Path
+from urllib.parse import urlparse
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
@@ -20,7 +22,8 @@ from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton, CallbackQuery
 )
 
-from config import BOT_TOKEN, _check_bot_token, USE_NEW_HANDLERS
+from config import BOT_TOKEN, _check_bot_token, USE_NEW_HANDLERS, ADMIN_IDS, DATABASE_PATH
+from utils import get_next_notification_time
 import aiogram
 from database import (
     init_db,
@@ -40,8 +43,36 @@ from database import (
     update_notify_time,
     update_subscription_settings,
     update_user_settings,
-    save_price_points_batch
+    save_price_points_batch,
+    get_bot_text,
+    set_bot_text,
 )
+from localization import t, LOCALES # Импортируем t и LOCALES из localization
+
+
+def _parse_kv_floats(text: Optional[str]) -> Dict[str, float]:
+    """Parse key:value floats for keys min, max, percent.
+
+    Returns a dict with any of keys 'min', 'max', 'percent' present as floats.
+    Accepts comma or dot as decimal separator and optional percent sign for percent.
+    """
+    out: Dict[str, float] = {}
+    if not text:
+        return out
+    # patterns like 'min: 12.34', 'max:1,234', 'percent: 10%'
+    patterns = {
+        'min': r"\bmin\s*:\s*([0-9]+(?:[\.,][0-9]+)?)",
+        'max': r"\bmax\s*:\s*([0-9]+(?:[\.,][0-9]+)?)",
+        'percent': r"\bpercent\s*:\s*([0-9]+(?:[\.,][0-9]+)?)(?:\s*%|)"
+    }
+    for k, pat in patterns.items():
+        m = re.search(pat, text, flags=re.IGNORECASE)
+        if m:
+            try:
+                out[k] = float(m.group(1).replace(',', '.'))
+            except ValueError:
+                continue
+    return out
 from analytics import Analytics
 from database import update_subscription_meta
 from database import add_price_point, get_price_history, get_last_price_point, save_price_point, get_local_price_history
@@ -56,6 +87,7 @@ from scraper import (
     get_product_info_async,
 )
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from services.notification_service import NotificationService
 
 # matplotlib is imported lazily in the history handler to avoid hard dependency
 
@@ -68,6 +100,9 @@ _check_bot_token()
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+# Instantiate shared notification service to avoid duplicate implementations
+notification_service = NotificationService(bot)
+
 # CHANGED: default notify mode (можно поменять на "discount" если хочешь)
 try:
     from config import DEFAULT_NOTIFY_MODE  # optional config override
@@ -75,24 +110,10 @@ except Exception:
     DEFAULT_NOTIFY_MODE = "hourly"  # CHANGED: default now hourly; change to "discount" if preferred
 
 # locales loader
-def load_locale(lang_code: str) -> dict:
-    try:
-        with open(f"locales/{lang_code}.json", "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        logger.warning("Locale load failed for %s: %s", lang_code, e)
-        return {}
-
-LOCALES = {
-    "ru": load_locale("ru"),
-    "en": load_locale("en"),
-    "az": load_locale("az"),
-    "tr": load_locale("tr")
-}
 
 # Admin configuration
-ADMIN_IDS = [975282591]  # Add your Telegram user ID here
-DB = "trendyol_bot.db"
+# ADMIN_IDS is loaded from .env via config.py
+# DB = "trendyol_bot.db"
 
 # Health check variables
 last_health_check = 0
@@ -102,55 +123,58 @@ health_check_interval = 60  # seconds
 alert_edit_state = {}  # user_id -> sub_id
 report_state = {}  # user_id -> report_data
 
-def t(user_id: int, key: str) -> str:
-    """Return localized string for user; fallback to ru or key."""
-    try:
-        lang = get_user_language(user_id) or "ru"
-    except Exception:
-        lang = "ru"
-    loc = LOCALES.get(lang, LOCALES.get("ru", {}))
-    return loc.get(key, key)
+# Onboarding state for new users
+onboarding_state = {}  # user_id -> step
+
+# Lock for scheduler to prevent race conditions
+scheduler_lock = asyncio.Lock()
 
 init_db()
 
 # --- helpers
-def get_next_notification_time(mode: str, last_notify_time: Optional[int], notify_interval: Optional[int], user_id: int) -> str:
-    """
-    Рассчитывает время следующего уведомления для подписки.
-    Возвращает строку с описанием времени или типа уведомлений.
-    """
+def handle_blocked_user(user_id: int):
+    """Remove all subscriptions from user who blocked the bot."""
     try:
-        if mode == "discount":
-            # Для режима "только при скидке" показываем, что уведомления приходят при изменениях
-            return t(user_id, "next_notify_discount")
-        elif mode == "hourly":
-            # Для почасового режима рассчитываем точное время следующего уведомления
-            if last_notify_time and notify_interval:
-                # notify_interval в минутах, переводим в секунды
-                interval_seconds = notify_interval * 60
-                next_time = last_notify_time + interval_seconds
-                current_time = int(time.time())
-
-                if next_time > current_time:
-                    # Показываем время в формате HH:MM
-                    dt = datetime.fromtimestamp(next_time)
-                    return dt.strftime("%H:%M")
-                else:
-                    # Если время уже прошло, показываем ближайшее следующее время
-                    # Округляем до следующего часа
-                    current_hour = datetime.now().hour
-                    next_hour = (current_hour + 1) % 24
-                    return f"{next_hour:02d}:00"
-            else:
-                # Если нет данных, показываем следующий час
-                next_hour = (datetime.now().hour + 1) % 24
-                return f"{next_hour:02d}:00"
-        else:
-            return t(user_id, "next_notify_unknown")
-
+        logger.info(f"Removing subscriptions for blocked user {user_id}")
+        from database import remove_subscriptions_by_user
+        remove_subscriptions_by_user(user_id)
+        logger.info(f"Successfully removed subscriptions for user {user_id}")
     except Exception as e:
-        logger.debug(f"Error calculating next notification time: {e}")
-        return t(user_id, "next_notify_unknown")
+        logger.error(f"Failed to remove subscriptions for blocked user {user_id}: {e}")
+
+async def send_notification_with_timeout(
+    user_id: int,
+    text: str,
+    image: Optional[str] = None,
+    timeout: float = 10.0,
+    parse_mode: Optional[str] = None,
+) -> bool:
+    """
+    Send notification with timeout and proper error handling.
+    
+    Args:
+        user_id: User ID
+        text: Message text
+        image: Photo URL (optional)
+        timeout: Timeout in seconds
+        
+    Returns:
+        True if sent successfully, False otherwise
+    """
+    # Delegate to NotificationService implementation (centralized, tested)
+    try:
+        return await notification_service.send_notification_safe(
+            user_id,
+            text,
+            image=image,
+            timeout_seconds=timeout,
+            parse_mode=parse_mode,
+        )
+    except Exception:
+        logger.exception("notification_service.send_notification_safe failed")
+        return False
+
+
 def convert_to_turkish_url(url: str) -> str:
     """Convert English Trendyol URL to Turkish version for better parsing"""
     if "/en/" in url:
@@ -189,12 +213,30 @@ def normalize_url(url: str) -> str:
     return u
 
 def is_trendyol_product_url(u: str) -> bool:
-    if not u:
+    if not u or not isinstance(u, str):
         return False
     try:
-        ul = (u or "").lower()
-        return ("trendyol.com" in ul) and ("/p/" in ul or "-p-" in ul)
-    except (AttributeError, TypeError):
+        # Проверка длины URL (защита от DoS)
+        if len(u) > 2000:  # Максимальная длина URL
+            return False
+
+        parsed = urlparse(u.strip())
+
+        # Проверяем протокол
+        if parsed.scheme not in {"http", "https"}:
+            return False
+
+        # Проверяем host строго (без substring spoofing вида "evil-trendyol.com")
+        host = (parsed.hostname or "").lower().rstrip(".")
+        if not host:
+            return False
+        if host != "trendyol.com" and not host.endswith(".trendyol.com"):
+            return False
+
+        # Проверяем что содержит идентификатор продукта
+        path = (parsed.path or "").lower()
+        return ("/p/" in path or "-p-" in path)
+    except (AttributeError, TypeError, UnicodeError):
         return False
 
 
@@ -269,7 +311,8 @@ async def send_notification_safe(
     user_id: int,
     text: str,
     image: Optional[str] = None,
-    timeout_seconds: float = 10.0
+    timeout_seconds: float = 10.0,
+    parse_mode: Optional[str] = None,
 ) -> bool:
     """
     Безопасно отправляет уведомление с таймаутом.
@@ -284,152 +327,29 @@ async def send_notification_safe(
     Returns:
         True если успешно отправлено, False если ошибка
     """
+    # Delegate to shared NotificationService to avoid duplicate logic
     try:
-        if image:
-            try:
-                await asyncio.wait_for(
-                    bot.send_photo(user_id, photo=image, caption=text),
-                    timeout=timeout_seconds
-                )
-                logger.debug(f"Photo notification sent to {user_id}")
-                return True
-            except asyncio.TimeoutError:
-                logger.warning(f"Photo send timeout for user {user_id}, falling back to text")
-                # Fallback на текст если фото долго грузится
-                try:
-                    await asyncio.wait_for(
-                        bot.send_message(user_id, text),
-                        timeout=timeout_seconds
-                    )
-                    return True
-                except Exception as e:
-                    logger.exception(f"Fallback text message failed for {user_id}: {e}")
-                    return False
-        else:
-            await asyncio.wait_for(
-                bot.send_message(user_id, text),
-                timeout=timeout_seconds
-            )
-            logger.debug(f"Text notification sent to {user_id}")
-            return True
-            
-    except asyncio.TimeoutError:
-        logger.error(f"Notification timeout for user {user_id}")
-        return False
-    except aiogram.exceptions.TelegramForbiddenError:
-        logger.warning(f"User {user_id} blocked the bot")
-        return False
-    except aiogram.exceptions.TelegramBadRequest as e:
-        logger.warning(f"Bad request for user {user_id}: {e}")
-        return False
-    except Exception as e:
-        logger.exception(f"Unexpected error sending notification to {user_id}: {e}")
+        return await notification_service.send_notification_safe(
+            user_id,
+            text,
+            image=image,
+            timeout_seconds=timeout_seconds,
+            parse_mode=parse_mode,
+        )
+    except Exception:
+        logger.exception("notification_service.send_notification_safe failed")
         return False
 
 async def send_history_plot(user_id: int, url: str, hist):
-    # hist: List[Tuple[str|datetime, float]]
-    processed = []
-    for d, p in hist:
-        parsed_dt = None
-        if isinstance(d, str):
-            # Используем улучшенный парсер с поддержкой разных форматов
-            parsed_dt = parse_date_flexible(d)
-        elif isinstance(d, datetime):
-            parsed_dt = d
-
-        if parsed_dt:
-            processed.append((parsed_dt, float(p)))
-        else:
-            # Дату не распознали, используем как есть
-            logger.debug(f"Could not parse date for history: {d}")
-            processed.append((d, float(p)))
-
-    # Сортировка, если даты удалось распознать
-    if processed and isinstance(processed[0][0], datetime):
-        processed.sort(key=lambda x: x[0])
-        x_vals = [x[0] for x in processed]
-    else:
-        x_vals = list(range(len(processed)))
-    y_vals = [x[1] for x in processed]
-
+    # Delegate history plotting to the centralized NotificationService implementation
     try:
-        # Попытка использовать matplotlib
-        import matplotlib
-        matplotlib.use('Agg')  # Важно установить до импорта pyplot
-        import matplotlib.pyplot as plt
-        import matplotlib.dates as mdates
-
-        # Отрисовка графика
-        plt.style.use('seaborn-v0_8-darkgrid')
-        fig, ax = plt.subplots(figsize=(10, 5))
-
-        ax.plot(x_vals, y_vals, marker='o', linestyle='-', color='dodgerblue')
-
-        if processed and isinstance(processed[0][0], datetime):
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%d.%m'))
-            fig.autofmt_xdate()
-
-        ax.fill_between(x_vals, y_vals, alpha=0.1, color='dodgerblue')
-
-        ax.set_title(t(user_id, "history_chart_title"), fontsize=14, weight='bold')
-        ax.set_xlabel(t(user_id, "history_chart_x"), fontsize=10)
-        ax.set_ylabel(t(user_id, "history_chart_y"), fontsize=10)
-        ax.grid(True, which='both', linestyle='--', linewidth=0.5)
-
-        # Добавляем аннотации к мин и макс
-        if y_vals:
-            min_price = min(y_vals)
-            max_price = max(y_vals)
-            min_idx = y_vals.index(min_price)
-            max_idx = y_vals.index(max_price)
-            ax.annotate(f"Min: {min_price}", xy=(x_vals[min_idx], min_price), xytext=(-20, -30),
-                        textcoords='offset points', arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=-0.2"))
-            ax.annotate(f"Max: {max_price}", xy=(x_vals[max_idx], max_price), xytext=(20, 20),
-                        textcoords='offset points', arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=0.2"))
-
-        buf = io.BytesIO()
-        plt.tight_layout()
-        plt.savefig(buf, format='png', dpi=100)
-        plt.close(fig)
-        buf.seek(0)
-
-        # Проверяем размер файла (Telegram limit: 10MB)
-        if buf.tell() > 10 * 1024 * 1024:  # 10MB
-            logger.warning("Plot too large (%d bytes), reducing quality", buf.tell())
-            buf.seek(0)
-            buf.truncate(0)
-            plt.savefig(buf, format='png', dpi=50)  # Lower quality
-            buf.seek(0)
-
-        caption_text = t(user_id, "history_caption").format(url=url)
-
-        await bot.send_photo(user_id, buf, caption=caption_text)
-        buf.close()
-
-    except ImportError:
-        logger.warning("matplotlib not available, falling back to text output")
-        # Фолбэк на текстовую историю с ASCII графикой
-        if not processed:
+        return await notification_service.send_history_plot(user_id, url, hist)
+    except Exception:
+        logger.exception("notification_service.send_history_plot failed for user %s url=%s", user_id, url)
+        try:
             await bot.send_message(user_id, t(user_id, "history_not_found"))
-            return
-
-        min_price = min(p for _, p in processed)
-        max_price = max(p for _, p in processed)
-        price_range = max_price - min_price
-
-        GRAPH_CHARS = "▁▂▃▄▅▆▇█"
-        lines_out = [t(user_id, "history_caption").format(url=url), "", f"Max: {max_price:.2f} TL", f"Min: {min_price:.2f} TL", ""]
-
-        for date, price in processed:
-            if price_range == 0:
-                normalized = len(GRAPH_CHARS) - 1
-            else:
-                normalized = int((price - min_price) / price_range * (len(GRAPH_CHARS) - 1))
-            graph_char = GRAPH_CHARS[normalized]
-            date_str = date.strftime('%d.%m.%Y') if isinstance(date, datetime) else str(date)
-            lines_out.append(f"{date_str}: {price:.2f} TL {graph_char}")
-
-        await bot.send_message(user_id, "\n".join(lines_out))
+        except Exception:
+            logger.exception("Failed to send fallback history_not_found message to %s", user_id)
 
 
 async def send_history_for_subscription(user_id: int, sub_id: int, url: str):
@@ -496,8 +416,8 @@ def get_main_kb(user_id: int) -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=t(user_id, "btn_subscribe")), KeyboardButton(text=t(user_id, "btn_subs"))],
-            [KeyboardButton(text=t(user_id, "btn_recommend")), KeyboardButton(text=t(user_id, "btn_trending"))],
-            [KeyboardButton(text=t(user_id, "btn_language")), KeyboardButton(text=t(user_id, "btn_unsubscribe"))]
+            [KeyboardButton(text=t(user_id, "btn_trending")), KeyboardButton(text=t(user_id, "btn_recommend"))],
+            [KeyboardButton(text=t(user_id, "btn_language")), KeyboardButton(text=t(user_id, "btn_help"))]
         ],
         resize_keyboard=True
     )
@@ -552,10 +472,96 @@ def subscription_controls_kb_for_user(user_id: int, sub_id: int) -> InlineKeyboa
 # start
 # OLD HANDLER: moved to handlers/basic.py
 async def cmd_start_old(message: types.Message):
-    add_user_if_not_exists(message.from_user.id)
-    await message.answer(t(message.from_user.id, "start_text"), reply_markup=get_main_kb(message.from_user.id))
+    user_id = _get_request_user_id(message)
+    add_user_if_not_exists(user_id)
 
-@dp.message(lambda m: m.text == t(m.from_user.id, "btn_language"))
+    # Start onboarding for new users
+    if user_id not in onboarding_state:
+        onboarding_state[user_id] = "welcome"
+        await send_onboarding_step(user_id, message)
+    else:
+        await message.answer(
+            t(user_id, "start_text"),
+            reply_markup=get_main_kb(user_id),
+            parse_mode="Markdown",
+        )
+
+async def send_onboarding_step(user_id: int, message: types.Message):
+    """Send current onboarding step"""
+    step = onboarding_state.get(user_id, "welcome")
+
+    if step == "welcome":
+        # Welcome message with keyboard
+        kb = ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text=t(user_id, "onboarding_try"))],
+                [KeyboardButton(text=t(user_id, "onboarding_skip"))]
+            ],
+            resize_keyboard=True
+        )
+        await message.answer(
+            t(user_id, "onboarding_welcome"),
+            reply_markup=kb,
+            parse_mode="Markdown",
+        )
+        onboarding_state[user_id] = "waiting_try"
+
+    elif step == "waiting_try":
+        # User clicked "Try it"
+        kb = ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text=t(user_id, "onboarding_done"))],
+                [KeyboardButton(text=t(user_id, "onboarding_help"))]
+            ],
+            resize_keyboard=True
+        )
+        await message.answer(
+            t(user_id, "onboarding_explain"),
+            reply_markup=kb,
+            parse_mode="Markdown",
+        )
+        onboarding_state[user_id] = "explained"
+
+    elif step == "explained":
+        # Onboarding completed
+        del onboarding_state[user_id]
+        await message.answer(
+            t(user_id, "onboarding_complete"),
+            reply_markup=get_main_kb(user_id),
+            parse_mode="Markdown",
+        )
+
+def _filter_language_button(message: types.Message) -> bool:
+    """Filter for language button"""
+    if not message.text or not message.from_user:
+        return False
+    return message.text == t(message.from_user.id, "btn_language")
+
+def _filter_help_button(message: types.Message) -> bool:
+    """Filter for help button"""
+    if not message.text or not message.from_user:
+        return False
+    return message.text == t(message.from_user.id, "btn_help")
+
+def _filter_onboarding_try(message: types.Message) -> bool:
+    """Filter for onboarding try button"""
+    if not message.text or not message.from_user:
+        return False
+    return message.text == t(message.from_user.id, "onboarding_try")
+
+def _filter_onboarding_skip(message: types.Message) -> bool:
+    """Filter for onboarding skip button"""
+    if not message.text or not message.from_user:
+        return False
+    return message.text == t(message.from_user.id, "onboarding_skip")
+
+def _filter_onboarding_done(message: types.Message) -> bool:
+    """Filter for onboarding done button"""
+    if not message.text or not message.from_user:
+        return False
+    return message.text == t(message.from_user.id, "onboarding_done")
+
+@dp.message(_filter_language_button)
 async def cmd_lang_message(message: types.Message):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -569,6 +575,41 @@ async def cmd_lang_message(message: types.Message):
     ])
     await message.answer(t(message.from_user.id, "choose_language"), reply_markup=kb)
 
+@dp.message(_filter_help_button)
+async def cmd_help_button(message: types.Message):
+    """Handle help button press"""
+    await cmd_help_old(message)
+
+@dp.message(_filter_onboarding_try)
+async def cmd_onboarding_try(message: types.Message):
+    """Handle onboarding try button"""
+    user_id = message.from_user.id
+    await send_onboarding_step(user_id, message)
+
+@dp.message(_filter_onboarding_skip)
+async def cmd_onboarding_skip(message: types.Message):
+    """Handle onboarding skip button"""
+    user_id = message.from_user.id
+    if user_id in onboarding_state:
+        del onboarding_state[user_id]
+    await message.answer(
+        t(user_id, "onboarding_skipped"),
+        reply_markup=get_main_kb(user_id),
+        parse_mode="Markdown",
+    )
+
+@dp.message(_filter_onboarding_done)
+async def cmd_onboarding_done(message: types.Message):
+    """Handle onboarding done button"""
+    user_id = message.from_user.id
+    if user_id in onboarding_state:
+        del onboarding_state[user_id]
+    await message.answer(
+        t(user_id, "onboarding_complete"),
+        reply_markup=get_main_kb(user_id),
+        parse_mode="Markdown",
+    )
+
 @dp.message(Command("language"))
 async def cmd_language_command(message: types.Message):
     parts = (message.text or "").split()
@@ -578,12 +619,17 @@ async def cmd_language_command(message: types.Message):
             set_user_language(message.from_user.id, code)
             try:
                 await message.answer(t(message.from_user.id, "lang_changed"))
-            except:
-                pass
+            except Exception as e:
+                logger.exception("Failed to send lang_changed message: %s", e)
             try:
-                await bot.send_message(message.from_user.id, t(message.from_user.id, "start_text"), reply_markup=get_main_kb(message.from_user.id))
-            except:
-                pass
+                await bot.send_message(
+                    message.from_user.id,
+                    t(message.from_user.id, "start_text"),
+                    reply_markup=get_main_kb(message.from_user.id),
+                    parse_mode="Markdown",
+                )
+            except Exception as e:
+                logger.exception("Failed to send start_text after language change: %s", e)
         else:
             await message.answer(t(message.from_user.id, "invalid_language"))
     else:
@@ -592,7 +638,17 @@ async def cmd_language_command(message: types.Message):
 # --- Commands: help, mysubs alias, history, unsubscribe, setmode, about, ping, settings
 # OLD HANDLER: moved to handlers/basic.py
 async def cmd_help_old(message: types.Message):
-    await message.answer(t(message.from_user.id, "help_text"))
+    user_id = message.from_user.id
+    args = message.text.split()
+
+    if len(args) > 1 and args[1].lower() == "full":
+        await message.answer(t(user_id, "help_full"))
+    else:
+        # Создаем клавиатуру с кнопкой для подробной справки
+        help_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=t(user_id, "btn_detailed_help"), callback_data="help:full")]
+        ])
+        await message.answer(t(user_id, "help_text"), reply_markup=help_keyboard)
 
 @dp.message(Command("report"))
 async def cmd_report(message: types.Message):
@@ -712,6 +768,9 @@ async def cmd_unsubscribe_old(message: types.Message):
     except Exception:
         await message.answer(t(message.from_user.id, "error_generic"))
 
+# Backwards-compatible alias for legacy API expected by tests
+cmd_unsubscribe = cmd_unsubscribe_old
+
 @dp.message(Command("setmode"))
 async def cmd_setmode(message: types.Message):
     parts = (message.text or "").split()
@@ -789,8 +848,9 @@ async def cmd_price_alert(message: types.Message):
     try:
         update_subscription_settings(sid, price_alert=target_price)
         current_price = sub[4] if len(sub) > 4 else None
-        
-        if current_price and current_price <= target_price:
+
+        # current_price may be 0.0 — check explicitly for None
+        if current_price is not None and current_price <= target_price:
             await message.answer(
                 t(user_id, "price_alert_set_success_already_below").format(
                     target=target_price,
@@ -801,8 +861,8 @@ async def cmd_price_alert(message: types.Message):
             await message.answer(
                 t(user_id, "price_alert_set_success").format(price=target_price)
             )
-    except Exception as e:
-        logger.exception("Error setting price_alert: %s", e)
+    except Exception:
+        logger.exception("Error setting price_alert")
         await message.answer(t(user_id, "price_alert_set_error"))
 
 @dp.message(Command("about"))
@@ -817,7 +877,7 @@ async def cmd_ping(message: types.Message):
 async def cmd_settings(message: types.Message):
     """Команда для настройки уведомлений"""
     try:
-        parts = message.text.split()
+        parts = (message.text or "").split()
         if len(parts) < 2:
             await message.answer(t(message.from_user.id, "settings_usage"))
             return
@@ -849,30 +909,13 @@ async def cmd_settings(message: types.Message):
                     return
                     
                 update_args = {}
-                
-                # Минимальная цена
-                if "min:" in message.text:
-                    try:
-                        min_price = float(message.text.split("min:")[1].split()[0])
-                        update_args["min_price"] = min_price
-                    except:
-                        pass
-                        
-                # Максимальная цена
-                if "max:" in message.text:
-                    try:
-                        max_price = float(message.text.split("max:")[1].split()[0])
-                        update_args["max_price"] = max_price
-                    except:
-                        pass
-                        
-                # Процент изменения
-                if "percent:" in message.text:
-                    try:
-                        notify_percent = float(message.text.split("percent:")[1].split()[0])
-                        update_args["notify_percent"] = notify_percent
-                    except:
-                        pass
+                kv = _parse_kv_floats(message.text or "")
+                if 'min' in kv:
+                    update_args['min_price'] = kv['min']
+                if 'max' in kv:
+                    update_args['max_price'] = kv['max']
+                if 'percent' in kv:
+                    update_args['notify_percent'] = kv['percent']
                 
                 if update_args:
                     update_subscription_settings(sub_id, **update_args)
@@ -1247,41 +1290,95 @@ async def cmd_history_plot(message: types.Message):
 # /compare <ID> - сравнение цен на похожие товары
 @dp.message(Command("compare"))
 async def cmd_compare(message: types.Message):
-    """Compare prices of similar products"""
+    """Unified compare command:
+    - /compare <subscription_id>
+    - /compare <url1> <url2>
+    """
+    user_id = message.from_user.id
+    add_user_if_not_exists(user_id)
+    args = (message.text or "").split()
+
     try:
-        from scraper import get_similar_products_comparison
+        # Mode 1: compare by existing subscription id
+        if len(args) == 2 and args[1].isdigit():
+            from scraper import get_similar_products_comparison
 
-        args = message.text.split()
-        if len(args) < 2 or not args[1].isdigit():
-            await message.answer(t(message.from_user.id, "cmd_compare_usage"))
+            sub_id = int(args[1])
+            sub = get_subscription(sub_id)
+
+            if not sub:
+                await message.answer(t(user_id, "no_subs_found_id"))
+                return
+
+            if sub[1] != user_id:
+                await message.answer(t(user_id, "error_not_your_sub"))
+                return
+
+            await message.answer(t(user_id, "compare_loading"))
+            comparison = await get_similar_products_comparison(user_id, sub_id)
+            if comparison:
+                await message.answer(comparison, parse_mode="Markdown")
+            else:
+                await message.answer(t(user_id, "compare_no_similar"))
             return
 
-        sub_id = int(args[1])
-        sub = get_subscription(sub_id)
-
-        if not sub:
-            await message.answer(t(message.from_user.id, "no_subs_found_id"))
+        # Mode 2: compare two direct product URLs
+        if len(args) >= 3:
+            await _compare_products_by_urls(message, args[1], args[2])
             return
 
-        # Проверяем владельца
-        if sub[1] != message.from_user.id:
-            await message.answer(t(message.from_user.id, "error_not_your_sub"))
-            return
-
-        # Отправляем сообщение о загрузке
-        await message.answer(t(message.from_user.id, "compare_loading"))
-
-        # Получаем сравнение
-        comparison = await get_similar_products_comparison(message.from_user.id, sub_id)
-
-        if comparison:
-            await message.answer(comparison, parse_mode="Markdown")
-        else:
-            await message.answer(t(message.from_user.id, "compare_no_similar"))
-
+        await message.answer(
+            f"📊 <b>{t(user_id, 'cmd_compare_usage')}</b>\n\n"
+            "Примеры:\n"
+            "<code>/compare 123</code>\n"
+            "<code>/compare https://trendyol.com/product1 https://trendyol.com/product2</code>",
+            parse_mode="HTML"
+        )
     except Exception as e:
         logger.exception("compare command error: %s", e)
-        await message.answer(t(message.from_user.id, "error_generic"))
+        await message.answer(t(user_id, "error_generic"))
+
+
+async def _compare_products_by_urls(message: types.Message, url1: str, url2: str) -> None:
+    """Compare prices for two direct product URLs."""
+    user_id = message.from_user.id
+
+    if not (is_trendyol_product_url(url1) and is_trendyol_product_url(url2)):
+        await message.answer(t(user_id, "not_product_url"))
+        return
+
+    await message.answer(t(user_id, "compare_loading"))
+
+    try:
+        # Fetch in parallel to keep the command responsive.
+        (price1, title1, _), (price2, title2, _) = await asyncio.gather(
+            get_product_info_async(url1),
+            get_product_info_async(url2),
+        )
+
+        if price1 is None or price2 is None:
+            await message.answer(t(user_id, "compare_error_no_price"))
+            return
+
+        comparison_text = f"""
+📊 <b>СРАВНЕНИЕ ТОВАРОВ</b>
+
+🏷️ <b>Товар 1:</b>
+{title1 or url1}
+💰 Цена: {price1:.2f} TL
+
+🏷️ <b>Товар 2:</b>
+{title2 or url2}
+💰 Цена: {price2:.2f} TL
+
+📈 <b>Разница:</b> {abs(price1 - price2):.2f} TL ({abs(price1 - price2) / max(price1, price2) * 100:.1f}%)
+
+{'🟢 Товар 1 дешевле' if price1 < price2 else '🟢 Товар 2 дешевле' if price2 < price1 else '⚪ Цены равны'}
+"""
+        await message.answer(comparison_text, parse_mode="HTML")
+    except Exception as e:
+        logger.exception("Error in URL compare command: %s", e)
+        await message.answer(t(user_id, "error_generic"))
 
 
 # --- callback handler (languages, modes, unsubscribe, history)
@@ -1289,15 +1386,30 @@ async def cmd_compare(message: types.Message):
 async def callback_handler_old(cq: CallbackQuery):
     data = cq.data or ""
     user_id = cq.from_user.id
+    logger.info(f"Legacy callback received: data='{data}', user={user_id}")
 
     try:
+        # --- Подробная справка ---
+        if data == "help:full":
+            await cq.answer()
+            await cq.message.edit_text(t(user_id, "help_full"))
+            return
+
         # --- Смена языка ---
         if data.startswith("lang:"):
             await cq.answer()
             lang = data.split(":", 1)[1]
             set_user_language(user_id, lang)
+            # Обновляем кеш локализации новым языком
+            from localization import update_language_cache
+            update_language_cache(user_id, lang)
             try:
-                await bot.send_message(user_id, t(user_id, "start_text"), reply_markup=get_main_kb(user_id))
+                await bot.send_message(
+                    user_id,
+                    t(user_id, "start_text"),
+                    reply_markup=get_main_kb(user_id),
+                    parse_mode="Markdown",
+                )
                 await cq.message.edit_text(t(user_id, "lang_changed"))
             except aiogram.exceptions.TelegramBadRequest as e:
                 logger.warning("Bad request updating language for %s: %s", user_id, e)
@@ -1632,7 +1744,7 @@ async def callback_handler_old(cq: CallbackQuery):
 
         # --- Admin user details ---
         if data.startswith("user_details:"):
-            if user_id not in ADMIN_IDS:
+            if not is_admin(user_id):
                 await cq.answer(t(user_id, "admin_only"), show_alert=True)
                 return
 
@@ -1651,7 +1763,7 @@ async def callback_handler_old(cq: CallbackQuery):
 
         # --- Admin users refresh ---
         if data == "admin_users_refresh":
-            if user_id not in ADMIN_IDS:
+            if not is_admin(user_id):
                 await cq.answer(t(user_id, "admin_only"), show_alert=True)
                 return
 
@@ -1662,6 +1774,371 @@ async def callback_handler_old(cq: CallbackQuery):
             except Exception as e:
                 logger.exception("admin_users_refresh callback error: %s", e)
                 await cq.answer(t(user_id, "error_generic"), show_alert=True)
+            return
+
+        # --- Admin main menu ---
+        if data == "admin_main_menu":
+            if not is_admin(user_id):
+                await cq.answer(t(user_id, "admin_only"), show_alert=True)
+                return
+
+            await cq.answer()
+            try:
+                await admin_main_menu(cq.message)
+            except Exception as e:
+                logger.exception("admin_main_menu callback error: %s", e)
+                await cq.answer(t(user_id, "error_generic"), show_alert=True)
+            return
+
+        # --- Admin stats ---
+        if data == "admin_stats" or data == "admin_stats_refresh":
+            if not is_admin(user_id):
+                await cq.answer(t(user_id, "admin_only"), show_alert=True)
+                return
+
+            await cq.answer(t(user_id, "loading"))
+            try:
+                await admin_stats(cq.message)
+            except Exception as e:
+                logger.exception("admin_stats callback error: %s", e)
+                await cq.answer(t(user_id, "error_generic"), show_alert=True)
+            return
+
+        # --- Admin users ---
+        if data == "admin_users":
+            if not is_admin(user_id):
+                await cq.answer(t(user_id, "admin_only"), show_alert=True)
+                return
+
+            await cq.answer(t(user_id, "loading"))
+            try:
+                await admin_users_list_interactive(cq.message)
+            except Exception as e:
+                logger.exception("admin_users callback error: %s", e)
+                await cq.answer(t(user_id, "error_generic"), show_alert=True)
+            return
+
+        # --- Admin check blocked ---
+        if data == "admin_check_blocked":
+            if not is_admin(user_id):
+                await cq.answer(t(user_id, "admin_only"), show_alert=True)
+                return
+
+            await cq.answer(t(user_id, "loading"))
+            try:
+                await admin_check_blocked(cq.message)
+            except Exception as e:
+                logger.exception("admin_check_blocked callback error: %s", e)
+                await cq.answer(t(user_id, "error_generic"), show_alert=True)
+            return
+
+        # --- Admin recommend ---
+        if data == "admin_recommend":
+            if not is_admin(user_id):
+                await cq.answer(t(user_id, "admin_only"), show_alert=True)
+                return
+
+            await cq.answer()
+            try:
+                await admin_recommend(cq.message, [])
+            except Exception as e:
+                logger.exception("admin_recommend callback error: %s", e)
+                await cq.answer(t(user_id, "error_generic"), show_alert=True)
+            return
+
+        # --- Admin recommend actions ---
+        if data.startswith("admin_recommend_"):
+            if not is_admin(user_id):
+                await cq.answer(t(user_id, "admin_only"), show_alert=True)
+                return
+
+            await cq.answer()
+            try:
+                action = data.replace("admin_recommend_", "")
+                if action == "list":
+                    await _admin_recommend_list(cq.message)
+                elif action == "add":
+                    # Показываем форму добавления
+                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="📚 Справка по формату", callback_data="admin_recommend_help")]
+                    ])
+                    await cq.message.edit_text(
+                        "➕ <b>Добавление товара</b>\n\n"
+                        "Используйте команду:\n"
+                        "<code>/admin recommend add \"Название\" \"https://ссылка\"</code>\n\n"
+                        "Пример:\n"
+                        "<code>/admin recommend add \"iPhone 15 Pro\" \"https://trendyol.com/iphone-p-123\"</code>",
+                        reply_markup=keyboard,
+                        parse_mode="HTML"
+                    )
+                elif action == "remove":
+                    # Показываем список для удаления
+                    await cq.message.edit_text(
+                        "🗑️ <b>Удаление товара</b>\n\n"
+                        "Используйте команду:\n"
+                        "<code>/admin recommend remove ID</code>\n\n"
+                        "Сначала посмотрите список товаров:",
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(text="📋 Посмотреть список", callback_data="admin_recommend_list")]
+                        ]),
+                        parse_mode="HTML"
+                    )
+                elif action == "priority":
+                    await cq.message.edit_text(
+                        "⭐ <b>Изменение приоритета</b>\n\n"
+                        "Используйте команду:\n"
+                        "<code>/admin recommend priority ID приоритет</code>\n\n"
+                        "Пример: <code>/admin recommend priority 5 10</code>",
+                        parse_mode="HTML"
+                    )
+                elif action == "text":
+                    lang = get_user_language(user_id)
+                    current = get_bot_text("recommend_text", lang) or ""
+                    preview = html.escape(current) if current else "—"
+                    await cq.message.edit_text(
+                        "✏️ <b>Текст рекомендаций</b>\n\n"
+                        "Текущий текст:\n"
+                        f"<code>{preview}</code>\n\n"
+                        "Установить:\n"
+                        "<code>/admin recommend text Ваш текст</code>\n\n"
+                        "Очистить:\n"
+                        "<code>/admin recommend text clear</code>\n\n"
+                        "Поддерживается HTML: <b>, <i>, <code>, <a href=\"...\">...</a>",
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_recommend")]
+                        ]),
+                        parse_mode="HTML",
+                        disable_web_page_preview=True,
+                    )
+                elif action == "help":
+                    await cq.message.edit_text(
+                        "📚 <b>Справка по управлению товарами</b>\n\n"
+                        "<b>Добавление:</b>\n"
+                        "<code>/admin recommend add \"Название\" \"URL\" [цена] [категория] [бренд]</code>\n\n"
+                        "<b>Удаление:</b>\n"
+                        "<code>/admin recommend remove ID</code>\n\n"
+                        "<b>Приоритет:</b>\n"
+                        "<code>/admin recommend priority ID число</code>\n\n"
+                        "<b>Текст:</b>\n"
+                        "<code>/admin recommend text ...</code>\n\n"
+                        "<b>Список:</b>\n"
+                        "<code>/admin recommend list</code>",
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_recommend")]
+                        ]),
+                        parse_mode="HTML"
+                    )
+            except Exception as e:
+                logger.exception(f"admin_recommend_{action} callback error: %s", e)
+                await cq.answer(t(user_id, "error_generic"), show_alert=True)
+            return
+
+        # --- Admin product delete (quick action) ---
+        if data.startswith("admin_product_delete_"):
+            if not is_admin(user_id):
+                await cq.answer(t(user_id, "admin_only"), show_alert=True)
+                return
+
+            await cq.answer()
+            try:
+                product_id = int(data.replace("admin_product_delete_", ""))
+                from database import remove_recommended_product
+
+                if remove_recommended_product(product_id):
+                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="📋 Список товаров", callback_data="admin_recommend_list")],
+                        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_recommend")]
+                    ])
+                    await cq.message.edit_text(
+                        f"🗑️ <b>Товар #{product_id} удалён</b>",
+                        reply_markup=keyboard,
+                        parse_mode="HTML"
+                    )
+                else:
+                    await cq.answer("Товар не найден", show_alert=True)
+            except Exception as e:
+                logger.exception("admin_product_delete callback error: %s", e)
+                await cq.answer(t(user_id, "error_generic"), show_alert=True)
+            return
+
+        # --- Admin product priority (quick action) ---
+        if data.startswith("admin_product_priority_"):
+            if not is_admin(user_id):
+                await cq.answer(t(user_id, "admin_only"), show_alert=True)
+                return
+
+            await cq.answer()
+            try:
+                product_id = int(data.replace("admin_product_priority_", ""))
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="📋 Список товаров", callback_data="admin_recommend_list")],
+                    [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_recommend")]
+                ])
+                await cq.message.edit_text(
+                    "⭐ <b>Изменение приоритета</b>\n\n"
+                    "Используйте команду:\n"
+                    f"<code>/admin recommend priority {product_id} ПРИОРИТЕТ</code>\n\n"
+                    "Пример:\n"
+                    f"<code>/admin recommend priority {product_id} 10</code>",
+                    reply_markup=keyboard,
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.exception("admin_product_priority callback error: %s", e)
+                await cq.answer(t(user_id, "error_generic"), show_alert=True)
+            return
+
+        # --- Admin product details ---
+        if data.startswith("admin_product_"):
+            if not is_admin(user_id):
+                await cq.answer(t(user_id, "admin_only"), show_alert=True)
+                return
+
+            await cq.answer()
+            try:
+                product_id = int(data.replace("admin_product_", ""))
+                from database import get_recommended_products
+
+                products = get_recommended_products()
+                product = next((p for p in products if p['id'] == product_id), None)
+
+                if not product:
+                    await cq.answer("Товар не найден", show_alert=True)
+                    return
+
+                # Показываем детальную информацию о товаре
+                text = f"📦 <b>{product['title']}</b>\n\n"
+                text += f"🆔 ID: <code>{product['id']}</code>\n"
+                text += f"💰 Цена: {product['price'] or 'Не указана'}\n"
+                text += f"🎯 Категория: {product['category'] or 'Не указана'}\n"
+                text += f"🏷️ Бренд: {product['brand'] or 'Не указан'}\n"
+                text += f"⭐ Приоритет: {product.get('priority', 0)}\n"
+                text += f"🔗 Ссылка: {product['url'][:50]}...\n\n"
+                text += f"📝 {product.get('reason', 'Рекомендуемый товар')}"
+
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [
+                        InlineKeyboardButton(text="🗑️ Удалить", callback_data=f"admin_product_delete_{product_id}"),
+                        InlineKeyboardButton(text="⭐ Изменить приоритет", callback_data=f"admin_product_priority_{product_id}")
+                    ],
+                    [
+                        InlineKeyboardButton(text="📋 К списку", callback_data="admin_recommend_list"),
+                        InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_recommend")
+                    ]
+                ])
+
+                await cq.message.edit_text(
+                    text,
+                    reply_markup=keyboard,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                )
+
+            except Exception as e:
+                logger.exception(f"admin_product_{product_id} callback error: %s", e)
+                await cq.answer(t(user_id, "error_generic"), show_alert=True)
+            return
+
+        # --- Admin broadcast menu ---
+        if data == "admin_broadcast_menu":
+            if not is_admin(user_id):
+                await cq.answer(t(user_id, "admin_only"), show_alert=True)
+                return
+
+            await cq.answer()
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📢 Начать рассылку", callback_data="admin_broadcast_start")],
+                [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_main_menu")]
+            ])
+
+            await cq.message.edit_text(
+                "📢 <b>Рассылка сообщений</b>\n\n"
+                "Используйте команду:\n"
+                "<code>/admin broadcast &lt;сообщение&gt;</code>\n\n"
+                "Пример:\n"
+                "<code>/admin broadcast Привет! У нас новинка в разделе рекомендаций!</code>\n\n"
+                "<b>⚠️ Внимание:</b> Сообщение будет отправлено всем пользователям бота.",
+                reply_markup=keyboard,
+                parse_mode="HTML"
+            )
+            return
+
+        # --- Admin broadcast start (button) ---
+        if data == "admin_broadcast_start":
+            if not is_admin(user_id):
+                await cq.answer(t(user_id, "admin_only"), show_alert=True)
+                return
+
+            await cq.answer()
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_main_menu")]
+            ])
+            await cq.message.edit_text(
+                "📢 <b>Рассылка сообщений</b>\n\n"
+                "Отправьте команду:\n"
+                "<code>/admin broadcast &lt;сообщение&gt;</code>\n\n"
+                "Пример:\n"
+                "<code>/admin broadcast Привет! У нас новинка в разделе рекомендаций!</code>\n\n"
+                "<b>⚠️ Внимание:</b> сообщение получат все пользователи бота.",
+                reply_markup=keyboard,
+                parse_mode="HTML"
+            )
+            return
+
+        # --- Admin cleanup ---
+        if data == "admin_cleanup":
+            if not is_admin(user_id):
+                await cq.answer(t(user_id, "admin_only"), show_alert=True)
+                return
+
+            await cq.answer()
+            try:
+                await admin_cleanup(cq.message)
+            except Exception as e:
+                logger.exception("admin_cleanup callback error: %s", e)
+                await cq.answer(t(user_id, "error_generic"), show_alert=True)
+            return
+
+        # --- Admin backup ---
+        if data == "admin_backup":
+            if not is_admin(user_id):
+                await cq.answer(t(user_id, "admin_only"), show_alert=True)
+                return
+
+            await cq.answer()
+            try:
+                await admin_backup(cq.message)
+            except Exception as e:
+                logger.exception("admin_backup callback error: %s", e)
+                await cq.answer(t(user_id, "error_generic"), show_alert=True)
+            return
+
+        # --- Admin help ---
+        if data == "admin_help":
+            if not is_admin(user_id):
+                await cq.answer(t(user_id, "admin_only"), show_alert=True)
+                return
+
+            await cq.answer()
+            help_text = "📚 <b>Справка по админ функциям</b>\n\n"
+            help_text += "🎯 <b>Рекомендации:</b>\n"
+            help_text += "• Добавляйте товары для рекламы\n"
+            help_text += "• Управляйте приоритетами показа\n"
+            help_text += "• Отслеживайте эффективность\n\n"
+            help_text += "👥 <b>Пользователи:</b>\n"
+            help_text += "• Просматривайте активность\n"
+            help_text += "• Проверяйте блокировки\n"
+            help_text += "• Управляйте доступом\n\n"
+            help_text += "📊 <b>Статистика:</b>\n"
+            help_text += "• Мониторьте использование\n"
+            help_text += "• Отслеживайте рост\n"
+            help_text += "• Анализируйте тренды"
+
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_main_menu")]
+            ])
+
+            await cq.message.edit_text(help_text, reply_markup=keyboard, parse_mode="HTML")
             return
 
         await cq.answer()
@@ -1700,15 +2177,25 @@ async def admin_user_details_callback_old(cq: CallbackQuery):
         await cq.answer(t(cq.from_user.id, "error_generic"), show_alert=True)
 
 # --- Subscribe flow
-@dp.message(lambda m: m.text and (
-    t(m.from_user.id, "btn_subscribe") == m.text
-    or (
-        ("подпис" in m.text.lower())
-        and ("мои" not in m.text.lower())
-        and ("мои подпис" not in m.text.lower())
-        and (m.text != t(m.from_user.id, "btn_subs"))
+def _filter_subscribe_button(message: types.Message) -> bool:
+    """Filter for subscribe button and related keywords"""
+    if not message.text or not message.from_user:
+        return False
+    user_id = message.from_user.id
+    subscribe_btn = t(user_id, "btn_subscribe")
+    subs_btn = t(user_id, "btn_subs")
+    text_lower = message.text.lower()
+    return (
+        subscribe_btn == message.text
+        or (
+            ("подпис" in text_lower)
+            and ("мои" not in text_lower)
+            and ("мои подпис" not in text_lower)
+            and (message.text != subs_btn)
+        )
     )
-))
+
+@dp.message(_filter_subscribe_button)
 async def cmd_subscribe_ui(message: types.Message):
     await message.answer(t(message.from_user.id, "send_link_prompt"))
 
@@ -1716,6 +2203,12 @@ async def cmd_subscribe_ui(message: types.Message):
 async def handle_url_old(message: types.Message):
     try:
         raw = (message.text or "").strip()
+        
+        # CRITICAL FIX 3: URL validation
+        if not raw or len(raw) < 10:
+            await message.answer(t(message.from_user.id, "invalid_url"))
+            return
+        
         url = await resolve_short_url(raw)
         url = normalize_url(url)
         url_lower = url.lower()
@@ -1800,14 +2293,18 @@ async def handle_url_old(message: types.Message):
     except Exception as e:
         logger.exception("Error in handle_url for user %s: %s", message.from_user.id, e)
         await message.answer(t(message.from_user.id, "error_generic"))
-        logger.exception("Error in handle_url for user %s: %s", message.from_user.id, e)
-        await message.answer(t(message.from_user.id, "error_generic"))
 
 # Legacy alias for compatibility with older tests and code that expects `handle_url`
 handle_url = handle_url_old
 
 # --- Handle alert price input
-@dp.message(lambda m: m.from_user and m.from_user.id in alert_edit_state and m.text and not m.text.startswith("/"))
+def _filter_alert_price(message: types.Message) -> bool:
+    """Filter for alert price input"""
+    if not message.from_user or not message.text:
+        return False
+    return message.from_user.id in alert_edit_state and not message.text.startswith("/")
+
+@dp.message(_filter_alert_price)
 async def handle_alert_price(message: types.Message):
     """Handle user input for setting alert price"""
     user_id = message.from_user.id
@@ -1853,7 +2350,13 @@ async def handle_alert_price(message: types.Message):
             del alert_edit_state[user_id]
 
 # --- Handle report text input
-@dp.message(lambda m: m.from_user and m.from_user.id in report_state and m.text and not m.text.startswith("/"))
+def _filter_report_text(message: types.Message) -> bool:
+    """Filter for report text input"""
+    if not message.from_user or not message.text:
+        return False
+    return message.from_user.id in report_state and not message.text.startswith("/")
+
+@dp.message(_filter_report_text)
 async def handle_report_text(message: types.Message):
     """Handle user input for report text"""
     user_id = message.from_user.id
@@ -1871,7 +2374,18 @@ async def handle_report_text(message: types.Message):
     del report_state[user_id]
 
 # --- List subs
-@dp.message(lambda m: m.text and (t(m.from_user.id, "btn_subs") == m.text or "мои подпис" in m.text.lower()))
+async def _filter_mysubs(message: types.Message) -> bool:
+    """Filter for /mysubs button and similar"""
+    if not message.text:
+        return False
+    try:
+        user_id = message.from_user.id if message.from_user else 0
+        return (t(user_id, "btn_subs") == message.text or "мои подпис" in message.text.lower())
+    except Exception as e:
+        logger.exception("_filter_mysubs error: %s", e)
+        return False
+
+@dp.message(_filter_mysubs)
 async def cmd_mysubs(message: types.Message):
     user_id = message.from_user.id
     subs = get_user_subscriptions(user_id)
@@ -1952,17 +2466,47 @@ async def cmd_mysubs(message: types.Message):
         await message.answer(full_text_plain, reply_markup=keyboard)
 
 # --- Trending
-@dp.message(lambda m: m.text == t(m.from_user.id, "btn_recommend"))
+async def _filter_recommend(message: types.Message) -> bool:
+    """Filter for recommend button"""
+    if not message.text:
+        return False
+    try:
+        user_id = message.from_user.id if message.from_user else 0
+        return message.text == t(user_id, "btn_recommend")
+    except Exception as e:
+        logger.exception("_filter_recommend error: %s", e)
+        return False
+
+@dp.message(_filter_recommend)
 async def cmd_recommend_button(message: types.Message):
     """Обработчик кнопки рекомендаций в меню"""
     await cmd_recommend(message)
 
-@dp.message(lambda m: m.text and (t(m.from_user.id, "btn_trending") == m.text or "тренд" in m.text.lower() or "трен" in m.text.lower()))
+async def _filter_trending(message: types.Message) -> bool:
+    """Filter for trending button"""
+    if not message.text:
+        return False
+    try:
+        user_id = message.from_user.id if message.from_user else 0
+        return (t(user_id, "btn_trending") == message.text or "тренд" in message.text.lower() or "трен" in message.text.lower())
+    except Exception as e:
+        logger.exception("_filter_trending error: %s", e)
+        return False
+
+@dp.message(_filter_trending)
 async def cmd_trending(message: types.Message):
     await message.answer(t(message.from_user.id, "trending_header"), reply_markup=trending_menu_kb(message.from_user.id))
 
 # --- Trending search text handler
-@dp.message(lambda m: m.text and not m.text.startswith("/") and m.from_user and m.from_user.id in TREND_SEARCH_AWAIT)
+async def _filter_trending_search(message: types.Message) -> bool:
+    """Filter for trending search text input"""
+    if not message.text or message.text.startswith("/"):
+        return False
+    if not message.from_user or message.from_user.id not in TREND_SEARCH_AWAIT:
+        return False
+    return True
+
+@dp.message(_filter_trending_search)
 async def trending_search_text(message: types.Message):
     user_id = message.from_user.id
     q = (message.text or "").strip()
@@ -1979,8 +2523,17 @@ async def trending_search_text(message: types.Message):
     except Exception as e:
         logger.exception("trending search error: %s", e)
         await message.answer(t(user_id, "trending_no_results"))
+
+# --- Unsubscribe filter
+def _filter_unsubscribe(message: types.Message) -> bool:
+    if not message.text or not message.from_user:
+        return False
+    user_id = message.from_user.id
+    unsubscribe_btn = t(user_id, "btn_unsubscribe")
+    return unsubscribe_btn == message.text or "отпис" in message.text.lower()
+
 # --- Unsubscribe all
-@dp.message(lambda m: m.text and (t(m.from_user.id, "btn_unsubscribe") == m.text or "отпис" in m.text.lower()))
+@dp.message(_filter_unsubscribe)
 async def cmd_unsubscribe_all(message: types.Message):
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="✅", callback_data="confirm_unsub_all:yes"),
@@ -1991,34 +2544,46 @@ async def cmd_unsubscribe_all(message: types.Message):
 # --- Scheduler job
 scheduler = AsyncIOScheduler()
 
+
 async def send_grouped_notifications(grouped_notifications: Dict[int, List[Tuple[str, Optional[str]]]]) -> None:
     """
-    Отправляет групповые уведомления пользователям.
+    Отправляет групповые уведомления пользователям с защитой от race conditions.
     grouped_notifications: user_id -> [(notification_text, image_url), ...]
     """
-    for user_id, notifications in grouped_notifications.items():
-        try:
-            if len(notifications) == 1:
-                # Одно уведомление - отправляем как обычно
-                text, image = notifications[0]
-                await send_notification_safe(user_id, text, image)
-            else:
-                # Несколько уведомлений - группируем в одно сообщение
-                grouped_text = f"🔔 <b>ОБНОВЛЕНИЯ ЦЕН</b> ({len(notifications)})\n\n"
+    # CRITICAL FIX 4: Use lock to prevent race conditions
+    async with scheduler_lock:
+        for user_id, notifications in grouped_notifications.items():
+            try:
+                if len(notifications) == 1:
+                    # Одно уведомление - отправляем как обычно
+                    text, image = notifications[0]
+                    # CRITICAL FIX 1: Use timeout and handle blocked users
+                    await send_notification_with_timeout(user_id, text, image, timeout=15.0)
+                else:
+                    # Несколько уведомлений - группируем в одно сообщение
+                    grouped_text = f"🔔 <b>ОБНОВЛЕНИЯ ЦЕН</b> ({len(notifications)})\n\n"
 
-                for i, (text, image) in enumerate(notifications[:10], 1):  # Максимум 10 уведомлений
-                    # Убираем общие части и оставляем только суть
-                    clean_text = text.replace("💰 ", "").replace("📉 ", "").replace("📈 ", "")
-                    grouped_text += f"{i}. {clean_text}\n"
+                    for i, (text, image) in enumerate(notifications[:10], 1):  # Максимум 10 уведомлений
+                        # Убираем общие части и оставляем только суть
+                        clean_text = text.replace("💰 ", "").replace("📉 ", "").replace("📈 ", "")
+                        grouped_text += f"{i}. {clean_text}\n"
 
-                if len(notifications) > 10:
-                    grouped_text += f"\n... и ещё {len(notifications) - 10} обновлений"
+                    if len(notifications) > 10:
+                        grouped_text += f"\n... и ещё {len(notifications) - 10} обновлений"
 
-                # Отправляем групповое уведомление без изображения
-                await send_notification_safe(user_id, grouped_text, image=None)
+                    # Отправляем групповое уведомление без изображения
+                    # CRITICAL FIX 1: Use timeout and handle blocked users
+                    await send_notification_with_timeout(
+                        user_id,
+                        grouped_text,
+                        image=None,
+                        timeout=15.0,
+                        parse_mode="HTML",
+                    )
 
-        except Exception as e:
-            logger.exception("Error sending grouped notifications to user %s: %s", user_id, e)
+            except Exception as e:
+                logger.exception("Error sending grouped notifications to user %s: %s", user_id, e)
+
 
 async def check_all():
     logger.info("Scheduler job: checking subscriptions")
@@ -2254,18 +2819,74 @@ async def start_scheduler_async(delay: float = 1.0):
 # --- admin functions
 def is_admin(user_id: int) -> bool:
     """Check if user is admin"""
-    return user_id in ADMIN_IDS
+    from config import ADMIN_IDS
+    result = user_id in ADMIN_IDS
+    logger.debug(f"is_admin check: user_id={user_id}, ADMIN_IDS={ADMIN_IDS}, result={result}")
+    return result
+
+def _get_request_user_id(message: types.Message) -> int:
+    """Resolve the real user id from a message (supports callback context)."""
+    if message is None:
+        return 0
+    try:
+        chat_id = getattr(getattr(message, "chat", None), "id", None)
+        if chat_id:
+            return chat_id
+    except Exception:
+        pass
+    try:
+        return getattr(getattr(message, "from_user", None), "id", 0) or 0
+    except Exception:
+        return 0
+
+async def admin_main_menu(message: types.Message):
+    """Показать главное меню администратора"""
+    user_id = _get_request_user_id(message)
+    if not is_admin(user_id):
+        await message.answer(t(user_id, "admin_access_denied"))
+        return
+
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats"),
+            InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_users")
+        ],
+        [
+            InlineKeyboardButton(text="🚫 Блокировки", callback_data="admin_check_blocked"),
+            InlineKeyboardButton(text="🎯 Рекомендации", callback_data="admin_recommend")
+        ],
+        [
+            InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast_menu"),
+            InlineKeyboardButton(text="🧹 Очистка", callback_data="admin_cleanup")
+        ],
+        [
+            InlineKeyboardButton(text="💾 Бэкап", callback_data="admin_backup"),
+            InlineKeyboardButton(text="📚 Справка", callback_data="admin_help")
+        ]
+    ])
+
+    welcome_text = "🚀 <b>Панель администратора</b>\n\n"
+    welcome_text += f"👋 Добро пожаловать, <code>{user_id}</code>!\n\n"
+    welcome_text += "Выберите действие из меню ниже или используйте текстовые команды.\n\n"
+    welcome_text += "<b>⚠️ Важно:</b> Все действия логируются для безопасности."
+
+    await message.answer(welcome_text, reply_markup=keyboard, parse_mode="HTML")
 
 async def cmd_admin(message: types.Message):
     """Admin commands handler"""
     user_id = message.from_user.id
+    logger.info(f"cmd_admin called by user_id={user_id}, message='{message.text}'")
     if not is_admin(user_id):
+        logger.warning(f"Access denied for user_id={user_id} in cmd_admin")
         await message.answer(t(user_id, "admin_access_denied"))
         return
 
     args = message.text.split()
     if len(args) < 2:
-        await message.answer(t(user_id, "admin_commands"), parse_mode="HTML")
+        # Показываем главное меню вместо простого текста
+        await admin_main_menu(message)
         return
 
     command = args[1].lower()
@@ -2285,6 +2906,10 @@ async def cmd_admin(message: types.Message):
         await admin_backup(message)
     elif command == "respond":
         await admin_respond(message)
+    elif command == "recommend":
+        await admin_recommend(message, args[2:] if len(args) > 2 else [])
+    elif command == "blocked":
+        await admin_check_blocked(message)
     else:
         await message.answer(t(user_id, "admin_unknown_command"))
 
@@ -2327,7 +2952,7 @@ async def admin_broadcast(message: types.Message, text: str):
     try:
         import sqlite3
 
-        conn = sqlite3.connect(DB)
+        conn = sqlite3.connect(DATABASE_PATH)
         cursor = conn.cursor()
 
         cursor.execute("SELECT user_id FROM users")
@@ -2394,7 +3019,7 @@ async def admin_users_list(message: types.Message):
     try:
         from database import get_connection
 
-        admin_user_id = message.from_user.id
+        admin_user_id = _get_request_user_id(message)
 
         with get_connection() as conn:
             cursor = conn.cursor()
@@ -2472,7 +3097,7 @@ async def admin_users_list_interactive(message: types.Message):
     try:
         from database import get_connection
 
-        admin_user_id = message.from_user.id
+        admin_user_id = _get_request_user_id(message)
 
         with get_connection() as conn:
             cursor = conn.cursor()
@@ -2513,37 +3138,93 @@ async def admin_users_list_interactive(message: types.Message):
         # Create inline keyboard with user buttons
         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-        users_text = f"👥 <b>{t(admin_user_id, 'admin_users_title')}</b>\n\n"
-        users_text += f"📊 <b>{t(admin_user_id, 'admin_users_count')}:</b> {len(users)}\n\n"
+        # Создаем красивый список пользователей
+        users_text = "👥 <b>Управление пользователями</b>\n\n"
+        users_text += f"📊 <b>Всего пользователей:</b> {len(users)}\n\n"
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[])
 
-        for user_data in users:
-            if len(user_data) == 4:
-                # С колонкой created_at
-                user_id, language, created_at, subs_count = user_data
-                created_str = datetime.fromtimestamp(created_at).strftime('%d.%m.%Y %H:%M')
-                user_info = f"🆔 {user_id} | 🌐 {language.upper()} | 📦 {subs_count} | 📅 {created_str}"
+        # Группируем пользователей по количеству подписок для лучшей организации
+        active_users = [u for u in users if (u[3] if len(u) == 4 else u[2]) > 0]
+        inactive_users = [u for u in users if (u[3] if len(u) == 4 else u[2]) == 0]
+
+        def _safe_user_button(user_id_raw, subs_count, inactive: bool = False):
+            try:
+                user_id_int = int(user_id_raw)
+                if user_id_int <= 0:
+                    return None
+            except Exception:
+                return None
+            if inactive:
+                text = f"👤 {user_id_int} (неактивен)"
             else:
-                # Без колонки created_at
-                user_id, language, subs_count = user_data
-                user_info = f"🆔 {user_id} | 🌐 {language.upper()} | 📦 {subs_count}"
+                text = f"👤 {user_id_int} ({subs_count} подписок)"
+                if subs_count > 5:
+                    text += " ⭐"
+            # Telegram limits button text length; truncate defensively
+            if len(text) > 64:
+                text = text[:61] + "..."
+            cb = f"user_details:{user_id_int}"
+            if len(cb) > 64:
+                return None
+            return InlineKeyboardButton(text=text, callback_data=cb)
 
-            # Add button for each user
-            button = InlineKeyboardButton(
-                text=f"👤 {user_id} ({subs_count} subs)",
-                callback_data=f"user_details:{user_id}"
-            )
-            keyboard.inline_keyboard.append([button])
+        if active_users:
+            users_text += "🟢 <b>Активные пользователи:</b>\n"
+            for user_data in active_users[:15]:  # Показываем максимум 15 активных
+                if len(user_data) == 4:
+                    user_id, language, created_at, subs_count = user_data
+                    created_str = datetime.fromtimestamp(created_at).strftime('%d.%m.%Y')
+                    users_text += f"  👤 <code>{user_id}</code> | 🌐 {language.upper()} | 📦 {subs_count} | 📅 {created_str}\n"
+                else:
+                    user_id, language, subs_count = user_data
+                    users_text += f"  👤 <code>{user_id}</code> | 🌐 {language.upper()} | 📦 {subs_count}\n"
 
-        # Add refresh button
-        refresh_button = InlineKeyboardButton(
-            text=f"🔄 {t(admin_user_id, 'admin_users_refresh')}",
-            callback_data="admin_users_refresh"
-        )
-        keyboard.inline_keyboard.append([refresh_button])
+                # Добавляем кнопку для каждого пользователя (с валидацией)
+                button = _safe_user_button(user_id, subs_count, inactive=False)
+                if button:
+                    keyboard.inline_keyboard.append([button])
 
-        await message.edit_text(users_text, reply_markup=keyboard, parse_mode="HTML")
+        if inactive_users and len(keyboard.inline_keyboard) < 10:  # Добавляем неактивных если места хватает
+            users_text += "\n🟡 <b>Неактивные пользователи:</b>\n"
+            for user_data in inactive_users[:5]:  # Максимум 5 неактивных
+                if len(user_data) == 4:
+                    user_id, language, created_at, subs_count = user_data
+                    created_str = datetime.fromtimestamp(created_at).strftime('%d.%m.%Y')
+                    users_text += f"  👤 <code>{user_id}</code> | 🌐 {language.upper()} | 📅 {created_str}\n"
+                else:
+                    user_id, language, subs_count = user_data
+                    users_text += f"  👤 <code>{user_id}</code> | 🌐 {language.upper()}\n"
+
+                button = _safe_user_button(user_id, subs_count, inactive=True)
+                if button:
+                    keyboard.inline_keyboard.append([button])
+
+        # Кнопки управления (используем и для fallback)
+        control_rows = [
+            [
+                InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_users_refresh"),
+                InlineKeyboardButton(text="🚫 Проверить блокировки", callback_data="admin_check_blocked")
+            ],
+            [
+                InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats_refresh"),
+                InlineKeyboardButton(text="🏠 Главное меню", callback_data="admin_main_menu")
+            ]
+        ]
+        keyboard.inline_keyboard.extend(control_rows)
+
+        try:
+            await message.edit_text(users_text, reply_markup=keyboard, parse_mode="HTML")
+        except Exception as e:
+            # Telegram иногда отклоняет inline-кнопки с ошибкой BUTTON_USER_INVALID.
+            # В таком случае показываем список без персональных кнопок.
+            if "BUTTON_USER_INVALID" in str(e):
+                from aiogram.types import InlineKeyboardMarkup
+                fallback_text = users_text + "\n\n💡 Для деталей: /admin users <id>"
+                fallback_kb = InlineKeyboardMarkup(inline_keyboard=control_rows)
+                await message.edit_text(fallback_text, reply_markup=fallback_kb, parse_mode="HTML")
+                return
+            raise
 
     except Exception as e:
         logger.exception("Error in admin_users_list_callback: %s", e)
@@ -2836,18 +3517,18 @@ async def admin_cleanup(message: types.Message):
     try:
         import sqlite3
 
-        conn = sqlite3.connect(DB)
+        conn = sqlite3.connect(DATABASE_PATH)
         cursor = conn.cursor()
 
         # Count before cleanup
-        cursor.execute("SELECT COUNT(*) FROM price_history WHERE timestamp < ?", (int(time.time()) - 30*24*3600,))
+        cursor.execute("SELECT COUNT(*) FROM price_history WHERE ts < ?", (int(time.time()) - 30*24*3600,))
         old_price_points = cursor.fetchone()[0]
 
         cursor.execute("SELECT COUNT(*) FROM users WHERE user_id NOT IN (SELECT DISTINCT user_id FROM subscriptions)")
         inactive_users = cursor.fetchone()[0]
 
         # Cleanup old price history (older than 30 days)
-        cursor.execute("DELETE FROM price_history WHERE timestamp < ?", (int(time.time()) - 30*24*3600,))
+        cursor.execute("DELETE FROM price_history WHERE ts < ?", (int(time.time()) - 30*24*3600,))
 
         # Cleanup users without subscriptions (older than 90 days)
         cursor.execute("""
@@ -2885,7 +3566,7 @@ async def admin_backup(message: types.Message):
         Path("backups").mkdir(exist_ok=True)
 
         # Copy database
-        shutil.copy2(DB, backup_path)
+        shutil.copy2(DATABASE_PATH, backup_path)
 
         # Clean old backups (keep last 7)
         backup_files = list(Path("backups").glob("db_backup_*.db"))
@@ -3045,6 +3726,245 @@ async def admin_respond(message: types.Message):
         logger.exception("Error in admin_respond: %s", e)
         await message.answer(f"❌ Ошибка: {e}")
 
+async def admin_recommend(message: types.Message, args: List[str]):
+    """Управление рекомендуемыми продуктами для рекламы"""
+    user_id = message.from_user.id
+
+    if not args:
+        # Создаем красивую inline клавиатуру вместо текста
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📋 Список товаров", callback_data="admin_recommend_list"),
+                InlineKeyboardButton(text="➕ Добавить товар", callback_data="admin_recommend_add"),
+            ],
+            [
+                InlineKeyboardButton(text="🗑️ Удалить товар", callback_data="admin_recommend_remove"),
+                InlineKeyboardButton(text="⭐ Изменить приоритет", callback_data="admin_recommend_priority"),
+            ],
+            [
+                InlineKeyboardButton(text="✏️ Текст", callback_data="admin_recommend_text"),
+                InlineKeyboardButton(text="📚 Справка", callback_data="admin_recommend_help"),
+            ]
+        ])
+
+        await message.answer(
+            "🎯 <b>Управление рекомендуемыми продуктами</b>\n\n"
+            "Выберите действие или используйте команды:\n"
+            "<code>/admin recommend list</code> - список товаров\n"
+            "<code>/admin recommend add \"Название\" \"URL\"</code> - добавить\n"
+            "<code>/admin recommend remove ID</code> - удалить\n"
+            "<code>/admin recommend priority ID приоритет</code> - приоритет\n"
+            "<code>/admin recommend text ТЕКСТ</code> - текст кнопки рекомендаций",
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
+        return
+
+    subcommand = args[0].lower()
+
+    try:
+        from database import (
+            get_recommended_products,
+            add_recommended_product,
+            remove_recommended_product,
+            update_recommended_product_priority
+        )
+
+        if subcommand == "list":
+            await _admin_recommend_list(message)
+
+        elif subcommand == "add":
+            if len(args) < 3:
+                await message.answer(
+                    "❌ <b>Неверный формат</b>\n\n"
+                    "Использование:\n"
+                    "<code>/admin recommend add \"Название товара\" \"https://ссылка\" [цена] [категория] [бренд]</code>\n\n"
+                    "Пример:\n"
+                    "<code>/admin recommend add \"iPhone 15 Pro\" \"https://trendyol.com/iphone-p-123\" \"₺45,000\" smartphones apple</code>",
+                    parse_mode="HTML"
+                )
+                return
+
+            title = args[1]
+            url = args[2]
+            price = args[3] if len(args) > 3 else ""
+            category = args[4] if len(args) > 4 else ""
+            brand = args[5] if len(args) > 5 else ""
+            reason = " ".join(args[6:]) if len(args) > 6 else "Рекомендуемый товар"
+
+            if add_recommended_product(title, url, price, category, brand, reason):
+                # Показываем результат с кнопкой для просмотра списка
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="📋 Посмотреть список", callback_data="admin_recommend_list")]
+                ])
+                await message.answer(
+                    f"✅ <b>Продукт успешно добавлен!</b>\n\n"
+                    f"📦 <b>{title}</b>\n"
+                    f"💰 {price or 'Цена не указана'}\n"
+                    f"🎯 {category or 'Категория не указана'}\n"
+                    f"🏷️ {brand or 'Бренд не указан'}",
+                    reply_markup=keyboard,
+                    parse_mode="HTML"
+                )
+            else:
+                await message.answer("❌ Ошибка при добавлении продукта")
+
+        elif subcommand == "remove":
+            if len(args) < 2:
+                await message.answer("❌ Укажите ID продукта для удаления")
+                return
+
+            try:
+                product_id = int(args[1])
+                if remove_recommended_product(product_id):
+                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="📋 Посмотреть список", callback_data="admin_recommend_list")]
+                    ])
+                    await message.answer(
+                        f"✅ Продукт #{product_id} успешно удален",
+                        reply_markup=keyboard
+                    )
+                else:
+                    await message.answer(f"❌ Продукт #{product_id} не найден")
+            except ValueError:
+                await message.answer("❌ ID должен быть числом")
+
+        elif subcommand == "priority":
+            if len(args) < 3:
+                await message.answer(
+                    "❌ <b>Неверный формат</b>\n\n"
+                    "Использование: <code>/admin recommend priority ID приоритет</code>\n"
+                    "Пример: <code>/admin recommend priority 5 10</code>",
+                    parse_mode="HTML"
+                )
+                return
+
+            try:
+                product_id = int(args[1])
+                priority = int(args[2])
+
+                if update_recommended_product_priority(product_id, priority):
+                    await message.answer(
+                        f"✅ Приоритет продукта #{product_id} изменен на {priority}\n\n"
+                        f"{'⭐' * min(priority, 5)} (приоритет {priority})"
+                    )
+                else:
+                    await message.answer(f"❌ Продукт #{product_id} не найден")
+            except ValueError:
+                await message.answer("❌ ID и приоритет должны быть числами")
+
+        elif subcommand == "text":
+            lang = get_user_language(user_id)
+            raw_text = message.text or ""
+            prefix = "/admin recommend text"
+            new_text = ""
+            if raw_text.lower().startswith(prefix):
+                new_text = raw_text[len(prefix):].strip()
+            else:
+                new_text = " ".join(args[1:]).strip()
+
+            if not new_text:
+                current = get_bot_text("recommend_text", lang)
+                if current:
+                    preview = html.escape(current)
+                    await message.answer(
+                        "✏️ <b>Текст рекомендаций</b>\n\n"
+                        "Текущий текст:\n"
+                        f"<code>{preview}</code>\n\n"
+                        "Обновить:\n"
+                        "<code>/admin recommend text ...</code>\n\n"
+                        "Очистить:\n"
+                        "<code>/admin recommend text clear</code>\n\n"
+                        "Поддерживается HTML: <b>, <i>, <code>, <a href=\"...\">...</a>",
+                        parse_mode="HTML",
+                        disable_web_page_preview=True,
+                    )
+                else:
+                    await message.answer(
+                        "✏️ <b>Текст рекомендаций</b>\n\n"
+                        "Текст не задан.\n\n"
+                        "Установить:\n"
+                        "<code>/admin recommend text ...</code>\n\n"
+                        "Очистить:\n"
+                        "<code>/admin recommend text clear</code>\n\n"
+                        "Поддерживается HTML: <b>, <i>, <code>, <a href=\"...\">...</a>",
+                        parse_mode="HTML",
+                        disable_web_page_preview=True,
+                    )
+                return
+
+            if new_text.lower() in ("clear", "reset", "default", "off"):
+                set_bot_text("recommend_text", "", lang)
+                await message.answer("✅ Текст рекомендаций очищен. Будет использоваться стандартный.")
+                return
+
+            set_bot_text("recommend_text", new_text, lang)
+            await message.answer("✅ Текст рекомендаций обновлён.")
+
+        else:
+            await message.answer("❌ Неизвестная подкоманда. Используйте /admin recommend для меню")
+
+    except Exception as e:
+        logger.exception(f"Error in admin_recommend: {e}")
+        await message.answer(f"❌ Ошибка: {e}")
+
+async def _admin_recommend_list(message: types.Message):
+    """Показать список рекомендуемых продуктов с красивым форматированием"""
+    from database import get_recommended_products
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+    products = get_recommended_products()
+    if not products:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Добавить первый товар", callback_data="admin_recommend_add")],
+            [InlineKeyboardButton(text="✏️ Текст", callback_data="admin_recommend_text")]
+        ])
+        await message.answer(
+            "📝 <b>Рекомендуемых продуктов пока нет</b>\n\n"
+            "Добавьте товары для рекламы в разделе рекомендаций",
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
+        return
+
+    response = f"📋 <b>Рекомендуемые продукты ({len(products)})</b>\n\n"
+
+    keyboard_buttons = []
+
+    for i, product in enumerate(products[:10], 1):  # Максимум 10 товаров в сообщении
+        priority_stars = "⭐" * min(product.get('priority', 0), 3)
+        response += f"{i}. {priority_stars} <b>{product['title'][:30]}</b>\n"
+        response += f"   💰 {product['price'] or '—'} | 🎯 {product['category'] or '—'}\n"
+
+        # Добавляем кнопку для управления этим товаром
+        keyboard_buttons.append([
+            InlineKeyboardButton(
+                text=f"#{product['id']} {product['title'][:15]}...",
+                callback_data=f"admin_product_{product['id']}"
+            )
+        ])
+
+    # Добавляем кнопки управления
+    keyboard_buttons.extend([
+        [
+            InlineKeyboardButton(text="➕ Добавить", callback_data="admin_recommend_add"),
+            InlineKeyboardButton(text="✏️ Текст", callback_data="admin_recommend_text")
+        ],
+        [
+            InlineKeyboardButton(text="📚 Справка", callback_data="admin_recommend_help")
+        ]
+    ])
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
+
+    # Ограничение на длину сообщения
+    if len(response) > 3500:
+        response = response[:3400] + "\n\n... (сообщение обрезано)"
+
+    await message.answer(response, reply_markup=keyboard, parse_mode="HTML")
+
 # --- Automatic backups
 async def backup_database():
     """Create daily database backup"""
@@ -3056,7 +3976,7 @@ async def backup_database():
         Path("backups").mkdir(exist_ok=True)
 
         # Copy database
-        shutil.copy2(DB, backup_path)
+        shutil.copy2(DATABASE_PATH, backup_path)
 
         # Clean old backups (keep last 7)
         backup_files = list(Path("backups").glob("db_backup_*.db"))
@@ -3252,6 +4172,15 @@ async def generate_recommendations(user_id: int, limit: int = 5) -> List[Dict[st
 
 def get_available_products() -> List[Dict[str, Any]]:
     """Get list of available products for recommendations"""
+    # Сначала пытаемся получить рекомендуемые продукты из базы данных
+    from database import get_recommended_products
+    recommended_products = get_recommended_products()
+
+    # Если есть рекомендуемые продукты, возвращаем их
+    if recommended_products:
+        return recommended_products
+
+    # Fallback на старый жестко заданный список, если база пустая
     return [
         # Smartphones
         {
@@ -3442,9 +4371,8 @@ async def cmd_import(message: types.Message):
         parse_mode="HTML"
     )
 
-@dp.message(Command("compare"))
-async def cmd_compare(message: types.Message):
-    """Сравнение цен товаров"""
+async def cmd_compare_urls(message: types.Message):
+    """Legacy helper: compare two direct URLs (router now lives in cmd_compare)."""
     user_id = message.from_user.id
     add_user_if_not_exists(user_id)
 
@@ -3458,46 +4386,7 @@ async def cmd_compare(message: types.Message):
         )
         return
 
-    url1, url2 = args[1], args[2]
-
-    # Валидация URL
-    if not (is_trendyol_product_url(url1) and is_trendyol_product_url(url2)):
-        await message.answer(t(user_id, "not_product_url"))
-        return
-
-    await message.answer(t(user_id, "compare_loading"))
-
-    try:
-        # Получаем информацию о товарах параллельно
-        price1, title1, image1 = await get_product_info_async(url1)
-        price2, title2, image2 = await get_product_info_async(url2)
-
-        if not (price1 and price2):
-            await message.answer(t(user_id, "compare_error_no_price"))
-            return
-
-        # Формируем сравнение
-        comparison_text = f"""
-📊 <b>СРАВНЕНИЕ ТОВАРОВ</b>
-
-🏷️ <b>Товар 1:</b>
-{title1 or url1}
-💰 Цена: {price1:.2f} TL
-
-🏷️ <b>Товар 2:</b>
-{title2 or url2}
-💰 Цена: {price2:.2f} TL
-
-📈 <b>Разница:</b> {abs(price1 - price2):.2f} TL ({abs(price1 - price2) / max(price1, price2) * 100:.1f}%)
-
-{'🟢 Товар 1 дешевле' if price1 < price2 else '🟢 Товар 2 дешевле' if price2 < price1 else '⚪ Цены равны'}
-"""
-
-        await message.answer(comparison_text, parse_mode="HTML")
-
-    except Exception as e:
-        logger.exception("Error in compare command: %s", e)
-        await message.answer(t(user_id, "error_generic"))
+    await _compare_products_by_urls(message, args[1], args[2])
 
 @dp.message(Command("recommend"))
 async def cmd_recommend(message: types.Message):
@@ -3508,13 +4397,19 @@ async def cmd_recommend(message: types.Message):
     await message.answer(t(user_id, "recommend_loading"))
 
     try:
+        lang = get_user_language(user_id)
+        custom_text = get_bot_text("recommend_text", lang)
+        custom_text = custom_text.strip() if custom_text else None
         recommendations = await generate_recommendations(user_id, limit=5)
 
         if not recommendations:
-            await message.answer(t(user_id, "recommend_no_data"))
+            if custom_text:
+                await message.answer(custom_text, parse_mode="HTML")
+            else:
+                await message.answer(t(user_id, "recommend_no_data"))
             return
 
-        response = f"🎯 <b>{t(user_id, 'recommend_title')}</b>\n\n"
+        response = f"{custom_text}\n\n" if custom_text else f"🎯 <b>{t(user_id, 'recommend_title')}</b>\n\n"
 
         keyboard = []
 
@@ -3531,7 +4426,8 @@ async def cmd_recommend(message: types.Message):
                 )
             ])
 
-        response += f"💡 {t(user_id, 'recommend_hint')}"
+        if not custom_text:
+            response += f"💡 {t(user_id, 'recommend_hint')}"
 
         markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
         await message.answer(response, reply_markup=markup, parse_mode="HTML")
@@ -3576,7 +4472,7 @@ async def perform_health_check() -> dict:
     try:
         # Database connection
         import sqlite3
-        conn = sqlite3.connect(DB, timeout=5)
+        conn = sqlite3.connect(DATABASE_PATH, timeout=5)
         conn.execute("SELECT 1")
         conn.close()
         results["База данных"] = True
@@ -3623,8 +4519,127 @@ async def perform_health_check() -> dict:
 
     return results
 
+# ===== HANDLER REGISTRATION (module level, executed on import) =====
+def _prune_legacy_handlers_for_new_mode() -> None:
+    """Drop legacy handlers that conflict with the new architecture."""
+    legacy_message_callbacks = {
+        # Legacy language flow conflicts with BasicHandler in new mode.
+        "cmd_language_command",
+        "cmd_lang_message",
+        # Legacy onboarding belongs to old /start flow only.
+        "cmd_onboarding_try",
+        "cmd_onboarding_skip",
+        "cmd_onboarding_done",
+    }
+
+    before_msg = len(dp.message.handlers)
+    dp.message.handlers[:] = [
+        h for h in dp.message.handlers
+        if getattr(h.callback, "__name__", "") not in legacy_message_callbacks
+    ]
+    removed_msg = before_msg - len(dp.message.handlers)
+
+    before_cb = len(dp.callback_query.handlers)
+    dp.callback_query.handlers[:] = [
+        h for h in dp.callback_query.handlers
+        if getattr(h.callback, "__name__", "") != "callback_handler_old"
+    ]
+    removed_cb = before_cb - len(dp.callback_query.handlers)
+
+    if removed_msg or removed_cb:
+        logger.info(
+            "Pruned legacy handlers for new mode: message=%d, callback=%d",
+            removed_msg,
+            removed_cb,
+        )
+
+
+# Register handlers based on architecture
+use_new_handlers_init = USE_NEW_HANDLERS
+if use_new_handlers_init:
+    logger.info("Using new handler architecture")
+    try:
+        _prune_legacy_handlers_for_new_mode()
+        from handlers import BasicHandler, SubscriptionHandler, AnalyticsHandler, CallbackHandler
+        basic_handler = BasicHandler()
+        basic_handler.register(dp)
+        logger.info("New basic handlers registered")
+
+        subscription_handler = SubscriptionHandler()
+        subscription_handler.register(dp)
+        logger.info("New subscription handlers registered")
+
+        analytics_handler = AnalyticsHandler()
+        analytics_handler.register(dp)
+        logger.info("New analytics handlers registered")
+
+        callback_handler = CallbackHandler()
+        callback_handler.register(dp)
+        logger.info("New callback handlers registered")
+    except Exception as e:
+        logger.error(f"Failed to register new handlers: {e}", exc_info=True)
+        logger.info("Falling back to legacy handlers")
+        use_new_handlers_init = False
+
+if not use_new_handlers_init:
+    logger.info("Using legacy handler architecture")
+    from aiogram import F
+    
+    # Register old handlers
+    dp.message.register(cmd_start_old, Command("start"))
+    dp.message.register(cmd_help_old, Command("help"))
+    dp.message.register(cmd_mysubs_cmd_old, Command("mysubs"))
+    dp.message.register(cmd_unsubscribe_old, Command("unsubscribe"))
+    dp.message.register(cmd_stats_old, Command("stats"))
+    dp.message.register(cmd_all_list_old, Command("all_list"))
+    dp.message.register(cmd_top_drops_old, Command("top_drops"))
+    dp.message.register(
+        handle_url_old,
+        F.text.contains("trendyol.com") | F.text.contains("ty.gl/")
+    )
+    
+    # Register callback handlers for inline buttons
+    dp.callback_query.register(callback_handler_old)
+    logger.info("Legacy callback handlers registered")
+
+# Register admin commands
+dp.message.register(cmd_admin, Command("admin"))
+dp.message.register(cmd_health, Command("health"))
+logger.info("Admin commands registered")
+
 # --- main
+async def set_commands_menu():
+    """Устанавливает меню команд для бота в Telegram"""
+    from aiogram.types import BotCommand
+
+    commands = [
+        BotCommand(command="start", description="🚀 Start the bot"),
+        BotCommand(command="help", description="❓ Help and commands"),
+        BotCommand(command="mysubs", description="📃 My subscriptions"),
+        BotCommand(command="compare", description="⚖️ Compare prices"),
+        BotCommand(command="recommend", description="💡 Recommendations"),
+        BotCommand(command="settings", description="⚙️ Bot settings"),
+        BotCommand(command="language", description="🌐 Change language"),
+        BotCommand(command="history", description="📈 Price history"),
+        BotCommand(command="alerts", description="🔔 Manage alerts"),
+        BotCommand(command="stats", description="📊 Statistics"),
+        BotCommand(command="export", description="📤 Export data"),
+        BotCommand(command="about", description="ℹ️ About the bot"),
+        BotCommand(command="ping", description="🏓 Check bot response"),
+        BotCommand(command="health", description="💚 Bot health status"),
+    ]
+
+    try:
+        await bot.set_my_commands(commands)
+        logger.info("✅ Bot commands menu has been set successfully")
+    except Exception as e:
+        logger.error(f"❌ Failed to set bot commands menu: {e}")
+
+
 async def main():
+    # Устанавливаем меню команд
+    await set_commands_menu()
+
     # Регистрируем антиспам middleware
     dp.message.middleware(AntiSpamMiddleware())
     dp.callback_query.middleware(AntiSpamMiddleware())
@@ -3637,50 +4652,83 @@ async def main():
     except Exception as e:
         logger.warning("Failed to delete webhook (may be fine): %s", e)
 
-    # Register handlers based on architecture
-    use_new_handlers = USE_NEW_HANDLERS
-    if use_new_handlers:
-        logger.info("Using new handler architecture")
-        try:
-            from handlers import BasicHandler, SubscriptionHandler, AnalyticsHandler, CallbackHandler
-            basic_handler = BasicHandler()
-            basic_handler.register(dp)
-            logger.info("New basic handlers registered")
-
-            subscription_handler = SubscriptionHandler()
-            subscription_handler.register(dp)
-            logger.info("New subscription handlers registered")
-
-            analytics_handler = AnalyticsHandler()
-            analytics_handler.register(dp)
-            logger.info("New analytics handlers registered")
-
-            callback_handler = CallbackHandler()
-            callback_handler.register(dp)
-            logger.info("New callback handlers registered")
-        except Exception as e:
-            logger.error(f"Failed to register new handlers: {e}")
-            logger.info("Falling back to legacy handlers")
-            use_new_handlers = False
-
-    if not use_new_handlers:
-        logger.info("Using legacy handler architecture")
-        # Register old handlers
-        dp.message.register(cmd_start_old, Command("start"))
-        dp.message.register(cmd_help_old, Command("help"))
-        dp.message.register(cmd_mysubs_cmd_old, Command("mysubs"))
-        dp.message.register(cmd_unsubscribe_old, Command("unsubscribe"))
-        dp.message.register(cmd_stats_old, Command("stats"))
-        dp.message.register(cmd_all_list_old, Command("all_list"))
-        dp.message.register(cmd_top_drops_old, Command("top_drops"))
-        dp.message.register(handle_url_old, lambda m: m.text and ('trendyol.com' in (m.text or '').lower() or 'ty.gl/' in (m.text or '').lower()))
-
-    # Register admin commands
-    dp.message.register(cmd_admin, Command("admin"))
-    dp.message.register(cmd_health, Command("health"))
-
     logger.info("Bot polling started")
     await dp.start_polling(bot)
+
+async def check_blocked_users():
+    """Проверить, кто заблокировал бота"""
+    try:
+        from database import get_connection
+        from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
+
+        admin_user_ids = ADMIN_IDS  # Только админы могут использовать эту функцию
+
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT user_id FROM users")
+            user_ids = [row[0] for row in cursor.fetchall()]
+
+        blocked_users = []
+        active_users = []
+
+        for user_id in user_ids:
+            try:
+                # Пытаемся отправить сообщение пользователю
+                await bot.send_chat_action(chat_id=user_id, action="typing")
+                active_users.append(user_id)
+                await asyncio.sleep(0.1)  # Небольшая задержка чтобы не превысить лимиты
+            except TelegramForbiddenError:
+                # Пользователь заблокировал бота
+                blocked_users.append(user_id)
+            except TelegramBadRequest as e:
+                if "chat not found" in str(e).lower() or "user not found" in str(e).lower():
+                    blocked_users.append(user_id)
+            except Exception as e:
+                logger.warning(f"Error checking user {user_id}: {e}")
+                # В случае других ошибок считаем пользователя активным
+                active_users.append(user_id)
+
+        return blocked_users, active_users
+
+    except Exception as e:
+        logger.exception(f"Error in check_blocked_users: {e}")
+        return [], []
+
+async def admin_check_blocked(message: types.Message):
+    """Показать список заблокировавших бота пользователей"""
+    user_id = _get_request_user_id(message)
+    if not is_admin(user_id):
+        await message.answer(t(user_id, "admin_access_denied"))
+        return
+
+    await message.answer("🔍 Проверяю заблокированных пользователей...")
+
+    blocked_users, active_users = await check_blocked_users()
+
+    response = "🚫 <b>Проверка блокировки бота</b>\n\n"
+
+    if blocked_users:
+        response += f"❌ <b>Заблокировали бота ({len(blocked_users)}):</b>\n"
+        for uid in blocked_users[:20]:  # Показываем максимум 20
+            response += f"• <code>{uid}</code>\n"
+        if len(blocked_users) > 20:
+            response += f"... и еще {len(blocked_users) - 20} пользователей\n"
+        response += "\n"
+    else:
+        response += "✅ <b>Никто не заблокировал бота!</b>\n\n"
+
+    response += f"✅ <b>Активных пользователей:</b> {len(active_users)}\n"
+    response += f"📊 <b>Всего проверено:</b> {len(blocked_users) + len(active_users)}"
+
+    # Создаем клавиатуру для дополнительных действий
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👥 Список пользователей", callback_data="admin_users_refresh")],
+        [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats_refresh")]
+    ])
+
+    await message.answer(response, reply_markup=keyboard, parse_mode="HTML")
 
 if __name__ == "__main__":
     asyncio.run(main())
