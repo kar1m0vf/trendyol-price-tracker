@@ -1,4 +1,4 @@
-# 📊 ИТОГОВОЕ РЕЗЮМЕ CODE REVIEW
+﻿# 📊 ИТОГОВОЕ РЕЗЮМЕ CODE REVIEW
 
 ## 🎯 Статус: ⚠️ ТРЕБУЕТ ДОРАБОТКИ
 
@@ -176,7 +176,7 @@ for sub in subs:  # 1000 подписок
 def test_no_hardcoded_tokens():
     """Проверяем что нет токенов в коде"""
     # Должно быть: BOT_TOKEN = os.getenv("BOT_TOKEN")
-    # НЕ должно быть: BOT_TOKEN = "8476366527:AAE..."
+    # НЕ должно быть: BOT_TOKEN = "<BOT_TOKEN_REDACTED>"
 
 # test_database.py  
 def test_save_price_point_deduplication():
@@ -266,3 +266,4 @@ A: Если bot.send_photo() медленная (загружает большо
 **Проверено:** Вручную, статический анализ  
 
 **✅ Анализ завершён!**
+

@@ -1,4 +1,4 @@
-# 🎓 КОД REVIEW TELEGRAM BOT - ФИНАЛЬНЫЙ ОТЧЁТ
+﻿# 🎓 КОД REVIEW TELEGRAM BOT - ФИНАЛЬНЫЙ ОТЧЁТ
 
 ## 📋 Дата: 5 декабря 2025
 
@@ -24,7 +24,7 @@
 **Решение:**
 ```bash
 # 1. Создать .env файл
-echo "BOT_TOKEN=8476366527:AAE..." > .env
+echo "BOT_TOKEN=<BOT_TOKEN_REDACTED>" > .env
 
 # 2. Обновить config.py на os.getenv("BOT_TOKEN")
 
@@ -250,3 +250,4 @@ A: Используйте pre-commit hooks, lint'ры (pylint, black), и все
 **Спасибо за внимание! Удачи с исправлениями! 🍀**
 
 Вы можете гордиться проектом - это хороший фундамент!
+
