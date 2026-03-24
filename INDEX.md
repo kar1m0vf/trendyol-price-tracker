@@ -22,7 +22,7 @@
 
 | Файл | Содержание | Для кого |
 |------|-----------|---------|
-| **RUN_BOT.md** | Полная инструкция по запуску | Все пользователи |
+| **docs/guides/RUN_BOT.md** | Полная инструкция по запуску | Все пользователи |
 | **docs/reports/STATUS_REPORT.md** | Статус исправлений и готовность | Все пользователи |
 | **check_bot_ready.py** | Скрипт проверки готовности | Все пользователи |
 
@@ -107,7 +107,7 @@ telegrambot/
 ├── tools/                      # Дополнительные инструменты
 │
 ├── docs/reports/STATUS_REPORT.md            # Статус и результаты ✅
-├── RUN_BOT.md                  # Инструкции по запуску ✅
+├── docs/guides/RUN_BOT.md                  # Инструкции по запуску ✅
 ├── docs/fixes/FIXES_COMPLETED.md          # Описание исправлений ✅
 ├── docs/reports/CODE_REVIEW_ANALYSIS.md     # Анализ кода
 ├── docs/fixes/FIXES_AND_CODE_SAMPLES.md   # Примеры кода
@@ -124,7 +124,7 @@ telegrambot/
 
 ### Для пользователей (Non-programmers)
 1. **docs/reports/STATUS_REPORT.md** - Что было исправлено и статус
-2. **RUN_BOT.md** - Как запустить бота
+2. **docs/guides/RUN_BOT.md** - Как запустить бота
 3. **check_bot_ready.py** - Проверить что всё готово
 
 ### Для разработчиков
@@ -170,7 +170,7 @@ telegrambot/
 
 ### Как запустить бота?
 Используйте: `python bot.py`
-Или прочитайте: `RUN_BOT.md`
+Или прочитайте: `docs/guides/RUN_BOT.md`
 
 ### Как проверить что всё готово?
 Запустите: `python check_bot_ready.py`

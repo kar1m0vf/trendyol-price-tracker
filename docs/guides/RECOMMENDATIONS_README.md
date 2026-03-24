@@ -8,7 +8,7 @@
 
 1. **Запустите демо:**
    ```bash
-   python demo_recommendations.py
+   python tools/diagnostics/demo_recommendations.py
    ```
 
 2. **Проверьте в боте:**

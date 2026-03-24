@@ -171,8 +171,8 @@
 - [x] `ANALYSIS_SUMMARY.md` - Сводка анализа
 - [x] `FINAL_REPORT.md` - Финальный отчёт
 - [x] `FIXES_APPLIED.md` - Документация применённых исправлений
-- [x] `QUICK_START.md` - Быстрый старт
-- [x] `RUN_BOT.md` - Инструкции по запуску
+- [x] `../guides/QUICK_START.md` - Быстрый старт
+- [x] `../guides/RUN_BOT.md` - Инструкции по запуску
 
 ---
 

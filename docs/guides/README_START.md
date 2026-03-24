@@ -46,9 +46,9 @@ python check_bot_ready.py
 
 - **[БЫСТРЫЙ_СТАРТ.md](БЫСТРЫЙ_СТАРТ.md)** - За 3 минуты к запуску
 - **[RUN_BOT.md](RUN_BOT.md)** - Подробные инструкции
-- **[docs/reports/STATUS_REPORT.md](docs/reports/STATUS_REPORT.md)** - Статус исправлений
-- **[ФИНАЛЬНЫЙ_ОТЧЕТ.txt](ФИНАЛЬНЫЙ_ОТЧЕТ.txt)** - Полный отчет
-- **[INDEX.md](INDEX.md)** - Индекс всей документации
+- **[STATUS_REPORT.md](../reports/STATUS_REPORT.md)** - Статус исправлений
+- **[ФИНАЛЬНЫЙ_ОТЧЕТ.txt](../archive/root-reports/ФИНАЛЬНЫЙ_ОТЧЕТ.txt)** - Полный отчет
+- **[INDEX.md](../../INDEX.md)** - Индекс всей документации
 
 ---
 
@@ -141,7 +141,7 @@ locales/            Локализация (4 языка)
    pip install -r requirements.txt
    ```
 
-4. Прочитайте [docs/reports/STATUS_REPORT.md](docs/reports/STATUS_REPORT.md)
+4. Прочитайте [STATUS_REPORT.md](../reports/STATUS_REPORT.md)
 
 ---
 
@@ -149,8 +149,8 @@ locales/            Локализация (4 языка)
 
 Все документация находится в папке проекта:
 - `RUN_BOT.md` - Инструкции по запуску
-- `ЗАВЕРШЕНО.md` - Итоговый отчет на русском
-- `КОД_ИЗМЕНЕНИЯ.md` - Что было изменено в коде
+- `../archive/root-reports/ЗАВЕРШЕНО.md` - Итоговый отчет на русском
+- `../archive/root-reports/КОД_ИЗМЕНЕНИЯ.md` - Что было изменено в коде
 
 ---
 
