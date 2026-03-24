@@ -32,7 +32,7 @@ class AnalyticsHandler(BaseHandler):
                 await message.answer(self.t(message.from_user.id, "no_subs_found_id"))
                 return
 
-            # Check ownership
+                             
             if sub[1] != message.from_user.id:
                 await message.answer(self.t(message.from_user.id, "error_not_your_sub"))
                 return
@@ -43,13 +43,13 @@ class AnalyticsHandler(BaseHandler):
                 await message.answer(self.t(message.from_user.id, "stats_no_history"))
                 return
 
-            # Format statistics
+                               
             curr = f"{stats['current']:.2f}" if stats['current'] else "—"
             min_p = f"{stats['min']:.2f}" if stats['min'] else "—"
             max_p = f"{stats['max']:.2f}" if stats['max'] else "—"
             avg_p = f"{stats['avg']:.2f}" if stats['avg'] else "—"
 
-            # Use localized header
+                                  
             header = self.t(message.from_user.id, "stats_header")
             text = f"""{header}
 
@@ -81,7 +81,7 @@ class AnalyticsHandler(BaseHandler):
                 await message.answer(self.t(message.from_user.id, "no_subs"))
                 return
 
-            # Format as table
+                             
             header = self.t(message.from_user.id, "cmd_all_list_header") + "\n\n"
             header += f"`ID  | {self.t(message.from_user.id, 'mode'):8} | {self.t(message.from_user.id, 'price'):6} | {self.t(message.from_user.id, 'status')}`\n"
             header += "`" + "—" * 38 + "`\n"

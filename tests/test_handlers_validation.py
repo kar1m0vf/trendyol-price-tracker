@@ -13,30 +13,30 @@ print("=" * 60)
 
 issues = []
 
-# Проверка 1: Распаковка кортежей подписок
+                                          
 print("\n[1] Проверка распаковки кортежей подписок...")
 import bot
 import database
 
-# Создаем тестовую подписку
+                           
 test_user = 999999
 test_url = "https://www.trendyol.com/test-p-123"
 sub_id = database.add_subscription(test_user, test_url, mode="hourly")
 
-# Получаем подписку
+                   
 sub = database.get_subscription(sub_id)
 if sub:
     print(f"✅ Подписка получена: {len(sub)} полей")
     
-    # Проверяем что можно безопасно распаковать
+                                               
     try:
         if len(sub) >= 13:
-            # Новая версия с price_alert
+                                        
             (sid, uid, url, mode, last_price, title, image,
              min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert) = sub
             print("✅ Распаковка 13 полей работает")
         elif len(sub) >= 12:
-            # Старая версия без price_alert
+                                           
             (sid, uid, url, mode, last_price, title, image,
              min_price, max_price, notify_percent, notify_interval, last_notify_time) = sub[:12]
             price_alert = None
@@ -48,10 +48,10 @@ if sub:
         issues.append(f"Ошибка распаковки подписки: {e}")
         print(f"❌ Ошибка распаковки: {e}")
     
-    # Очистка
+             
     database.remove_subscription(sub_id)
 
-# Проверка 2: Валидация URL
+                           
 print("\n[2] Проверка валидации URL...")
 test_urls = [
     ("https://www.trendyol.com/product-p-123", True),
@@ -77,7 +77,7 @@ for url, should_be_valid in test_urls:
         issues.append(f"Ошибка валидации URL '{url}': {e}")
         print(f"❌ Ошибка валидации URL '{url}': {e}")
 
-# Проверка 3: Локализация
+                         
 print("\n[3] Проверка функции локализации...")
 test_keys = [
     "start_text",
@@ -92,7 +92,7 @@ for key in test_keys:
     try:
         result = bot.t(999999, key)
         if result == key:
-            # Ключ не найден, но это может быть нормально если пользователя нет в БД
+                                                                                    
             print(f"⚠️  Ключ '{key}' не найден (fallback на ключ)")
         else:
             print(f"✅ Ключ '{key}': найдено")
@@ -100,17 +100,17 @@ for key in test_keys:
         issues.append(f"Ошибка локализации для ключа '{key}': {e}")
         print(f"❌ Ошибка локализации '{key}': {e}")
 
-# Проверка 4: Обработка None значений
+                                     
 print("\n[4] Проверка обработки None значений...")
 try:
-    # Тест normalize_url с None
+                               
     result = bot.normalize_url(None)
     if result == "":
         print("✅ normalize_url(None) возвращает пустую строку")
     else:
         issues.append(f"normalize_url(None) вернул '{result}' вместо ''")
     
-    # Тест is_trendyol_product_url с None
+                                         
     result = bot.is_trendyol_product_url(None)
     if result == False:
         print("✅ is_trendyol_product_url(None) возвращает False")

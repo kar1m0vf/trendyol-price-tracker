@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 Тест для проверки работы callback'ов в реальном боте.
 """
@@ -7,19 +7,19 @@ import sys
 import asyncio
 from unittest.mock import MagicMock, AsyncMock
 
-# Устанавливаем переменную окружения для использования новых обработчиков
+                                                                         
 os.environ['USE_NEW_HANDLERS'] = 'true'
 
 async def test_callback_flow():
     """Тест полного цикла работы callback'ов."""
     try:
-        # Импортируем и инициализируем бота
+                                           
         import bot
         from aiogram.types import CallbackQuery, User, Message
 
         print("✅ Bot imported successfully")
 
-        # Создаем mock callback query
+                                     
         mock_user = MagicMock(spec=User)
         mock_user.id = 12345
 
@@ -32,29 +32,29 @@ async def test_callback_flow():
         mock_cq.message = mock_message
         mock_cq.answer = AsyncMock()
 
-        # Создаем обработчик и привязываем бота
+                                               
         from handlers import CallbackHandler
         handler = CallbackHandler()
         handler._bot = bot.bot
 
         print("✅ Handler created")
 
-        # Выполняем callback
+                            
         await handler.handle_main_callback(mock_cq)
 
-        # Проверяем что callback был обработан
+                                              
         mock_cq.answer.assert_called_once()
         print("✅ Callback processed successfully")
 
-        # Проверяем конкретный callback
+                                       
         if "lang" in mock_cq.data:
-            # Проверяем что язык был изменен в БД
+                                                 
             from database import get_user_language
-            # Для теста создаем пользователя
+                                            
             from database import add_user_if_not_exists
             add_user_if_not_exists(12345)
 
-            # Меняем язык
+                         
             from database import set_user_language
             set_user_language(12345, "ru")
 
@@ -76,7 +76,7 @@ def main():
 
     results = []
 
-    # Тест callback flow
+                        
     try:
         asyncio.run(test_callback_flow())
         results.append(True)

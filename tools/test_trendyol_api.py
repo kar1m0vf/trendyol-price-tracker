@@ -10,7 +10,7 @@ HEADERS = {
 
 product_ids = ["318291787", "944315539"]
 
-# Candidate paths and param names to try
+                                        
 paths = ["", "/v1", "/v2", "/get", "/priceHistory", "/PriceHistory", "/price-history"]
 param_names = ["productId", "product_id", "productIds", "productIds[]", "productIdList"]
 
@@ -23,15 +23,15 @@ for pid in product_ids:
             try:
                 r = requests.get(url, headers=HEADERS, params=params, timeout=10)
                 print(f"URL: {url} params={param} -> status {r.status_code} len={len(r.text)}")
-                # try to pretty-print json (safe)
+                                                 
                 try:
                     j = r.json()
                     print("JSON keys:", list(j.keys()) if isinstance(j, dict) else type(j))
                     print(json.dumps(j, indent=2)[:2000])
                 except Exception:
-                    # print start of text
+                                         
                     print(r.text[:1000])
-                # Stop on a likely-successful JSON
+                                                  
                 if r.status_code == 200 and r.headers.get('Content-Type', '').lower().startswith('application/json') and len(r.text) > 50:
                     print("Likely valid response, moving to next product.")
                     raise StopIteration

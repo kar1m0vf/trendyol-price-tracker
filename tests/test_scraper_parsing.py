@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 Комплексный тест функций парсинга в scraper.py
 """
@@ -7,7 +7,7 @@ import os
 import asyncio
 from unittest.mock import patch, MagicMock
 
-# Добавляем корневую директорию в путь
+                                      
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 def test_parse_price_text():
@@ -52,7 +52,7 @@ def test_extract_json_from_js_var():
     try:
         from scraper import _extract_json_from_js_var
 
-        # Тестовый HTML с JavaScript переменной
+                                               
         html = '''
         <script>
         window.__PRODUCT_DETAIL_APP_INITIAL_STATE__ = {"product": {"price": 1234.56}};
@@ -80,7 +80,7 @@ async def test_get_price_async_with_mock():
     try:
         from scraper import get_price_async
 
-        # Mock ответа сервера
+                             
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.text = '''
@@ -120,7 +120,7 @@ async def test_get_product_info_async_with_mock():
     try:
         from scraper import get_product_info_async
 
-        # Mock ответа сервера
+                             
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.text = '''
@@ -177,7 +177,7 @@ def test_rate_limiters():
     try:
         from scraper import TRENDYOL_LIMITER
 
-        # Тест только синхронного limiter'а (асинхронный требует event loop)
+                                                                            
         initial_can_proceed = TRENDYOL_LIMITER.can_proceed()
         if initial_can_proceed:
             TRENDYOL_LIMITER.add_request()
@@ -203,9 +203,9 @@ async def test_trendyol_url_validation():
             ("https://www.trendyol.com/test-product-p-123456/", True),
             ("https://trendyol.com/test-product-p-123456", True),
             ("https://m.trendyol.com/test-product-p-123456", True),
-            ("https://www.trendyol.com/sr?q=iphone", False),  # Поиск, не товар
-            ("https://amazon.com/product", False),  # Другой сайт
-            ("not-a-url", False),  # Не URL
+            ("https://www.trendyol.com/sr?q=iphone", False),                   
+            ("https://amazon.com/product", False),               
+            ("not-a-url", False),          
         ]
 
         passed = 0
@@ -231,11 +231,11 @@ async def test_parsing_error_handling():
     try:
         from scraper import get_price_async, get_product_info_async
 
-        # Тест с несуществующим URL
+                                   
         result1 = await get_price_async("https://non-existent-domain-12345.com/product")
         result2 = await get_product_info_async("https://non-existent-domain-12345.com/product")
 
-        # Функции должны вернуть None при ошибках
+                                                 
         if result1 is None and result2[0] is None:
             print("✅ Обработка ошибок сети работает корректно")
             return True
@@ -254,7 +254,7 @@ def test_scraper_initialization():
     try:
         from scraper import SCRAPER, HEADERS, TRENDYOL_LIMITER
 
-        # Проверяем что основные компоненты инициализированы
+                                                            
         if HEADERS and isinstance(HEADERS, dict):
             print("✅ HEADERS инициализированы")
         else:
@@ -267,7 +267,7 @@ def test_scraper_initialization():
             print("❌ TRENDYOL_LIMITER не инициализирован")
             return False
 
-        # SCRAPER может быть None, это нормально
+                                                
         if SCRAPER is not None:
             print("✅ SCRAPER (cloudscraper) доступен")
         else:
@@ -286,7 +286,7 @@ async def test_fallback_parsing():
     try:
         from scraper import _parse_listing_products
 
-        # HTML без JavaScript данных, но с обычными элементами
+                                                              
         html_fallback = '''
         <html>
         <body>
@@ -343,7 +343,7 @@ async def main():
             print(f"❌ Критическая ошибка в {test_func.__name__}: {e}")
             results.append(False)
 
-    # Итоги
+           
     print("\n" + "=" * 70)
     passed = sum(results)
     total = len(results)

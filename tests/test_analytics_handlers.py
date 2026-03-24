@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 Комплексные тесты для обработчиков аналитики.
 """
@@ -8,10 +8,10 @@ import asyncio
 import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch
 
-# Устанавливаем переменную окружения для использования новых обработчиков
+                                                                         
 os.environ['USE_NEW_HANDLERS'] = 'true'
 
-# Создаем временную БД для тестов
+                                 
 TEST_DB = tempfile.mktemp(suffix='.db')
 
 def test_analytics_handlers_import():
@@ -20,11 +20,11 @@ def test_analytics_handlers_import():
         from handlers import AnalyticsHandler
         print("✅ AnalyticsHandler import OK")
 
-        # Создаем экземпляр
+                           
         handler = AnalyticsHandler()
         print("✅ AnalyticsHandler instance created")
 
-        # Проверяем методы
+                          
         assert hasattr(handler, 'handle_stats_command'), "handle_stats_command method missing"
         assert hasattr(handler, 'handle_all_list_command'), "handle_all_list_command method missing"
         assert hasattr(handler, 'handle_top_drops_command'), "handle_top_drops_command method missing"
@@ -43,25 +43,25 @@ async def test_analytics_functionality():
 
         handler = AnalyticsHandler()
 
-        # Mock message
+                      
         mock_msg = MagicMock()
         mock_msg.from_user.id = 12345
         mock_msg.text = "/stats 1"
         mock_msg.answer = AsyncMock()
 
-        # Тестируем handle_stats_command (должен вызвать answer для несуществующего ID)
+                                                                                       
         await handler.handle_stats_command(mock_msg)
         mock_msg.answer.assert_called_once()
         print("✅ handle_stats_command works")
 
-        # Test all_list command
+                               
         mock_msg.text = "/all_list"
         mock_msg.answer.reset_mock()
         await handler.handle_all_list_command(mock_msg)
         mock_msg.answer.assert_called_once()
         print("✅ handle_all_list_command works")
 
-        # Test top_drops command
+                                
         mock_msg.answer.reset_mock()
         await handler.handle_top_drops_command(mock_msg)
         mock_msg.answer.assert_called_once()
@@ -77,11 +77,11 @@ async def test_stats_command_with_valid_data():
     print("🧪 Тестируем /stats с тестовыми данными...")
 
     try:
-        # Mock database functions
-        with patch('handlers.analytics_handler.get_subscription') as mock_get_sub, \
+                                 
+        with patch('handlers.analytics_handler.get_subscription') as mock_get_sub,\
              patch('handlers.analytics_handler.get_price_stats') as mock_get_stats:
 
-            # Setup mocks
+                         
             mock_sub = (1, 12345, "https://test.com", "hourly", 1000.0, "Test Product", None, None, None, None, None, None, None)
             mock_get_sub.return_value = mock_sub
             mock_get_stats.return_value = {
@@ -97,7 +97,7 @@ async def test_stats_command_with_valid_data():
             from handlers import AnalyticsHandler
             handler = AnalyticsHandler()
 
-            # Mock message
+                          
             mock_msg = MagicMock()
             mock_msg.from_user.id = 12345
             mock_msg.text = "/stats 1"
@@ -105,7 +105,7 @@ async def test_stats_command_with_valid_data():
 
             await handler.handle_stats_command(mock_msg)
 
-            # Проверяем что answer был вызван
+                                             
             assert mock_msg.answer.called, "answer должен быть вызван"
             call_args = mock_msg.answer.call_args
             assert call_args is not None, "должен быть текст ответа"
@@ -134,7 +134,7 @@ async def test_stats_command_invalid_id():
         from handlers import AnalyticsHandler
         handler = AnalyticsHandler()
 
-        # Mock message с некорректным ID
+                                        
         mock_msg = MagicMock()
         mock_msg.from_user.id = 12345
         mock_msg.text = "/stats abc"
@@ -142,7 +142,7 @@ async def test_stats_command_invalid_id():
 
         await handler.handle_stats_command(mock_msg)
 
-        # Проверяем что answer был вызван с сообщением об ошибке
+                                                                
         assert mock_msg.answer.called, "answer должен быть вызван"
 
         print("✅ /stats с некорректным ID обрабатывается корректно")
@@ -160,7 +160,7 @@ async def test_stats_command_no_args():
         from handlers import AnalyticsHandler
         handler = AnalyticsHandler()
 
-        # Mock message без аргументов
+                                     
         mock_msg = MagicMock()
         mock_msg.from_user.id = 12345
         mock_msg.text = "/stats"
@@ -168,7 +168,7 @@ async def test_stats_command_no_args():
 
         await handler.handle_stats_command(mock_msg)
 
-        # Проверяем что answer был вызван с подсказкой
+                                                      
         assert mock_msg.answer.called, "answer должен быть вызван"
 
         print("✅ /stats без аргументов обрабатывается корректно")
@@ -183,9 +183,9 @@ async def test_all_list_command_with_data():
     print("🧪 Тестируем /all_list с данными...")
 
     try:
-        # Mock database functions
+                                 
         with patch('handlers.analytics_handler.get_user_subscriptions') as mock_get_subs:
-            # Setup mock subscriptions
+                                      
             mock_subs = [
                 (1, 12345, "https://test1.com", "hourly", 1000.0, "Product 1", None, None, None, None, None, None, None),
                 (2, 12345, "https://test2.com", "discount", 2000.0, "Product 2", None, None, None, None, None, None, None),
@@ -195,14 +195,14 @@ async def test_all_list_command_with_data():
             from handlers import AnalyticsHandler
             handler = AnalyticsHandler()
 
-            # Mock message
+                          
             mock_msg = MagicMock()
             mock_msg.from_user.id = 12345
             mock_msg.answer = AsyncMock()
 
             await handler.handle_all_list_command(mock_msg)
 
-            # Проверяем что answer был вызван
+                                             
             assert mock_msg.answer.called, "answer должен быть вызван"
             call_args = mock_msg.answer.call_args
             assert call_args is not None, "должен быть текст ответа"
@@ -227,9 +227,9 @@ async def test_top_drops_command_with_data():
     print("🧪 Тестируем /top_drops с данными...")
 
     try:
-        # Mock database functions
+                                 
         with patch('handlers.analytics_handler.get_top_price_drops') as mock_get_drops:
-            # Setup mock drops
+                              
             mock_drops = [
                 (1, "https://test1.com", "Product 1", 950.0, 1000.0, -5.0),
                 (2, "https://test2.com", "Product 2", 1800.0, 2000.0, -10.0),
@@ -239,14 +239,14 @@ async def test_top_drops_command_with_data():
             from handlers import AnalyticsHandler
             handler = AnalyticsHandler()
 
-            # Mock message
+                          
             mock_msg = MagicMock()
             mock_msg.from_user.id = 12345
             mock_msg.answer = AsyncMock()
 
             await handler.handle_top_drops_command(mock_msg)
 
-            # Проверяем что answer был вызван
+                                             
             assert mock_msg.answer.called, "answer должен быть вызван"
             call_args = mock_msg.answer.call_args
             assert call_args is not None, "должен быть текст ответа"
@@ -273,14 +273,14 @@ def test_handler_registration():
         from handlers import AnalyticsHandler
         handler = AnalyticsHandler()
 
-        # Mock dp
+                 
         mock_dp = MagicMock()
         mock_dp.message.register = MagicMock()
 
-        # Регистрируем обработчики
+                                  
         handler.register(mock_dp)
 
-        # Проверяем что register был вызван нужное количество раз
+                                                                 
         assert mock_dp.message.register.call_count == 3, f"должно быть 3 регистрации, получено {mock_dp.message.register.call_count}"
 
         print("✅ Регистрация обработчиков работает корректно")
@@ -297,7 +297,7 @@ async def main():
 
     results = []
 
-    # Тест импорта
+                  
     try:
         result = test_analytics_handlers_import()
         results.append(result)
@@ -305,7 +305,7 @@ async def main():
         print(f"❌ Тест импорта провалился: {e}")
         results.append(False)
 
-    # Тесты функциональности
+                            
     test_functions = [
         test_analytics_functionality,
         test_stats_command_with_valid_data,
@@ -315,7 +315,7 @@ async def main():
         test_top_drops_command_with_data,
     ]
 
-    # Синхронные тесты
+                      
     sync_tests = [
         test_handler_registration,
     ]

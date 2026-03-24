@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 Тест для проверки что кнопки редактирования подписок работают правильно.
 """
@@ -7,7 +7,7 @@ import sys
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-# Устанавливаем переменную окружения для использования новых обработчиков
+                                                                         
 os.environ['USE_NEW_HANDLERS'] = 'true'
 
 def test_buttons_creation():
@@ -16,27 +16,27 @@ def test_buttons_creation():
         from handlers import SubscriptionHandler
         from database import add_user_if_not_exists
 
-        # Создаем обработчик
+                            
         handler = SubscriptionHandler()
 
-        # Добавляем тестового пользователя
+                                          
         add_user_if_not_exists(12345)
 
-        # Mock message
+                      
         mock_msg = MagicMock()
         mock_msg.from_user.id = 12345
         mock_msg.answer = AsyncMock()
 
-        # Вызываем обработчик
+                             
         asyncio.run(handler.handle_mysubs_command(mock_msg))
 
-        # Проверяем что answer был вызван
+                                         
         mock_msg.answer.assert_called_once()
 
-        # Получаем аргументы вызова
+                                   
         call_args = mock_msg.answer.call_args
-        text = call_args[0][0]  # Первый позиционный аргумент
-        kwargs = call_args[1]   # Ключевые аргументы
+        text = call_args[0][0]                               
+        kwargs = call_args[1]                       
 
         print(f"✅ Message sent with text: {text[:100]}...")
         print(f"✅ Reply markup included: {'reply_markup' in kwargs}")
@@ -73,7 +73,7 @@ def main():
 
     results = []
 
-    # Тест создания кнопок
+                          
     try:
         test_buttons_creation()
         results.append(True)

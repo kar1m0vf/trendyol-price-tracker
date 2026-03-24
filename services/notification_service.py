@@ -57,7 +57,7 @@ class NotificationService:
                     return True
                 except asyncio.TimeoutError:
                     logger.warning(f"Photo send timeout for user {user_id}, falling back to text")
-                    # Fallback на текст если фото долго грузится
+                                                                
                     try:
                         await asyncio.wait_for(
                             self.bot.send_message(
@@ -104,12 +104,12 @@ class NotificationService:
     ):
         """Send history plot for a product."""
         try:
-            # Import matplotlib here to avoid hard dependency
+                                                             
             import matplotlib.pyplot as plt
             import matplotlib.dates as mdates
             from io import BytesIO
 
-            # Process history data
+                                  
             processed = []
             for d, p in hist:
                 parsed_dt = None
@@ -124,11 +124,11 @@ class NotificationService:
                     logger.debug(f"Could not parse date for history: {d}")
                     processed.append((d, float(p)))
 
-            # Sort by date if possible
+                                      
             try:
                 processed.sort(key=lambda x: x[0] if isinstance(x[0], datetime) else str(x[0]))
             except Exception:
-                pass  # If sorting fails, continue with unsorted data
+                pass                                                 
 
             if len(processed) < 2:
                 lang = get_user_language(user_id) or "ru"
@@ -142,10 +142,10 @@ class NotificationService:
                 await self.bot.send_message(user_id, error_msg)
                 return
 
-            # Create plot
+                         
             fig, ax = plt.subplots(figsize=(10, 6))
 
-            # Separate datetime and non-datetime data
+                                                     
             datetime_data = [(d, p) for d, p in processed if isinstance(d, datetime)]
             non_datetime_data = [(d, p) for d, p in processed if not isinstance(d, datetime)]
 
@@ -156,7 +156,7 @@ class NotificationService:
                 ax.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, len(dates)//10)))
                 plt.setp(ax.xaxis.get_majorticklabels(), rotation=45)
             else:
-                # Fallback for non-datetime data
+                                                
                 indices = list(range(len(non_datetime_data)))
                 prices = [p for _, p in non_datetime_data]
                 ax.plot(indices, prices, 'b-o', linewidth=2, markersize=4)
@@ -166,18 +166,18 @@ class NotificationService:
             ax.set_xlabel('Date', fontsize=10)
             ax.grid(True, alpha=0.3)
 
-            # Format price labels
+                                 
             ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.0f}'))
 
             plt.tight_layout()
 
-            # Save to buffer
+                            
             buf = BytesIO()
             fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
             buf.seek(0)
             plt.close(fig)
 
-            # Send plot
+                       
             await self.bot.send_photo(
                 user_id,
                 photo=buf,
@@ -185,7 +185,7 @@ class NotificationService:
             )
 
         except ImportError:
-            # Fallback if matplotlib is not available
+                                                     
             lang = get_user_language(user_id) or "ru"
             fallback_msg = {
                 "ru": "Matplotlib не установлен. Невозможно построить график.",

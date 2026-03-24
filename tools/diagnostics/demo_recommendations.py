@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 Демо-скрипт для демонстрации системы управления рекомендуемыми продуктами
 """
@@ -12,7 +12,7 @@ def demo():
     print("🎯 Демо системы управления рекомендуемыми продуктами")
     print("=" * 60)
 
-    # Очищаем старые тестовые данные
+                                    
     print("\n🧹 Очищаем старые тестовые данные...")
     products = get_recommended_products()
     for product in products:
@@ -20,7 +20,7 @@ def demo():
             remove_recommended_product(product['id'])
             print(f"  Удален: {product['title']}")
 
-    # Добавляем демо-продукты
+                             
     print("\n➕ Добавляем демо-продукты...")
 
     demo_products = [
@@ -75,7 +75,7 @@ def demo():
         )
         if success:
             print(f"  ✅ Добавлен: {product['title']} (приоритет: {product['priority']})")
-            # Получаем ID только что добавленного продукта
+                                                          
             products = get_recommended_products()
             for p in products:
                 if p['title'] == product['title']:
@@ -84,7 +84,7 @@ def demo():
         else:
             print(f"  ❌ Ошибка при добавлении: {product['title']}")
 
-    # Показываем все рекомендуемые продукты
+                                           
     print("\n📋 Все рекомендуемые продукты:")
     products = get_recommended_products()
     for product in products:
@@ -93,7 +93,7 @@ def demo():
         print(f"     🔗 {product['url']}")
         print()
 
-    # Тестируем функцию get_available_products
+                                              
     print("🔍 Тестируем get_available_products():")
     available = get_available_products()
     print(f"  Найдено {len(available)} доступных продуктов")
@@ -102,7 +102,7 @@ def demo():
         priority = product.get('priority', 0)
         print(f"    {i}. {product['title']} (приоритет: {priority})")
 
-    # Примеры команд для админа
+                               
     print("\n📚 Примеры команд для администратора:")
     print("  /admin recommend list                    # Показать все продукты")
     print("  /admin recommend add \"Sony WH-1000XM5\" \"https://trendyol.com/sony/wh1000-p-999\" \"₺8,500\" headphones sony \"Топовые наушники с шумоподавлением\"")

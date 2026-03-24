@@ -9,7 +9,7 @@ from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-# Load locales
+              
 def load_locale(lang_code: str) -> dict:
     try:
         with open(f"locales/{lang_code}.json", "r", encoding="utf-8") as f:
@@ -25,7 +25,7 @@ LOCALES = {
     "tr": load_locale("tr")
 }
 _lang_cache: dict = {}
-_LANG_CACHE_TTL = 60  # seconds
+_LANG_CACHE_TTL = 60           
 
 def _get_user_language_cached(user_id: int) -> str:
     """Return cached user language or query DB and cache result."""
@@ -57,7 +57,7 @@ def t(user_id: int, key: str, **kwargs) -> str:
     """
     lang = _get_user_language_cached(user_id)
 
-    # If user's lang not supported, fall back to English
+                                                        
     if lang not in LOCALES:
         logger.debug("User lang '%s' not supported, falling back to 'en'", lang)
         lang = "en"
@@ -65,13 +65,13 @@ def t(user_id: int, key: str, **kwargs) -> str:
     loc = LOCALES.get(lang, {})
     text = loc.get(key)
     if text is None:
-        # fallback to English
+                             
         en_loc = LOCALES.get("en", {})
         text = en_loc.get(key)
         if text is not None:
             logger.debug("Localization fallback: key='%s' lang='%s' -> 'en'", key, lang)
         else:
-            # ultimate fallback: return key (but log once)
+                                                          
             logger.warning("Missing localization key '%s' for lang '%s' and 'en' fallback", key, lang)
             text = key
 
@@ -80,7 +80,7 @@ def t(user_id: int, key: str, **kwargs) -> str:
             text = text.format(**kwargs)
         except (KeyError, ValueError):
             logger.exception("Localization formatting failed for key='%s' lang='%s' kwargs=%r", key, lang, kwargs)
-            # return unformatted text to avoid crashing
+                                                       
 
     return text
 

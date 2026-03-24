@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 Тест для проверки работы изменения языка
 """
@@ -8,11 +8,11 @@ from dotenv import load_dotenv
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# Загружаем переменные окружения
+                                
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# Импортируем локализацию
+                         
 import sys
 sys.path.append('.')
 from localization import t, update_language_cache
@@ -30,11 +30,11 @@ async def test_language_change():
     print("🌐 Тестируем функцию изменения языка...")
     print("=" * 50)
 
-    # Проверяем текущий язык админа
+                                   
     current_lang = get_user_language(admin_id)
     print(f"📍 Текущий язык админа (ID: {admin_id}): {current_lang.upper()}")
 
-    # Тестируем клавиатуру выбора языка
+                                       
     lang_kb = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text=t(admin_id, "lang_ru"), callback_data="lang:ru"),
@@ -48,7 +48,7 @@ async def test_language_change():
 
     print("✅ Клавиатура выбора языка создана")
 
-    # Отправляем сообщение с клавиатурой выбора языка
+                                                     
     try:
         await bot.send_message(
             chat_id=admin_id,
@@ -60,16 +60,16 @@ async def test_language_change():
     except Exception as e:
         print(f"❌ Ошибка отправки сообщения: {e}")
 
-    # Тестируем изменение языка программно
+                                          
     print("\n🔄 Тестируем программное изменение языка...")
 
     test_langs = ['ru', 'en', 'az', 'tr']
     for lang in test_langs:
         set_user_language(admin_id, lang)
-        update_language_cache(admin_id, lang)  # Обновляем кеш локализации
+        update_language_cache(admin_id, lang)                             
         new_lang = get_user_language(admin_id)
 
-        # Проверяем локализацию после изменения
+                                               
         help_btn_text = t(admin_id, "btn_detailed_help")
         start_text = t(admin_id, "start_text")[:50] + "..."
 
@@ -77,7 +77,7 @@ async def test_language_change():
         print(f"    📖 Кнопка: '{help_btn_text}'")
         print(f"    📝 Старт: '{start_text}'")
 
-    # Возвращаем исходный язык
+                              
     set_user_language(admin_id, current_lang)
     print(f"\n🔙 Возвращен исходный язык: {current_lang.upper()}")
 

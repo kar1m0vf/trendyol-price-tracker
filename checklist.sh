@@ -1,17 +1,14 @@
 #!/bin/bash
-# Чек-лист перед запуском бота
 
 echo "=========================================="
 echo "Telegram Price Tracker Bot - Чек-лист"
 echo "=========================================="
 echo ""
 
-# Проверка Python
 echo "1. Проверка Python..."
 python --version && echo "   ✅ Python установлен" || echo "   ❌ Python не найден"
 echo ""
 
-# Проверка virtual environment
 echo "2. Проверка virtual environment..."
 if [ -d "venv" ]; then
     echo "   ✅ venv существует"
@@ -21,7 +18,6 @@ else
 fi
 echo ""
 
-# Проверка .env файла
 echo "3. Проверка .env файла..."
 if [ -f ".env" ]; then
     echo "   ✅ .env файл существует"
@@ -36,7 +32,6 @@ else
 fi
 echo ""
 
-# Проверка dependencies
 echo "4. Проверка зависимостей..."
 if [ -f "requirements.txt" ]; then
     echo "   ✅ requirements.txt существует"
@@ -47,7 +42,6 @@ else
 fi
 echo ""
 
-# Проверка основных файлов
 echo "5. Проверка основных файлов..."
 for file in bot.py config.py database.py scraper.py middleware.py keyboards.py utils.py
 do
@@ -59,7 +53,6 @@ do
 done
 echo ""
 
-# Проверка БД
 echo "6. Проверка базы данных..."
 if [ -f "trendyol_bot.db" ]; then
     echo "   ✅ trendyol_bot.db существует"

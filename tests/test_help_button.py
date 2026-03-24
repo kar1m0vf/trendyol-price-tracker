@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 Тест для проверки работы кнопки подробной справки
 """
@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# Загружаем переменные окружения
+                                
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
@@ -20,7 +20,7 @@ async def test_help_button():
 
     bot = Bot(token=BOT_TOKEN)
 
-    # Создаем клавиатуру с кнопкой подробной справки
+                                                    
     help_keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📖 Подробная справка", callback_data="help:full")]
     ])
@@ -43,7 +43,7 @@ async def test_help_button():
 💡 Для получения подробной информации нажмите кнопку ниже."""
 
     try:
-        # Отправляем сообщение самому себе для тестирования
+                                                           
         await bot.send_message(chat_id=int(os.getenv("ADMIN_IDS", "975282591").split(",")[0]),
                               text=help_text,
                               reply_markup=help_keyboard,

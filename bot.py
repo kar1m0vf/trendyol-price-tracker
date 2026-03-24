@@ -11,7 +11,6 @@ import os
 import csv
 import time
 import aiohttp
-import shutil
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -31,7 +30,8 @@ from database import (
     add_subscription,
     get_user_subscriptions,
     remove_subscription,
-    get_all_subscriptions,
+    iter_all_subscriptions,
+    get_subscriptions_count,
     update_last_price,
     update_mode,
     set_user_language,
@@ -46,8 +46,10 @@ from database import (
     save_price_points_batch,
     get_bot_text,
     set_bot_text,
+    create_sqlite_backup,
+    close_all_connections,
 )
-from localization import t, LOCALES # Импортируем t и LOCALES из localization
+from localization import t, LOCALES                                          
 
 
 def _parse_kv_floats(text: Optional[str]) -> Dict[str, float]:
@@ -59,7 +61,7 @@ def _parse_kv_floats(text: Optional[str]) -> Dict[str, float]:
     out: Dict[str, float] = {}
     if not text:
         return out
-    # patterns like 'min: 12.34', 'max:1,234', 'percent: 10%'
+                                                             
     patterns = {
         'min': r"\bmin\s*:\s*([0-9]+(?:[\.,][0-9]+)?)",
         'max': r"\bmax\s*:\s*([0-9]+(?:[\.,][0-9]+)?)",
@@ -89,49 +91,104 @@ from scraper import (
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from services.notification_service import NotificationService
 
-# matplotlib is imported lazily in the history handler to avoid hard dependency
+                                                                               
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-# Проверяем что BOT_TOKEN установлен перед созданием Bot
+
+def _get_env_int(
+    name: str,
+    default: int,
+    *,
+    min_value: Optional[int] = None,
+    max_value: Optional[int] = None,
+) -> int:
+    """Read integer env var with validation and safe fallback."""
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        logger.warning("Invalid integer env %s=%r; using default=%s", name, raw_value, default)
+        return default
+
+    if min_value is not None and value < min_value:
+        logger.warning("Env %s=%s is below min=%s; clamping", name, value, min_value)
+        value = min_value
+    if max_value is not None and value > max_value:
+        logger.warning("Env %s=%s is above max=%s; clamping", name, value, max_value)
+        value = max_value
+    return value
+
+
+                                                    
+CHECK_ALL_INTERVAL_MINUTES = _get_env_int(
+    "CHECK_ALL_INTERVAL_MINUTES",
+    60,
+    min_value=1,
+    max_value=24 * 60,
+)
+CHECK_ALL_FETCH_CONCURRENCY = _get_env_int(
+    "CHECK_ALL_FETCH_CONCURRENCY",
+    10,
+    min_value=1,
+    max_value=100,
+)
+DB_BACKUP_KEEP_FILES = _get_env_int(
+    "DB_BACKUP_KEEP_FILES",
+    7,
+    min_value=1,
+    max_value=365,
+)
+DB_BACKUP_HOUR = _get_env_int("DB_BACKUP_HOUR", 3, min_value=0, max_value=23)
+DB_BACKUP_MINUTE = _get_env_int("DB_BACKUP_MINUTE", 0, min_value=0, max_value=59)
+
+                                                          
+CHECK_ALL_JOB_ID = "check_all_interval"
+BACKUP_JOB_ID = "db_backup_daily"
+
+                                                        
 _check_bot_token()
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# Instantiate shared notification service to avoid duplicate implementations
+                                                                            
 notification_service = NotificationService(bot)
 
-# CHANGED: default notify mode (можно поменять на "discount" если хочешь)
+                                                                         
 try:
-    from config import DEFAULT_NOTIFY_MODE  # optional config override
+    from config import DEFAULT_NOTIFY_MODE                            
 except Exception:
-    DEFAULT_NOTIFY_MODE = "hourly"  # CHANGED: default now hourly; change to "discount" if preferred
+    DEFAULT_NOTIFY_MODE = "hourly"                                                                  
 
-# locales loader
+                
 
-# Admin configuration
-# ADMIN_IDS is loaded from .env via config.py
-# DB = "trendyol_bot.db"
+                     
+                                             
+                        
 
-# Health check variables
+                        
 last_health_check = 0
-health_check_interval = 60  # seconds
+health_check_interval = 60           
 
-# User state for alert editing
-alert_edit_state = {}  # user_id -> sub_id
-report_state = {}  # user_id -> report_data
+                              
+alert_edit_state = {}                     
+report_state = {}                          
 
-# Onboarding state for new users
-onboarding_state = {}  # user_id -> step
+                                
+onboarding_state = {}                   
 
-# Lock for scheduler to prevent race conditions
+                                               
 scheduler_lock = asyncio.Lock()
+scheduler_start_lock = asyncio.Lock()
+check_all_lock = asyncio.Lock()
 
-init_db()
+init_db(run_maintenance=False)
 
-# --- helpers
+             
 def handle_blocked_user(user_id: int):
     """Remove all subscriptions from user who blocked the bot."""
     try:
@@ -161,7 +218,7 @@ async def send_notification_with_timeout(
     Returns:
         True if sent successfully, False otherwise
     """
-    # Delegate to NotificationService implementation (centralized, tested)
+                                                                          
     try:
         return await notification_service.send_notification_safe(
             user_id,
@@ -178,7 +235,7 @@ async def send_notification_with_timeout(
 def convert_to_turkish_url(url: str) -> str:
     """Convert English Trendyol URL to Turkish version for better parsing"""
     if "/en/" in url:
-        # Remove the /en/ part to get Turkish version
+                                                     
         turkish_url = url.replace("/en/", "/")
         logger.info(f"Converted English URL to Turkish: {url} -> {turkish_url}")
         return turkish_url
@@ -189,8 +246,8 @@ async def resolve_short_url(url: str) -> str:
     original_url = url
     if "ty.gl/" in url:
         try:
-            # Simple redirect resolution for ty.gl links
-            # ty.gl redirects to trendyol.com, we can extract the path
+                                                        
+                                                                      
             import aiohttp
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, allow_redirects=True, timeout=10) as response:
@@ -200,7 +257,7 @@ async def resolve_short_url(url: str) -> str:
         except Exception as e:
             logger.warning(f"Failed to resolve short URL {original_url}: {e}")
 
-    # Convert English URLs to Turkish for better parsing
+                                                        
     url = convert_to_turkish_url(url)
     return url
 
@@ -216,24 +273,24 @@ def is_trendyol_product_url(u: str) -> bool:
     if not u or not isinstance(u, str):
         return False
     try:
-        # Проверка длины URL (защита от DoS)
-        if len(u) > 2000:  # Максимальная длина URL
+                                            
+        if len(u) > 2000:                          
             return False
 
         parsed = urlparse(u.strip())
 
-        # Проверяем протокол
+                            
         if parsed.scheme not in {"http", "https"}:
             return False
 
-        # Проверяем host строго (без substring spoofing вида "evil-trendyol.com")
+                                                                                 
         host = (parsed.hostname or "").lower().rstrip(".")
         if not host:
             return False
         if host != "trendyol.com" and not host.endswith(".trendyol.com"):
             return False
 
-        # Проверяем что содержит идентификатор продукта
+                                                       
         path = (parsed.path or "").lower()
         return ("/p/" in path or "-p-" in path)
     except (AttributeError, TypeError, UnicodeError):
@@ -256,16 +313,16 @@ def parse_date_flexible(date_str: str) -> Optional[datetime]:
     
     date_str = date_str.strip()
     
-    # Список форматов для попытки парсинга (в порядке вероятности)
+                                                                  
     formats = [
-        "%d.%m.%Y %H:%M:%S",      # 20.09.2025 14:30:00
-        "%d.%m.%Y %H:%M",         # 20.09.2025 14:30
-        "%d.%m.%Y",                # 20.09.2025
-        "%Y-%m-%d %H:%M:%S",       # 2025-09-20 14:30:00
-        "%Y-%m-%d %H:%M",          # 2025-09-20 14:30
-        "%Y-%m-%d",                # 2025-09-20
-        "%d/%m/%Y",                # 20/09/2025
-        "%m/%d/%Y",                # 09/20/2025
+        "%d.%m.%Y %H:%M:%S",                           
+        "%d.%m.%Y %H:%M",                           
+        "%d.%m.%Y",                            
+        "%Y-%m-%d %H:%M:%S",                            
+        "%Y-%m-%d %H:%M",                            
+        "%Y-%m-%d",                            
+        "%d/%m/%Y",                            
+        "%m/%d/%Y",                            
     ]
     
     for fmt in formats:
@@ -292,7 +349,7 @@ def safe_ts_to_iso(ts_val) -> str:
             return str(ts_val)
     if isinstance(ts_val, str):
         try:
-            # if already ISO-like
+                                 
             datetime.fromisoformat(ts_val)
             return ts_val
         except Exception:
@@ -327,7 +384,7 @@ async def send_notification_safe(
     Returns:
         True если успешно отправлено, False если ошибка
     """
-    # Delegate to shared NotificationService to avoid duplicate logic
+                                                                     
     try:
         return await notification_service.send_notification_safe(
             user_id,
@@ -341,7 +398,7 @@ async def send_notification_safe(
         return False
 
 async def send_history_plot(user_id: int, url: str, hist):
-    # Delegate history plotting to the centralized NotificationService implementation
+                                                                                     
     try:
         return await notification_service.send_history_plot(user_id, url, hist)
     except Exception:
@@ -354,7 +411,7 @@ async def send_history_plot(user_id: int, url: str, hist):
 
 async def send_history_for_subscription(user_id: int, sub_id: int, url: str):
     """Helper that prefers local DB history and falls back to akakce scraper."""
-    # Сначала пробуем локальную БД
+                                  
     local_hist = get_local_price_history(sub_id) if sub_id else None
     if local_hist and len(local_hist) >= 3:
         hist = local_hist
@@ -369,7 +426,7 @@ async def send_history_for_subscription(user_id: int, sub_id: int, url: str):
 
     await send_history_plot(user_id, url, hist)
 
-# --- Trending helpers and state
+                                
 from typing import List, Tuple, Set
 
 TREND_SEARCH_AWAIT: Set[int] = set()
@@ -411,7 +468,7 @@ async def send_trending_list(user_id: int, items: List[Tuple[str, Optional[float
         return
     header = t(user_id, "trending_header")
     await bot.send_message(user_id, header + "\n\n" + format_trending_items(user_id, items))
-# ---------------- UI builders (localized) ----------------
+                                                           
 def get_main_kb(user_id: int) -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardMarkup(
         keyboard=[
@@ -424,7 +481,7 @@ def get_main_kb(user_id: int) -> ReplyKeyboardMarkup:
     return kb
 
 def get_notify_inline_kb(user_id: int, sub_id: Optional[int] = None) -> InlineKeyboardMarkup:
-    # If sub_id provided, include it in callback_data; otherwise fallback to simple callbacks (handled elsewhere)
+                                                                                                                 
     if sub_id:
         return InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text=t(user_id, "btn_mode_hourly"), callback_data=f"mode:{sub_id}:hourly"),
@@ -442,7 +499,7 @@ def subscription_controls_kb_for_user(user_id: int, sub_id: int) -> InlineKeyboa
         sub = get_subscription(sub_id)
         logger.debug("subscription_controls_kb_for_user: sub=%r", sub)
         if sub:
-            # sub is canonical: id, user_id, url, notify_mode, last_price, product_title, product_image, ...
+                                                                                                            
             try:
                 mode_db = sub[3]
             except Exception:
@@ -469,13 +526,13 @@ def subscription_controls_kb_for_user(user_id: int, sub_id: int) -> InlineKeyboa
         ]
     ])
 
-# start
-# OLD HANDLER: moved to handlers/basic.py
+       
+                                         
 async def cmd_start_old(message: types.Message):
     user_id = _get_request_user_id(message)
     add_user_if_not_exists(user_id)
 
-    # Start onboarding for new users
+                                    
     if user_id not in onboarding_state:
         onboarding_state[user_id] = "welcome"
         await send_onboarding_step(user_id, message)
@@ -491,7 +548,7 @@ async def send_onboarding_step(user_id: int, message: types.Message):
     step = onboarding_state.get(user_id, "welcome")
 
     if step == "welcome":
-        # Welcome message with keyboard
+                                       
         kb = ReplyKeyboardMarkup(
             keyboard=[
                 [KeyboardButton(text=t(user_id, "onboarding_try"))],
@@ -507,7 +564,7 @@ async def send_onboarding_step(user_id: int, message: types.Message):
         onboarding_state[user_id] = "waiting_try"
 
     elif step == "waiting_try":
-        # User clicked "Try it"
+                               
         kb = ReplyKeyboardMarkup(
             keyboard=[
                 [KeyboardButton(text=t(user_id, "onboarding_done"))],
@@ -523,7 +580,7 @@ async def send_onboarding_step(user_id: int, message: types.Message):
         onboarding_state[user_id] = "explained"
 
     elif step == "explained":
-        # Onboarding completed
+                              
         del onboarding_state[user_id]
         await message.answer(
             t(user_id, "onboarding_complete"),
@@ -635,8 +692,8 @@ async def cmd_language_command(message: types.Message):
     else:
         await cmd_lang_message(message)
 
-# --- Commands: help, mysubs alias, history, unsubscribe, setmode, about, ping, settings
-# OLD HANDLER: moved to handlers/basic.py
+                                                                                        
+                                         
 async def cmd_help_old(message: types.Message):
     user_id = message.from_user.id
     args = message.text.split()
@@ -644,7 +701,7 @@ async def cmd_help_old(message: types.Message):
     if len(args) > 1 and args[1].lower() == "full":
         await message.answer(t(user_id, "help_full"))
     else:
-        # Создаем клавиатуру с кнопкой для подробной справки
+                                                            
         help_keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=t(user_id, "btn_detailed_help"), callback_data="help:full")]
         ])
@@ -657,12 +714,12 @@ async def cmd_report(message: types.Message):
     parts = (message.text or "").split(maxsplit=1)
 
     if len(parts) < 2:
-        # Ask user to provide report text
+                                         
         report_state[user_id] = {"step": "waiting_text"}
         await message.answer(t(user_id, "report_prompt"))
         return
 
-    # Direct report text provided
+                                 
     report_text = parts[1].strip()
     if len(report_text) < 5:
         await message.answer(t(user_id, "report_too_short"))
@@ -670,7 +727,7 @@ async def cmd_report(message: types.Message):
 
     await submit_user_report(user_id, report_text, message)
 
-# OLD HANDLER: moved to handlers/subscription_handler.py
+                                                        
 async def cmd_mysubs_cmd_old(message: types.Message):
     await cmd_mysubs(message)
 
@@ -682,14 +739,14 @@ async def cmd_history(message: types.Message):
         return
     arg = parts[1].strip()
 
-    # Try treat as subscription id
+                                  
     if arg.isdigit():
         sid = int(arg)
         sub = get_subscription(sid)
         if not sub or sub[1] != message.from_user.id:
             await message.answer(t(message.from_user.id, "no_subs"))
             return
-        # Безопасная распаковка: get_subscription возвращает 13 полей (с price_alert)
+                                                                                     
         if len(sub) >= 13:
             url = sub[2]
         elif len(sub) >= 12:
@@ -697,24 +754,24 @@ async def cmd_history(message: types.Message):
         else:
             url = sub[2] if len(sub) > 2 else ""
         await message.answer(t(message.from_user.id, "history_fetching"))
-        # First try local DB history
+                                    
         db_hist = get_price_history(sid, limit=1000)
         if db_hist and len(db_hist) >= 2:
-            # convert (ts, price) -> [(iso_date, price), ...] using safe conversion
+                                                                                   
             hist = [(safe_ts_to_iso(r[0]), r[1]) for r in db_hist]
             await send_history_plot(message.from_user.id, url, hist)
             return
 
-        # Fallback to Akakce-based history
+                                          
         hist = await get_price_history_from_akakce_async(url)
         if not hist:
             await message.answer(t(message.from_user.id, "history_not_found"))
             return
-        # Save a few recent points to DB for faster future responses (non-blocking)
+                                                                                   
         try:
             for d_str, p in hist[-30:]:
                 try:
-                    # attempt to parse date to ts
+                                                 
                     ts = None
                     if isinstance(d_str, str):
                         try:
@@ -735,7 +792,7 @@ async def cmd_history(message: types.Message):
         await send_history_plot(message.from_user.id, url, hist)
         return
 
-    # Otherwise treat as URL
+                            
     url = normalize_url(arg)
     if "trendyol.com" not in url.lower():
         await message.answer(t(message.from_user.id, "not_trendyol"))
@@ -751,7 +808,7 @@ async def cmd_history(message: types.Message):
         return
     await send_history_plot(message.from_user.id, url, hist)
 
-# OLD HANDLER: moved to handlers/subscription_handler.py
+                                                        
 async def cmd_unsubscribe_old(message: types.Message):
     parts = (message.text or "").split()
     if len(parts) < 2 or not parts[1].isdigit():
@@ -768,7 +825,7 @@ async def cmd_unsubscribe_old(message: types.Message):
     except Exception:
         await message.answer(t(message.from_user.id, "error_generic"))
 
-# Backwards-compatible alias for legacy API expected by tests
+                                                             
 cmd_unsubscribe = cmd_unsubscribe_old
 
 @dp.message(Command("setmode"))
@@ -787,7 +844,7 @@ async def cmd_setmode(message: types.Message):
         await message.answer(t(message.from_user.id, "no_subs_found_id"))
         return
     try:
-        # безопасная проверка владельца
+                                       
         if len(sub) >= 2 and sub[1] != message.from_user.id:
             await message.answer(t(message.from_user.id, "no_subs_found_id"))
             return
@@ -840,7 +897,7 @@ async def cmd_price_alert(message: types.Message):
         await message.answer(t(user_id, "price_alert_sub_not_found"))
         return
     
-    # Безопасная проверка владельца
+                                   
     if len(sub) >= 2 and sub[1] != user_id:
         await message.answer(t(user_id, "price_alert_not_your_sub"))
         return
@@ -849,7 +906,7 @@ async def cmd_price_alert(message: types.Message):
         update_subscription_settings(sid, price_alert=target_price)
         current_price = sub[4] if len(sub) > 4 else None
 
-        # current_price may be 0.0 — check explicitly for None
+                                                              
         if current_price is not None and current_price <= target_price:
             await message.answer(
                 t(user_id, "price_alert_set_success_already_below").format(
@@ -929,7 +986,7 @@ async def cmd_settings(message: types.Message):
                 sub_id = int(parts[2])
                 minutes = int(parts[3])
                 
-                if minutes < 15:  # минимальный интервал 15 минут
+                if minutes < 15:                                 
                     await message.answer(t(message.from_user.id, "interval_too_short"))
                     return
                     
@@ -953,22 +1010,36 @@ async def cmd_settings(message: types.Message):
         logger.exception("Settings command error: %s", e)
         await message.answer(t(message.from_user.id, "error_generic"))
 
-# ADDED: manual runcheck for testing
+                                    
 @dp.message(Command("runcheck"))
 async def cmd_runcheck(message: types.Message):
-    """Run check_all manually (for testing). Anyone can call it; adjust for admin-only if needed."""
-    await message.answer(t(message.from_user.id, "please_wait"))
+    """Run full subscription check manually (admin-only)."""
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        await message.answer(t(user_id, "admin_access_denied"))
+        return
+
+    await message.answer(t(user_id, "please_wait"))
     try:
-        await check_all()
-        await message.answer("✅ " + t(message.from_user.id, "done"))
+        result = await check_all(trigger=f"manual:{user_id}")
+        if result.get("status") == "skipped":
+            await message.answer("⏳ Проверка уже выполняется. Повторите позже.")
+            return
+        if result.get("status") == "failed":
+            await message.answer(t(user_id, "error_runcheck"))
+            return
+        await message.answer(
+            "✅ " + t(user_id, "done") +
+            f"\nProcessed: {result.get('processed', 0)}, alerted: {result.get('alerted', 0)}"
+        )
     except Exception as e:
         logger.exception("manual runcheck error: %s", e)
-        await message.answer(t(message.from_user.id, "error_runcheck") + f": {e}")
+        await message.answer(t(user_id, "error_runcheck") + f": {e}")
 
-# === ВОЛНА 2: НОВЫЕ КОМАНДЫ ===
+                                
 
-# /stats <ID> - Статистика цен по подписке
-# OLD HANDLER: moved to handlers/analytics_handler.py
+                                          
+                                                     
 async def cmd_stats_old(message: types.Message):
     """Show price statistics for a subscription"""
     try:
@@ -984,7 +1055,7 @@ async def cmd_stats_old(message: types.Message):
             await message.answer(t(message.from_user.id, "no_subs_found_id"))
             return
         
-        # Проверяем владельца
+                             
         if sub[1] != message.from_user.id:
             await message.answer(t(message.from_user.id, "error_not_your_sub"))
             return
@@ -995,13 +1066,13 @@ async def cmd_stats_old(message: types.Message):
             await message.answer(t(message.from_user.id, "stats_no_history"))
             return
         
-        # Форматируем статистику
+                                
         curr = f"{stats['current']:.2f}" if stats['current'] else "—"
         min_p = f"{stats['min']:.2f}" if stats['min'] else "—"
         max_p = f"{stats['max']:.2f}" if stats['max'] else "—"
         avg_p = f"{stats['avg']:.2f}" if stats['avg'] else "—"
         
-        # Используем локализованный заголовок
+                                             
         header = t(message.from_user.id, "stats_header")
         text = f"""{header}
 
@@ -1024,8 +1095,8 @@ async def cmd_stats_old(message: types.Message):
         logger.exception("Stats command error: %s", e)
         await message.answer(t(message.from_user.id, "error_generic"))
 
-# /all_list - Компактный список всех подписок
-# OLD HANDLER: moved to handlers/analytics_handler.py
+                                             
+                                                     
 async def cmd_all_list_old(message: types.Message):
     """Show all subscriptions in compact table format"""
     try:
@@ -1035,7 +1106,7 @@ async def cmd_all_list_old(message: types.Message):
             await message.answer(t(message.from_user.id, "no_subs"))
             return
         
-        # Форматируем в таблицу
+                               
         header = t(message.from_user.id, "cmd_all_list_header") + "\n\n"
         header += "`ID  | " + t(message.from_user.id, "mode") + "      | " + t(message.from_user.id, "price") + "    | " + t(message.from_user.id, "status") + "`\n"
         header += "`" + "—" * 38 + "`\n"
@@ -1066,8 +1137,8 @@ async def cmd_all_list_old(message: types.Message):
         logger.exception("All list command error: %s", e)
         await message.answer(t(message.from_user.id, "error_generic"))
 
-# /top_drops - Топ товаров с падением цены
-# OLD HANDLER: moved to handlers/analytics_handler.py
+                                          
+                                                     
 async def cmd_top_drops_old(message: types.Message):
     """Show top products with biggest price drops"""
     try:
@@ -1098,7 +1169,7 @@ async def cmd_top_drops_old(message: types.Message):
         await message.answer(t(message.from_user.id, "error_generic"))
 
 
-# /export [csv|json] - Export user's subscriptions to CSV or JSON and save backup
+                                                                                 
 @dp.message(Command("export"))
 async def cmd_export(message: types.Message):
     try:
@@ -1121,25 +1192,25 @@ async def cmd_export(message: types.Message):
             payload = json.dumps(subs, ensure_ascii=False, indent=2)
             with open(fname, "w", encoding="utf-8") as f:
                 f.write(payload)
-            # send to user
+                          
             with open(fname, "rb") as f:
                 await bot.send_document(user_id, types.InputFile(f, filename=os.path.basename(fname)))
             await message.answer(t(user_id, "export_done").format(path=fname))
             return
 
-        # csv
+             
         fname = f"backups/subscriptions_{user_id}_{ts}.csv"
-        # determine columns (stable order)
+                                          
         cols = [
             'id','user_id','url','mode','last_price','product_title','product_image',
             'min_price','max_price','notify_percent','notify_interval','last_notify_time','price_alert','tags'
         ]
-        # write CSV with BOM for Excel compatibility
+                                                    
         with open(fname, "w", encoding="utf-8-sig", newline='') as f:
             writer = csv.DictWriter(f, fieldnames=cols)
             writer.writeheader()
             for row in subs:
-                # ensure all keys present
+                                         
                 safe_row = {k: row.get(k, "") for k in cols}
                 writer.writerow(safe_row)
 
@@ -1153,7 +1224,7 @@ async def cmd_export(message: types.Message):
         await message.answer(t(message.from_user.id, "error_generic"))
 
 
-# /history_export <ID> [csv|json] - экспорт истории цен по подписке
+                                                                   
 @dp.message(Command("history_export"))
 async def cmd_history_export(message: types.Message):
     try:
@@ -1165,7 +1236,7 @@ async def cmd_history_export(message: types.Message):
         sub_id = int(parts[1])
         fmt = "csv"
         days = None
-        # parse optional args: any numeric => days, csv/json => fmt
+                                                                   
         for p in parts[2:]:
             if p.lower() in {"csv", "json"}:
                 fmt = p.lower()
@@ -1180,12 +1251,12 @@ async def cmd_history_export(message: types.Message):
             await message.answer(t(message.from_user.id, "error_not_your_sub"))
             return
 
-        # Получаем историю: если days задан — используем локальную резонную выборку по дням,
-        # иначе берём полный dump (limit)
+                                                                                            
+                                         
         if days is not None:
-            rows = get_local_price_history(sub_id, days=min(days, 365))  # Max 1 year
+            rows = get_local_price_history(sub_id, days=min(days, 365))              
         else:
-            rows = get_price_history(sub_id, limit=5000)  # Reduced limit for safety
+            rows = get_price_history(sub_id, limit=5000)                            
 
         if not rows:
             await message.answer(t(message.from_user.id, "history_export_no_data"))
@@ -1194,7 +1265,7 @@ async def cmd_history_export(message: types.Message):
         os.makedirs("backups", exist_ok=True)
         ts = datetime.now().strftime('%Y%m%d_%H%M%S')
 
-        # JSON payload: adapt depending on row type (ts int or iso string)
+                                                                          
         if fmt == "json":
             if isinstance(rows[0][0], str):
                 payload = json.dumps([{"iso": r[0], "price": r[1]} for r in rows], ensure_ascii=False, indent=2)
@@ -1208,7 +1279,7 @@ async def cmd_history_export(message: types.Message):
             await message.answer(t(message.from_user.id, "history_export_ready").format(filename=fname))
             return
 
-        # CSV
+             
         fname = f"backups/history_{sub_id}_{ts}.csv"
         with open(fname, "w", encoding="utf-8-sig", newline='') as f:
             writer = csv.writer(f)
@@ -1235,7 +1306,7 @@ async def cmd_history_export(message: types.Message):
         await message.answer(t(message.from_user.id, "error_generic"))
 
 
-# /history_plot <ID> [days] - build and send PNG price history plot
+                                                                   
 @dp.message(Command("history_plot"))
 async def cmd_history_plot(message: types.Message):
     try:
@@ -1257,17 +1328,17 @@ async def cmd_history_plot(message: types.Message):
             await message.answer(t(message.from_user.id, "error_not_your_sub"))
             return
 
-        # get history (prefer local summary for days)
+                                                     
         if days is not None:
-            rows = get_local_price_history(sub_id, days=min(days, 180))  # Max 6 months for plots
+            rows = get_local_price_history(sub_id, days=min(days, 180))                          
         else:
-            rows = get_price_history(sub_id, limit=2000)  # Reduced limit for plots
+            rows = get_price_history(sub_id, limit=2000)                           
 
         if not rows:
             await message.answer(t(message.from_user.id, "history_plot_no_data"))
             return
 
-        # normalize to list of (iso, price) for send_history_plot
+                                                                 
         hist = []
         for ts_val, price in rows:
             if isinstance(ts_val, str):
@@ -1287,7 +1358,7 @@ async def cmd_history_plot(message: types.Message):
         await message.answer(t(message.from_user.id, "error_generic"))
 
 
-# /compare <ID> - сравнение цен на похожие товары
+                                                 
 @dp.message(Command("compare"))
 async def cmd_compare(message: types.Message):
     """Unified compare command:
@@ -1299,7 +1370,7 @@ async def cmd_compare(message: types.Message):
     args = (message.text or "").split()
 
     try:
-        # Mode 1: compare by existing subscription id
+                                                     
         if len(args) == 2 and args[1].isdigit():
             from scraper import get_similar_products_comparison
 
@@ -1322,7 +1393,7 @@ async def cmd_compare(message: types.Message):
                 await message.answer(t(user_id, "compare_no_similar"))
             return
 
-        # Mode 2: compare two direct product URLs
+                                                 
         if len(args) >= 3:
             await _compare_products_by_urls(message, args[1], args[2])
             return
@@ -1350,7 +1421,7 @@ async def _compare_products_by_urls(message: types.Message, url1: str, url2: str
     await message.answer(t(user_id, "compare_loading"))
 
     try:
-        # Fetch in parallel to keep the command responsive.
+                                                           
         (price1, title1, _), (price2, title2, _) = await asyncio.gather(
             get_product_info_async(url1),
             get_product_info_async(url2),
@@ -1381,26 +1452,26 @@ async def _compare_products_by_urls(message: types.Message, url1: str, url2: str
         await message.answer(t(user_id, "error_generic"))
 
 
-# --- callback handler (languages, modes, unsubscribe, history)
-# OLD HANDLER: moved to handlers/callback_handler.py
+                                                               
+                                                    
 async def callback_handler_old(cq: CallbackQuery):
     data = cq.data or ""
     user_id = cq.from_user.id
     logger.info(f"Legacy callback received: data='{data}', user={user_id}")
 
     try:
-        # --- Подробная справка ---
+                                   
         if data == "help:full":
             await cq.answer()
             await cq.message.edit_text(t(user_id, "help_full"))
             return
 
-        # --- Смена языка ---
+                             
         if data.startswith("lang:"):
             await cq.answer()
             lang = data.split(":", 1)[1]
             set_user_language(user_id, lang)
-            # Обновляем кеш локализации новым языком
+                                                    
             from localization import update_language_cache
             update_language_cache(user_id, lang)
             try:
@@ -1417,7 +1488,7 @@ async def callback_handler_old(cq: CallbackQuery):
                 logger.exception("Failed to send updated main kb or edit msg for %s: %s", user_id, e)
             return
 
-        # --- Отписка от одного товара ---
+                                          
         if data.startswith("unsubscribe:"):
             try:
                 sub_id = int(data.split(":", 1)[1])
@@ -1438,7 +1509,7 @@ async def callback_handler_old(cq: CallbackQuery):
                 await cq.answer(t(user_id, "error_generic"), show_alert=True)
             return
 
-        # --- Подтверждение массовой отписки ---
+                                                
         if data.startswith("confirm_unsub_all:"):
             await cq.answer()
             try:
@@ -1453,7 +1524,7 @@ async def callback_handler_old(cq: CallbackQuery):
                 await cq.message.edit_text(t(user_id, "error_generic"))
             return
 
-        # --- Смена режима уведомлений ---
+                                          
         if data.startswith("mode:"):
             parts = data.split(":")
             if len(parts) == 3:
@@ -1462,7 +1533,7 @@ async def callback_handler_old(cq: CallbackQuery):
                     sub_id = int(sub_id_str)
                     sub = get_subscription(sub_id)
                     logger.debug("mode callback: sub=%r user=%s", sub, user_id)
-                    # Проверяем владельца в безопасном режиме
+                                                             
                     if not sub:
                         await cq.answer(t(user_id, "no_subs"), show_alert=True)
                         return
@@ -1482,13 +1553,13 @@ async def callback_handler_old(cq: CallbackQuery):
                         await cq.answer(t(user_id, "error_generic"), show_alert=True)
                         return
 
-                    # Обновляем интерфейс и подтверждаем пользователю
+                                                                     
                     try:
                         await cq.message.edit_reply_markup(reply_markup=subscription_controls_kb_for_user(user_id, sub_id))
                         await cq.answer(t(user_id, "mode_changed_short").format(mode=mode))
                     except Exception as e:
                         logger.exception("mode callback UI update failed for sub %s: %s", sub_id, e)
-                        # Всё ещё возвращаем успех пользователю, т.к. БД уже обновлена
+                                                                                      
                         try:
                             await cq.answer(t(user_id, "mode_changed_short").format(mode=mode))
                         except:
@@ -1500,7 +1571,7 @@ async def callback_handler_old(cq: CallbackQuery):
                     await cq.answer(t(user_id, "error_generic"), show_alert=True)
             return
 
-        # --- Редактирование подписки ---
+                                         
         if data.startswith("edit_sub:"):
             await cq.answer()
             try:
@@ -1510,7 +1581,7 @@ async def callback_handler_old(cq: CallbackQuery):
                     await cq.answer(t(user_id, "error_not_your_sub"), show_alert=True)
                     return
                 
-                # Формируем детальную информацию о подписке
+                                                           
                 try:
                     (_, _, url, mode, last_price, product_title, product_image,
                      min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert) = sub
@@ -1519,7 +1590,7 @@ async def callback_handler_old(cq: CallbackQuery):
                      min_price, max_price, notify_percent, notify_interval, last_notify_time) = sub[:12]
                     price_alert = None
                 
-                # Формируем текст с информацией о подписке
+                                                          
                 title = product_title if product_title else url[:60] + "..." if len(url) > 60 else url
                 price_text = f"{last_price:.0f} TL" if last_price is not None else t(user_id, "unknown_price")
                 mode_text = t(user_id, "mode_hourly") if mode == "hourly" else t(user_id, "mode_discount")
@@ -1541,7 +1612,7 @@ async def callback_handler_old(cq: CallbackQuery):
                 if notify_interval is not None and notify_interval != 60:
                     edit_text += f"⏰ {t(user_id, 'interval')}: {notify_interval} {t(user_id, 'minutes')}\n"
                 
-                # Отправляем сообщение с меню редактирования
+                                                            
                 await bot.send_message(
                     user_id,
                     edit_text,
@@ -1554,7 +1625,7 @@ async def callback_handler_old(cq: CallbackQuery):
                 await cq.answer(t(user_id, "error_generic"), show_alert=True)
             return
 
-        # --- Редактирование ценового алерта ---
+                                                
         if data.startswith("alert_edit:"):
             await cq.answer()
             try:
@@ -1597,7 +1668,7 @@ async def callback_handler_old(cq: CallbackQuery):
                 ])
 
                 await bot.send_message(user_id, alert_text, reply_markup=keyboard, parse_mode="HTML")
-                alert_edit_state[user_id] = sub_id  # Устанавливаем состояние для ввода цены
+                alert_edit_state[user_id] = sub_id                                          
                 await cq.answer()
 
             except ValueError:
@@ -1607,7 +1678,7 @@ async def callback_handler_old(cq: CallbackQuery):
                 await cq.answer(t(user_id, "error_generic"), show_alert=True)
             return
 
-        # --- Удаление алерта ---
+                                 
         if data.startswith("alert_remove:"):
             try:
                 sub_id = int(data.split(":", 1)[1])
@@ -1628,14 +1699,14 @@ async def callback_handler_old(cq: CallbackQuery):
                 await cq.answer(t(user_id, "error_generic"), show_alert=True)
             return
 
-        # --- Возврат к списку алертов ---
+                                          
         if data == "alerts_back":
             await cq.answer()
-            # Повторно вызываем команду alerts
+                                              
             await cmd_alerts(cq.message)
             return
 
-        # --- Запрос истории цен ---
+                                    
         if data.startswith("history:"):
             await cq.answer(t(user_id, "history_fetching_short"))
             try:
@@ -1645,7 +1716,7 @@ async def callback_handler_old(cq: CallbackQuery):
                     await bot.send_message(user_id, t(user_id, "error_not_your_sub"))
                     return
                 url = sub[2]
-                # Prefer DB history
+                                   
                 db_hist = get_price_history(sid, limit=1000)
                 if db_hist and len(db_hist) >= 2:
                     hist = [(safe_ts_to_iso(r[0]), r[1]) for r in db_hist]
@@ -1656,7 +1727,7 @@ async def callback_handler_old(cq: CallbackQuery):
                 if not hist:
                     await bot.send_message(user_id, t(user_id, "history_not_found"))
                     return
-                # Save recent points
+                                    
                 try:
                     for d_str, p in hist[-30:]:
                         try:
@@ -1682,7 +1753,7 @@ async def callback_handler_old(cq: CallbackQuery):
                 await bot.send_message(user_id, t(user_id, "error_generic"))
             return
 
-        # --- Сравнение цен ---
+                               
         if data.startswith("compare:"):
             await cq.answer(t(user_id, "compare_loading"))
             try:
@@ -1705,14 +1776,14 @@ async def callback_handler_old(cq: CallbackQuery):
                 await bot.send_message(user_id, t(user_id, "error_generic"))
             return
 
-        # --- Меню трендов ---
+                              
         if data == "trend:all":
             await cq.answer()
             await bot.send_message(user_id, t(user_id, "please_wait"))
             try:
                 items = await get_trending_all_top3_async()
                 await send_trending_list(user_id, items)
-                await cq.message.delete() # Удаляем исходное меню
+                await cq.message.delete()                        
             except Exception as e:
                 logger.exception("trending all error: %s", e)
                 await bot.send_message(user_id, t(user_id, "trending_no_results"))
@@ -1742,7 +1813,7 @@ async def callback_handler_old(cq: CallbackQuery):
             await cq.message.edit_text(t(user_id, "trending_enter_query"))
             return
 
-        # --- Admin user details ---
+                                    
         if data.startswith("user_details:"):
             if not is_admin(user_id):
                 await cq.answer(t(user_id, "admin_only"), show_alert=True)
@@ -1752,7 +1823,7 @@ async def callback_handler_old(cq: CallbackQuery):
                 target_user_id = int(data.split(":", 1)[1])
                 await cq.answer(t(user_id, "loading"))
 
-                # Get detailed user info
+                                        
                 await admin_user_details_callback(cq.message, target_user_id, user_id)
             except ValueError:
                 await cq.answer(t(user_id, "error_invalid_id"), show_alert=True)
@@ -1761,7 +1832,7 @@ async def callback_handler_old(cq: CallbackQuery):
                 await cq.answer(t(user_id, "error_generic"), show_alert=True)
             return
 
-        # --- Admin users refresh ---
+                                     
         if data == "admin_users_refresh":
             if not is_admin(user_id):
                 await cq.answer(t(user_id, "admin_only"), show_alert=True)
@@ -1769,14 +1840,14 @@ async def callback_handler_old(cq: CallbackQuery):
 
             await cq.answer(t(user_id, "loading"))
             try:
-                # Re-run admin users list
+                                         
                 await admin_users_list_interactive(cq.message)
             except Exception as e:
                 logger.exception("admin_users_refresh callback error: %s", e)
                 await cq.answer(t(user_id, "error_generic"), show_alert=True)
             return
 
-        # --- Admin main menu ---
+                                 
         if data == "admin_main_menu":
             if not is_admin(user_id):
                 await cq.answer(t(user_id, "admin_only"), show_alert=True)
@@ -1790,7 +1861,7 @@ async def callback_handler_old(cq: CallbackQuery):
                 await cq.answer(t(user_id, "error_generic"), show_alert=True)
             return
 
-        # --- Admin stats ---
+                             
         if data == "admin_stats" or data == "admin_stats_refresh":
             if not is_admin(user_id):
                 await cq.answer(t(user_id, "admin_only"), show_alert=True)
@@ -1804,7 +1875,7 @@ async def callback_handler_old(cq: CallbackQuery):
                 await cq.answer(t(user_id, "error_generic"), show_alert=True)
             return
 
-        # --- Admin users ---
+                             
         if data == "admin_users":
             if not is_admin(user_id):
                 await cq.answer(t(user_id, "admin_only"), show_alert=True)
@@ -1818,7 +1889,7 @@ async def callback_handler_old(cq: CallbackQuery):
                 await cq.answer(t(user_id, "error_generic"), show_alert=True)
             return
 
-        # --- Admin check blocked ---
+                                     
         if data == "admin_check_blocked":
             if not is_admin(user_id):
                 await cq.answer(t(user_id, "admin_only"), show_alert=True)
@@ -1832,7 +1903,7 @@ async def callback_handler_old(cq: CallbackQuery):
                 await cq.answer(t(user_id, "error_generic"), show_alert=True)
             return
 
-        # --- Admin recommend ---
+                                 
         if data == "admin_recommend":
             if not is_admin(user_id):
                 await cq.answer(t(user_id, "admin_only"), show_alert=True)
@@ -1846,7 +1917,7 @@ async def callback_handler_old(cq: CallbackQuery):
                 await cq.answer(t(user_id, "error_generic"), show_alert=True)
             return
 
-        # --- Admin recommend actions ---
+                                         
         if data.startswith("admin_recommend_"):
             if not is_admin(user_id):
                 await cq.answer(t(user_id, "admin_only"), show_alert=True)
@@ -1858,7 +1929,7 @@ async def callback_handler_old(cq: CallbackQuery):
                 if action == "list":
                     await _admin_recommend_list(cq.message)
                 elif action == "add":
-                    # Показываем форму добавления
+                                                 
                     keyboard = InlineKeyboardMarkup(inline_keyboard=[
                         [InlineKeyboardButton(text="📚 Справка по формату", callback_data="admin_recommend_help")]
                     ])
@@ -1872,7 +1943,7 @@ async def callback_handler_old(cq: CallbackQuery):
                         parse_mode="HTML"
                     )
                 elif action == "remove":
-                    # Показываем список для удаления
+                                                    
                     await cq.message.edit_text(
                         "🗑️ <b>Удаление товара</b>\n\n"
                         "Используйте команду:\n"
@@ -1933,7 +2004,7 @@ async def callback_handler_old(cq: CallbackQuery):
                 await cq.answer(t(user_id, "error_generic"), show_alert=True)
             return
 
-        # --- Admin product delete (quick action) ---
+                                                     
         if data.startswith("admin_product_delete_"):
             if not is_admin(user_id):
                 await cq.answer(t(user_id, "admin_only"), show_alert=True)
@@ -1961,7 +2032,7 @@ async def callback_handler_old(cq: CallbackQuery):
                 await cq.answer(t(user_id, "error_generic"), show_alert=True)
             return
 
-        # --- Admin product priority (quick action) ---
+                                                       
         if data.startswith("admin_product_priority_"):
             if not is_admin(user_id):
                 await cq.answer(t(user_id, "admin_only"), show_alert=True)
@@ -1988,7 +2059,7 @@ async def callback_handler_old(cq: CallbackQuery):
                 await cq.answer(t(user_id, "error_generic"), show_alert=True)
             return
 
-        # --- Admin product details ---
+                                       
         if data.startswith("admin_product_"):
             if not is_admin(user_id):
                 await cq.answer(t(user_id, "admin_only"), show_alert=True)
@@ -2006,7 +2077,7 @@ async def callback_handler_old(cq: CallbackQuery):
                     await cq.answer("Товар не найден", show_alert=True)
                     return
 
-                # Показываем детальную информацию о товаре
+                                                          
                 text = f"📦 <b>{product['title']}</b>\n\n"
                 text += f"🆔 ID: <code>{product['id']}</code>\n"
                 text += f"💰 Цена: {product['price'] or 'Не указана'}\n"
@@ -2039,7 +2110,7 @@ async def callback_handler_old(cq: CallbackQuery):
                 await cq.answer(t(user_id, "error_generic"), show_alert=True)
             return
 
-        # --- Admin broadcast menu ---
+                                      
         if data == "admin_broadcast_menu":
             if not is_admin(user_id):
                 await cq.answer(t(user_id, "admin_only"), show_alert=True)
@@ -2063,7 +2134,7 @@ async def callback_handler_old(cq: CallbackQuery):
             )
             return
 
-        # --- Admin broadcast start (button) ---
+                                                
         if data == "admin_broadcast_start":
             if not is_admin(user_id):
                 await cq.answer(t(user_id, "admin_only"), show_alert=True)
@@ -2085,7 +2156,7 @@ async def callback_handler_old(cq: CallbackQuery):
             )
             return
 
-        # --- Admin cleanup ---
+                               
         if data == "admin_cleanup":
             if not is_admin(user_id):
                 await cq.answer(t(user_id, "admin_only"), show_alert=True)
@@ -2099,7 +2170,7 @@ async def callback_handler_old(cq: CallbackQuery):
                 await cq.answer(t(user_id, "error_generic"), show_alert=True)
             return
 
-        # --- Admin backup ---
+                              
         if data == "admin_backup":
             if not is_admin(user_id):
                 await cq.answer(t(user_id, "admin_only"), show_alert=True)
@@ -2113,7 +2184,7 @@ async def callback_handler_old(cq: CallbackQuery):
                 await cq.answer(t(user_id, "error_generic"), show_alert=True)
             return
 
-        # --- Admin help ---
+                            
         if data == "admin_help":
             if not is_admin(user_id):
                 await cq.answer(t(user_id, "admin_only"), show_alert=True)
@@ -2152,22 +2223,22 @@ async def callback_handler_old(cq: CallbackQuery):
         except Exception as inner_e:
             logger.error("Failed to send error alert: %s", inner_e)
 
-# --- Admin user management callbacks
-# OLD HANDLER: moved to handlers/callback_handler.py
+                                     
+                                                    
 async def admin_user_details_callback_old(cq: CallbackQuery):
     """Handle user details button clicks in admin panel"""
     try:
-        # Check admin permissions
+                                 
         if cq.from_user.id not in ADMIN_IDS:
             await cq.answer(t(cq.from_user.id, "admin_only"), show_alert=True)
             return
 
-        # Extract user ID from callback data
+                                            
         target_user_id = int(cq.data.split(":", 1)[1])
 
         await cq.answer(t(cq.from_user.id, "loading_user_details"))
 
-        # Get detailed user information
+                                       
         await admin_user_details_callback(cq.message, target_user_id, cq.from_user.id)
 
     except ValueError:
@@ -2176,7 +2247,7 @@ async def admin_user_details_callback_old(cq: CallbackQuery):
         logger.exception("Error in admin_user_details_callback: %s", e)
         await cq.answer(t(cq.from_user.id, "error_generic"), show_alert=True)
 
-# --- Subscribe flow
+                    
 def _filter_subscribe_button(message: types.Message) -> bool:
     """Filter for subscribe button and related keywords"""
     if not message.text or not message.from_user:
@@ -2199,12 +2270,12 @@ def _filter_subscribe_button(message: types.Message) -> bool:
 async def cmd_subscribe_ui(message: types.Message):
     await message.answer(t(message.from_user.id, "send_link_prompt"))
 
-# OLD HANDLER: moved to handlers/subscription_handler.py
+                                                        
 async def handle_url_old(message: types.Message):
     try:
         raw = (message.text or "").strip()
         
-        # CRITICAL FIX 3: URL validation
+                                        
         if not raw or len(raw) < 10:
             await message.answer(t(message.from_user.id, "invalid_url"))
             return
@@ -2223,23 +2294,23 @@ async def handle_url_old(message: types.Message):
 
         add_user_if_not_exists(message.from_user.id)
 
-        # Duplicate check by normalized URL
+                                           
         subs = get_user_subscriptions(message.from_user.id)
         for sub in subs:
             try:
                 (sid, user_id, u, mode, last_price, product_title, product_image,
                  min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert) = sub
             except ValueError:
-                # Fallback для старых подписок
+                                              
                 (sid, user_id, u, mode, last_price, product_title, product_image,
                  min_price, max_price, notify_percent, notify_interval, last_notify_time) = sub[:12]
             if normalize_url(u).lower() == url_lower:
                 await message.answer(t(message.from_user.id, "already_subscribed"))
                 return
 
-        # CHANGED: use DEFAULT_NOTIFY_MODE instead of hardcoded "discount"
+                                                                          
         sub_id = add_subscription(message.from_user.id, url, DEFAULT_NOTIFY_MODE)
-        # Получаем цену, название и обложку в одном запросе
+                                                           
         try:
             price, title, image = await get_product_info_async(url)
         except asyncio.TimeoutError:
@@ -2255,7 +2326,7 @@ async def handle_url_old(message: types.Message):
             await message.answer(t(message.from_user.id, "error_generic"))
             price, title, image = None, None, None
 
-        # Сохраняем title/image в кэше подписки, если они получены
+                                                                  
         try:
             if title or image:
                 update_subscription_meta(sub_id, title, image)
@@ -2267,7 +2338,7 @@ async def handle_url_old(message: types.Message):
         if price is not None:
             try:
                 update_last_price(sub_id, price)
-                # Формируем сообщение с картинкой, если есть
+                                                            
                 text = t(message.from_user.id, "subscribed_now").format(price=price)
                 if title:
                     text = f"{title}\n\n" + text
@@ -2294,10 +2365,10 @@ async def handle_url_old(message: types.Message):
         logger.exception("Error in handle_url for user %s: %s", message.from_user.id, e)
         await message.answer(t(message.from_user.id, "error_generic"))
 
-# Legacy alias for compatibility with older tests and code that expects `handle_url`
+                                                                                    
 handle_url = handle_url_old
 
-# --- Handle alert price input
+                              
 def _filter_alert_price(message: types.Message) -> bool:
     """Filter for alert price input"""
     if not message.from_user or not message.text:
@@ -2314,7 +2385,7 @@ async def handle_alert_price(message: types.Message):
         return
 
     try:
-        # Парсим цену
+                     
         price_text = message.text.strip().replace(' ', '').replace('TL', '').replace('₺', '')
         target_price = float(price_text)
 
@@ -2322,14 +2393,14 @@ async def handle_alert_price(message: types.Message):
             await message.answer(t(user_id, "price_alert_price_negative"))
             return
 
-        # Проверяем что подписка принадлежит пользователю
+                                                         
         sub = get_subscription(sub_id)
         if not sub or sub[1] != user_id:
             await message.answer(t(user_id, "error_not_your_sub"))
             del alert_edit_state[user_id]
             return
 
-        # Устанавливаем алерт
+                             
         update_subscription_settings(sub_id, price_alert=target_price)
 
         title = sub[5] if len(sub) > 5 and sub[5] else sub[2][:50] + "..."
@@ -2349,7 +2420,7 @@ async def handle_alert_price(message: types.Message):
         if user_id in alert_edit_state:
             del alert_edit_state[user_id]
 
-# --- Handle report text input
+                              
 def _filter_report_text(message: types.Message) -> bool:
     """Filter for report text input"""
     if not message.from_user or not message.text:
@@ -2373,7 +2444,7 @@ async def handle_report_text(message: types.Message):
     await submit_user_report(user_id, report_text, message)
     del report_state[user_id]
 
-# --- List subs
+               
 async def _filter_mysubs(message: types.Message) -> bool:
     """Filter for /mysubs button and similar"""
     if not message.text:
@@ -2393,7 +2464,7 @@ async def cmd_mysubs(message: types.Message):
         await message.answer(t(user_id, "no_subs"))
         return
     
-    # Формируем одно сообщение со списком всех подписок
+                                                       
     lines = [t(user_id, "mysubs_header")]
     inline_buttons = []
     
@@ -2402,37 +2473,37 @@ async def cmd_mysubs(message: types.Message):
             (sub_id, _, url, mode, last_price, product_title, product_image,
              min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert) = sub
         except ValueError:
-            # Fallback для старых подписок
+                                          
             (sub_id, _, url, mode, last_price, product_title, product_image,
              min_price, max_price, notify_percent, notify_interval, last_notify_time) = sub[:12]
             price_alert = None
         
-        # Определяем статус подписки
+                                    
         status_icon = "✅" if last_price is not None else "⚠️"
         status_text = t(user_id, "status_active") if last_price is not None else t(user_id, "status_inactive")
         
-        # Форматируем цену
+                          
         price_text = f"{last_price:.0f} TL" if last_price is not None else t(user_id, "unknown_price")
         
-        # Форматируем режим и время следующего уведомления
+                                                          
         mode_text = t(user_id, "mode_hourly") if mode == "hourly" else t(user_id, "mode_discount")
         next_notify = get_next_notification_time(mode, last_notify_time, notify_interval, user_id)
 
-        # Используем название товара или URL
+                                            
         title = product_title if product_title else url[:50] + "..." if len(url) > 50 else url
 
-        # Формируем строку для подписки
+                                       
         sub_line = f"\n{status_icon} *{status_text}* | ID: `{sub_id}`\n"
         sub_line += f"📦 {title}\n"
         sub_line += f"💰 {price_text} | 🔔 {next_notify}\n"
         
-        # Добавляем информацию о целевой цене, если установлена
+                                                               
         if price_alert is not None:
             sub_line += f"🎯 {t(user_id, 'price_alert_label')}: {price_alert:.0f} TL\n"
         
         lines.append(sub_line)
         
-        # Добавляем кнопку для редактирования этой подписки
+                                                           
         inline_buttons.append([
             InlineKeyboardButton(
                 text=f"⚙️ {t(user_id, 'btn_edit')} ID {sub_id}",
@@ -2440,32 +2511,32 @@ async def cmd_mysubs(message: types.Message):
             )
         ])
     
-    # Объединяем все строки
+                           
     full_text = "\n".join(lines)
 
-    # Проверяем длину сообщения (Telegram limit: 4096 chars)
+                                                            
     if len(full_text) > 4000:
-        # Если сообщение слишком длинное, разбиваем на части
+                                                            
         warning_msg = f"⚠️ У вас {len(subs)} подписок. Показываю первые 10:\n\n"
-        short_lines = lines[:11]  # header + 10 subs
+        short_lines = lines[:11]                    
         short_text = "\n".join(short_lines)
         short_keyboard = InlineKeyboardMarkup(inline_keyboard=inline_buttons[:10])
 
         await message.answer(warning_msg + short_text, reply_markup=short_keyboard, parse_mode="Markdown")
         return
 
-    # Создаем клавиатуру с кнопками
+                                   
     keyboard = InlineKeyboardMarkup(inline_keyboard=inline_buttons)
 
     try:
         await message.answer(full_text, reply_markup=keyboard, parse_mode="Markdown")
     except Exception as e:
         logger.exception("Error sending mysubs list: %s", e)
-        # Fallback без Markdown
+                               
         full_text_plain = full_text.replace("*", "").replace("`", "")
         await message.answer(full_text_plain, reply_markup=keyboard)
 
-# --- Trending
+              
 async def _filter_recommend(message: types.Message) -> bool:
     """Filter for recommend button"""
     if not message.text:
@@ -2497,7 +2568,7 @@ async def _filter_trending(message: types.Message) -> bool:
 async def cmd_trending(message: types.Message):
     await message.answer(t(message.from_user.id, "trending_header"), reply_markup=trending_menu_kb(message.from_user.id))
 
-# --- Trending search text handler
+                                  
 async def _filter_trending_search(message: types.Message) -> bool:
     """Filter for trending search text input"""
     if not message.text or message.text.startswith("/"):
@@ -2513,7 +2584,7 @@ async def trending_search_text(message: types.Message):
     if not q:
         await message.answer(t(user_id, "trending_enter_query"))
         return
-    # consume state
+                   
     if user_id in TREND_SEARCH_AWAIT:
         TREND_SEARCH_AWAIT.remove(user_id)
     try:
@@ -2524,7 +2595,7 @@ async def trending_search_text(message: types.Message):
         logger.exception("trending search error: %s", e)
         await message.answer(t(user_id, "trending_no_results"))
 
-# --- Unsubscribe filter
+                        
 def _filter_unsubscribe(message: types.Message) -> bool:
     if not message.text or not message.from_user:
         return False
@@ -2532,7 +2603,7 @@ def _filter_unsubscribe(message: types.Message) -> bool:
     unsubscribe_btn = t(user_id, "btn_unsubscribe")
     return unsubscribe_btn == message.text or "отпис" in message.text.lower()
 
-# --- Unsubscribe all
+                     
 @dp.message(_filter_unsubscribe)
 async def cmd_unsubscribe_all(message: types.Message):
     kb = InlineKeyboardMarkup(inline_keyboard=[[
@@ -2541,7 +2612,7 @@ async def cmd_unsubscribe_all(message: types.Message):
     ]])
     await message.answer(t(message.from_user.id, "btn_unsubscribe") + " ❓", reply_markup=kb)
 
-# --- Scheduler job
+                   
 scheduler = AsyncIOScheduler()
 
 
@@ -2550,29 +2621,29 @@ async def send_grouped_notifications(grouped_notifications: Dict[int, List[Tuple
     Отправляет групповые уведомления пользователям с защитой от race conditions.
     grouped_notifications: user_id -> [(notification_text, image_url), ...]
     """
-    # CRITICAL FIX 4: Use lock to prevent race conditions
+                                                         
     async with scheduler_lock:
         for user_id, notifications in grouped_notifications.items():
             try:
                 if len(notifications) == 1:
-                    # Одно уведомление - отправляем как обычно
+                                                              
                     text, image = notifications[0]
-                    # CRITICAL FIX 1: Use timeout and handle blocked users
+                                                                          
                     await send_notification_with_timeout(user_id, text, image, timeout=15.0)
                 else:
-                    # Несколько уведомлений - группируем в одно сообщение
+                                                                         
                     grouped_text = f"🔔 <b>ОБНОВЛЕНИЯ ЦЕН</b> ({len(notifications)})\n\n"
 
-                    for i, (text, image) in enumerate(notifications[:10], 1):  # Максимум 10 уведомлений
-                        # Убираем общие части и оставляем только суть
+                    for i, (text, image) in enumerate(notifications[:10], 1):                           
+                                                                     
                         clean_text = text.replace("💰 ", "").replace("📉 ", "").replace("📈 ", "")
                         grouped_text += f"{i}. {clean_text}\n"
 
                     if len(notifications) > 10:
                         grouped_text += f"\n... и ещё {len(notifications) - 10} обновлений"
 
-                    # Отправляем групповое уведомление без изображения
-                    # CRITICAL FIX 1: Use timeout and handle blocked users
+                                                                      
+                                                                          
                     await send_notification_with_timeout(
                         user_id,
                         grouped_text,
@@ -2585,13 +2656,25 @@ async def send_grouped_notifications(grouped_notifications: Dict[int, List[Tuple
                 logger.exception("Error sending grouped notifications to user %s: %s", user_id, e)
 
 
-async def check_all():
-    logger.info("Scheduler job: checking subscriptions")
-    subs = get_all_subscriptions()
-    total = len(subs)
+async def _check_all_impl(trigger: str = "scheduler") -> Dict[str, Any]:
+    logger.info("Scheduler job: checking subscriptions (trigger=%s)", trigger)
+    total = get_subscriptions_count()
     logger.info("Found %d subscriptions to check", total)
+
+    task_batch_size = _get_env_int(
+        "CHECK_ALL_TASK_BATCH_SIZE",
+        200,
+        min_value=1,
+        max_value=5000,
+    )
+    db_batch_size = _get_env_int(
+        "CHECK_ALL_DB_BATCH_SIZE",
+        1000,
+        min_value=task_batch_size,
+        max_value=50000,
+    )
     
-    # ОПТИМИЗАЦИЯ: Кэш для пользовательских настроек (избегаем N+1 запросов)
+                                                                            
     user_settings_cache = {}
     
     def get_cached_user_settings(user_id: int):
@@ -2600,64 +2683,64 @@ async def check_all():
             user_settings_cache[user_id] = get_user_settings(user_id)
         return user_settings_cache[user_id]
     
-    sem = asyncio.Semaphore(10)
+    sem = asyncio.Semaphore(CHECK_ALL_FETCH_CONCURRENCY)
     processed_count = 0
     alerted_count = 0
 
-    # ПАКЕТНАЯ ОБРАБОТКА: собираем все точки цены для сохранения
+                                                                
     price_points_batch = []
 
-    # ГРУППОВЫЕ УВЕДОМЛЕНИЯ: собираем уведомления по пользователям
-    grouped_notifications = {}  # user_id -> list of (text, image)
+                                                                  
+    grouped_notifications = {}                                    
 
     async def process(sub):
         nonlocal processed_count, alerted_count
-        # Обновлена распаковка: теперь включает price_alert
+                                                           
         try:
             (sub_id, user_id, url, mode, last_price, product_title, product_image,
              min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert) = sub
         except ValueError:
-            # Fallback для старых подписок без price_alert
+                                                          
             (sub_id, user_id, url, mode, last_price, product_title, product_image,
              min_price, max_price, notify_percent, notify_interval, last_notify_time) = sub[:12]
             price_alert = None
             
         async with sem:
             try:
-                # Проверяем тихие часы пользователя с использованием кэша
+                                                                         
                 current_hour = datetime.now().hour
                 lang, quiet_start, quiet_end = get_cached_user_settings(user_id)
                 
                 is_quiet_time = False
                 if quiet_start <= quiet_end:
                     is_quiet_time = quiet_start <= current_hour < quiet_end
-                else:  # например, 23:00 - 7:00
+                else:                          
                     is_quiet_time = current_hour >= quiet_start or current_hour < quiet_end
                     
                 if is_quiet_time:
                     logger.debug(f"Quiet hours for user {user_id} ({current_hour}:00)")
                     return
 
-                # Проверяем интервал уведомлений
+                                                
                 current_time = int(time.time())
                 if last_notify_time and notify_interval:
                     if current_time - last_notify_time < notify_interval * 60:
                         return
 
-                # fetch price and optionally title/image to enrich notifications
+                                                                                
                 try:
                     price, title, image = await get_product_info_async(url)
                 except asyncio.TimeoutError:
                     logger.warning("Timeout fetching product info for sub %s", sub_id)
-                    return  # Skip this subscription for now
+                    return                                  
                 except aiohttp.ClientError as e:
                     logger.warning("Network error fetching product info for sub %s: %s", sub_id, e)
-                    return  # Skip this subscription for now
+                    return                                  
                 except Exception as e:
                     logger.exception("Unexpected error fetching product info for sub %s: %s", sub_id, e)
-                    return  # Skip this subscription for now
+                    return                                  
 
-                # Prefer cached DB metadata if live fetch didn't return them
+                                                                            
                 if not title and product_title:
                     title = product_title
                 if not image and product_image:
@@ -2672,18 +2755,18 @@ async def check_all():
                 if last_price is None:
                     update_last_price(sub_id, price)
                     try:
-                        # Store initial price point
+                                                   
                         add_price_point(sub_id, url, float(price), source='collector')
                     except Exception:
                         logger.exception("Failed to add initial price point for sub %s", sub_id)
                     logger.debug("Set initial last_price for sub %s -> %s", sub_id, price)
                     return
 
-                # Проверяем условия для уведомления
+                                                   
                 notification_needed = False
                 notification_text = None
 
-                # НОВОЕ: Проверка price_alert (целевая цена)
+                                                            
                 if price_alert is not None and price <= price_alert:
                     notification_needed = True
                     notification_text = (
@@ -2692,7 +2775,7 @@ async def check_all():
                         f"Текущая цена: {price:.0f} TL\n"
                         f"🔗 {url}"
                     )
-                    # После достижения целевой цены очищаем её
+                                                              
                     update_subscription_settings(sub_id, price_alert=None)
                     
                 elif mode == "hourly":
@@ -2718,7 +2801,7 @@ async def check_all():
                             old=last_price, new=price, url=url
                         )
                 
-                # Проверяем диапазон цен
+                                        
                 if min_price is not None and price < min_price:
                     notification_needed = True
                     notification_text = t(user_id, "price_below_min_msg").format(
@@ -2731,7 +2814,7 @@ async def check_all():
                     )
 
                 if notification_needed and notification_text:
-                    # ГРУППОВЫЕ УВЕДОМЛЕНИЯ: добавляем в очередь вместо немедленной отправки
+                                                                                            
                     if user_id not in grouped_notifications:
                         grouped_notifications[user_id] = []
                     grouped_notifications[user_id].append((notification_text, image))
@@ -2739,20 +2822,20 @@ async def check_all():
                     alerted_count += 1
                     update_notify_time(sub_id)
 
-                # Обновляем последнюю цену, если она изменилась
+                                                               
                 if price != last_price:
-                    # Save price point but avoid duplicates: check last stored point
+                                                                                    
                     try:
                         last_point = get_last_price_point(sub_id)
                         should_insert = True
                         if last_point:
                             last_ts, last_p = last_point
-                            # if price equal and last point was within 1 hour, skip
+                                                                                   
                             if float(last_p) == float(price) and int(time.time()) - int(last_ts) < 3600:
                                 should_insert = False
                         if should_insert:
-                            # use new save_price_point which applies deduplication and capping
-                            # Добавляем в батч для пакетного сохранения
+                                                                                              
+                                                                       
                             price_points_batch.append((sub_id, float(price), int(time.time()), url))
                             logger.info(f"Collected price point for batch: sub={sub_id}, price={price}")
                     except Exception:
@@ -2764,59 +2847,130 @@ async def check_all():
                 sid = locals().get('sub_id', 'unknown')
                 logger.exception("check_all inner error for sub %s: %s", sid, e)
 
-    tasks = [process(s) for s in subs]
-    await asyncio.gather(*tasks)
+    current_batch = []
+    for sub in iter_all_subscriptions(batch_size=db_batch_size):
+        current_batch.append(sub)
+        if len(current_batch) >= task_batch_size:
+            await asyncio.gather(*(process(s) for s in current_batch))
+            current_batch.clear()
 
-    # ПАКЕТНОЕ СОХРАНЕНИЕ всех собранных точек цены
+    if current_batch:
+        await asyncio.gather(*(process(s) for s in current_batch))
+
+                                                   
     if price_points_batch:
         try:
             await asyncio.to_thread(save_price_points_batch, price_points_batch)
             logger.info("Batch saved %d price points", len(price_points_batch))
         except Exception as e:
             logger.exception("Failed to batch save price points: %s", e)
-            # Fallback: сохраняем по одной
+                                          
             for sub_id, price, ts, url in price_points_batch:
                 try:
                     save_price_point(sub_id, price, ts)
                 except Exception as fallback_e:
                     logger.error("Fallback save failed for sub %s: %s", sub_id, fallback_e)
 
-    # ОТПРАВКА ГРУППОВЫХ УВЕДОМЛЕНИЙ
+                                    
     await send_grouped_notifications(grouped_notifications)
 
-    logger.info("Scheduler job finished — processed %d, alerted %d", processed_count, alerted_count)
+    logger.info(
+        "Scheduler job finished (trigger=%s) — processed %d, alerted %d",
+        trigger,
+        processed_count,
+        alerted_count,
+    )
+    return {
+        "status": "completed",
+        "trigger": trigger,
+        "total": total,
+        "processed": processed_count,
+        "alerted": alerted_count,
+    }
+
+
+async def check_all(trigger: str = "scheduler") -> Dict[str, Any]:
+    """Run price checks with a concurrency guard to prevent overlapping runs."""
+    if check_all_lock.locked():
+        logger.warning("check_all skipped: already running (trigger=%s)", trigger)
+        return {"status": "skipped", "trigger": trigger, "reason": "already_running"}
+
+    async with check_all_lock:
+        started_at = time.time()
+        try:
+            result = await _check_all_impl(trigger=trigger)
+            result["duration_sec"] = round(time.time() - started_at, 2)
+            return result
+        except Exception as e:
+            logger.exception("check_all failed (trigger=%s): %s", trigger, e)
+            return {
+                "status": "failed",
+                "trigger": trigger,
+                "reason": str(e),
+                "duration_sec": round(time.time() - started_at, 2),
+            }
 
 async def start_scheduler_async(delay: float = 1.0):
     """Асинхронно стартует планировщик после того, как event loop запущен.
     Настраиваем AsyncIOScheduler на текущий running loop и добавляем корутину
     `check_all` как задачу-джобу, чтобы APScheduler вызывал её внутри event loop.
     """
-    await asyncio.sleep(delay)
+    if delay > 0:
+        await asyncio.sleep(delay)
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         logger.exception("No running event loop, cannot start scheduler")
         return
 
-    # Ensure scheduler uses the active event loop so coroutine jobs run in it
-    try:
-        scheduler.configure(event_loop=loop)
-    except Exception:
-        # configure may not be necessary for some versions but is harmless to attempt
-        logger.debug("scheduler.configure(event_loop=loop) failed or not needed", exc_info=True)
+    async with scheduler_start_lock:
+        if getattr(scheduler, "running", False):
+            logger.info("Scheduler already running; skip duplicate start")
+            return
 
-    # Add job: schedule coroutine `check_all` to run every 60 minutes. Use next_run_time now
-    # so an immediate check occurs (after we've configured the loop).
-    try:
-        scheduler.add_job(check_all, "interval", minutes=60, next_run_time=datetime.now())
-        # Add daily backup job at 3:00 AM
-        scheduler.add_job(backup_database, "cron", hour=3, minute=0)
-        scheduler.start()
-        logger.info("Scheduler started (async) - includes daily backups")
-    except Exception:
-        logger.exception("Failed to start scheduler or add job")
+                                                                                  
+        try:
+            scheduler.configure(event_loop=loop)
+        except Exception:
+                                                                                         
+            logger.debug("scheduler.configure(event_loop=loop) failed or not needed", exc_info=True)
 
-# --- admin functions
+                                                                     
+        try:
+            scheduler.add_job(
+                check_all,
+                "interval",
+                id=CHECK_ALL_JOB_ID,
+                minutes=CHECK_ALL_INTERVAL_MINUTES,
+                next_run_time=datetime.now(),
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+                misfire_grace_time=max(60, CHECK_ALL_INTERVAL_MINUTES * 60),
+            )
+            scheduler.add_job(
+                backup_database,
+                "cron",
+                id=BACKUP_JOB_ID,
+                hour=DB_BACKUP_HOUR,
+                minute=DB_BACKUP_MINUTE,
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+                misfire_grace_time=3600,
+            )
+            scheduler.start()
+            logger.info(
+                "Scheduler started (async): check interval=%s min, backup=%02d:%02d, keep=%d",
+                CHECK_ALL_INTERVAL_MINUTES,
+                DB_BACKUP_HOUR,
+                DB_BACKUP_MINUTE,
+                DB_BACKUP_KEEP_FILES,
+            )
+        except Exception:
+            logger.exception("Failed to start scheduler or add job")
+
+                     
 def is_admin(user_id: int) -> bool:
     """Check if user is admin"""
     from config import ADMIN_IDS
@@ -2885,7 +3039,7 @@ async def cmd_admin(message: types.Message):
 
     args = message.text.split()
     if len(args) < 2:
-        # Показываем главное меню вместо простого текста
+                                                        
         await admin_main_menu(message)
         return
 
@@ -2916,12 +3070,12 @@ async def cmd_admin(message: types.Message):
 async def admin_stats(message: types.Message):
     """Show comprehensive bot statistics"""
     try:
-        # Получаем подробную статистику
+                                       
         report = Analytics.get_full_report()
 
-        # Ограничение на длину сообщения Telegram (4096 символов)
+                                                                 
         if len(report) > 4000:
-            # Разбиваем на части
+                                
             parts = []
             current_part = ""
 
@@ -2935,11 +3089,11 @@ async def admin_stats(message: types.Message):
             if current_part:
                 parts.append(current_part)
 
-            # Отправляем по частям
-            for i, part in enumerate(parts[:3]):  # Максимум 3 сообщения
+                                  
+            for i, part in enumerate(parts[:3]):                        
                 await message.answer(part, parse_mode="HTML")
                 if i < len(parts) - 1:
-                    await asyncio.sleep(0.5)  # Небольшая пауза между сообщениями
+                    await asyncio.sleep(0.5)                                     
         else:
             await message.answer(report, parse_mode="HTML")
 
@@ -2969,11 +3123,11 @@ async def admin_broadcast(message: types.Message, text: str):
                 await bot.send_message(user_id, f"📢 <b>ОБЪЯВЛЕНИЕ</b>\n\n{text}", parse_mode="HTML")
                 sent_count += 1
 
-                # Update status every 10 users
+                                              
                 if sent_count % 10 == 0:
                     await status_msg.edit_text(f"📤 Отправлено: {sent_count}/{len(users)}")
 
-                # Small delay to avoid rate limits
+                                                  
                 await asyncio.sleep(0.1)
 
             except Exception as e:
@@ -2996,7 +3150,7 @@ async def admin_users(message: types.Message):
     try:
         from database import get_connection
 
-        # Parse command arguments
+                                 
         args = message.text.split()
         target_user_id = None
 
@@ -3004,10 +3158,10 @@ async def admin_users(message: types.Message):
             target_user_id = int(args[2])
 
         if target_user_id:
-            # Show detailed info about specific user
+                                                    
             await admin_user_details(message, target_user_id)
         else:
-            # Show interactive list of all users
+                                                
             await admin_users_list(message)
 
     except Exception as e:
@@ -3024,13 +3178,13 @@ async def admin_users_list(message: types.Message):
         with get_connection() as conn:
             cursor = conn.cursor()
 
-            # Проверяем, существует ли колонка created_at
+                                                         
             cursor.execute("PRAGMA table_info(users)")
             columns = cursor.fetchall()
             column_names = [col[1] for col in columns]
 
             if 'created_at' in column_names:
-                # Если колонка существует, используем ее
+                                                        
                 query = """
                     SELECT u.user_id, u.language, u.created_at, COUNT(s.id) as subs_count
                     FROM users u
@@ -3040,7 +3194,7 @@ async def admin_users_list(message: types.Message):
                     LIMIT 50
                 """
             else:
-                # Если колонки нет, используем альтернативный запрос
+                                                                    
                 query = """
                     SELECT u.user_id, u.language, COUNT(s.id) as subs_count
                     FROM users u
@@ -3057,7 +3211,7 @@ async def admin_users_list(message: types.Message):
             await message.answer(t(message.from_user.id, "admin_users_none"))
             return
 
-        # Create inline keyboard with user buttons
+                                                  
         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[])
@@ -3065,18 +3219,18 @@ async def admin_users_list(message: types.Message):
 
         for user_data in users:
             if len(user_data) == 4:
-                # С колонкой created_at
+                                       
                 user_id, language, created_at, subs_count = user_data
                 created_str = datetime.fromtimestamp(created_at).strftime('%d.%m.%Y %H:%M')
                 user_line = f"🆔 <code>{user_id}</code> | 🌐 {language.upper()} | 📦 {subs_count} | 📅 {created_str}"
             else:
-                # Без колонки created_at
+                                        
                 user_id, language, subs_count = user_data
                 user_line = f"🆔 <code>{user_id}</code> | 🌐 {language.upper()} | 📦 {subs_count}"
 
             users_text += user_line + "\n"
 
-            # Add button for this user
+                                      
             keyboard.inline_keyboard.append([
                 InlineKeyboardButton(
                     text=f"📋 {t(admin_user_id, 'admin_user_details_btn')} (ID: {user_id})",
@@ -3102,13 +3256,13 @@ async def admin_users_list_interactive(message: types.Message):
         with get_connection() as conn:
             cursor = conn.cursor()
 
-            # Проверяем, существует ли колонка created_at
+                                                         
             cursor.execute("PRAGMA table_info(users)")
             columns = cursor.fetchall()
             column_names = [col[1] for col in columns]
 
             if 'created_at' in column_names:
-                # Если колонка существует, используем ее
+                                                        
                 query = """
                     SELECT u.user_id, u.language, u.created_at, COUNT(s.id) as subs_count
                     FROM users u
@@ -3118,7 +3272,7 @@ async def admin_users_list_interactive(message: types.Message):
                     LIMIT 50
                 """
             else:
-                # Если колонки нет, используем альтернативный запрос
+                                                                    
                 query = """
                     SELECT u.user_id, u.language, COUNT(s.id) as subs_count
                     FROM users u
@@ -3135,16 +3289,16 @@ async def admin_users_list_interactive(message: types.Message):
             await message.edit_text(t(admin_user_id, "admin_users_none"))
             return
 
-        # Create inline keyboard with user buttons
+                                                  
         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-        # Создаем красивый список пользователей
+                                               
         users_text = "👥 <b>Управление пользователями</b>\n\n"
         users_text += f"📊 <b>Всего пользователей:</b> {len(users)}\n\n"
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[])
 
-        # Группируем пользователей по количеству подписок для лучшей организации
+                                                                                
         active_users = [u for u in users if (u[3] if len(u) == 4 else u[2]) > 0]
         inactive_users = [u for u in users if (u[3] if len(u) == 4 else u[2]) == 0]
 
@@ -3161,7 +3315,7 @@ async def admin_users_list_interactive(message: types.Message):
                 text = f"👤 {user_id_int} ({subs_count} подписок)"
                 if subs_count > 5:
                     text += " ⭐"
-            # Telegram limits button text length; truncate defensively
+                                                                      
             if len(text) > 64:
                 text = text[:61] + "..."
             cb = f"user_details:{user_id_int}"
@@ -3171,7 +3325,7 @@ async def admin_users_list_interactive(message: types.Message):
 
         if active_users:
             users_text += "🟢 <b>Активные пользователи:</b>\n"
-            for user_data in active_users[:15]:  # Показываем максимум 15 активных
+            for user_data in active_users[:15]:                                   
                 if len(user_data) == 4:
                     user_id, language, created_at, subs_count = user_data
                     created_str = datetime.fromtimestamp(created_at).strftime('%d.%m.%Y')
@@ -3180,14 +3334,14 @@ async def admin_users_list_interactive(message: types.Message):
                     user_id, language, subs_count = user_data
                     users_text += f"  👤 <code>{user_id}</code> | 🌐 {language.upper()} | 📦 {subs_count}\n"
 
-                # Добавляем кнопку для каждого пользователя (с валидацией)
+                                                                          
                 button = _safe_user_button(user_id, subs_count, inactive=False)
                 if button:
                     keyboard.inline_keyboard.append([button])
 
-        if inactive_users and len(keyboard.inline_keyboard) < 10:  # Добавляем неактивных если места хватает
+        if inactive_users and len(keyboard.inline_keyboard) < 10:                                           
             users_text += "\n🟡 <b>Неактивные пользователи:</b>\n"
-            for user_data in inactive_users[:5]:  # Максимум 5 неактивных
+            for user_data in inactive_users[:5]:                         
                 if len(user_data) == 4:
                     user_id, language, created_at, subs_count = user_data
                     created_str = datetime.fromtimestamp(created_at).strftime('%d.%m.%Y')
@@ -3200,7 +3354,7 @@ async def admin_users_list_interactive(message: types.Message):
                 if button:
                     keyboard.inline_keyboard.append([button])
 
-        # Кнопки управления (используем и для fallback)
+                                                       
         control_rows = [
             [
                 InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_users_refresh"),
@@ -3216,8 +3370,8 @@ async def admin_users_list_interactive(message: types.Message):
         try:
             await message.edit_text(users_text, reply_markup=keyboard, parse_mode="HTML")
         except Exception as e:
-            # Telegram иногда отклоняет inline-кнопки с ошибкой BUTTON_USER_INVALID.
-            # В таком случае показываем список без персональных кнопок.
+                                                                                    
+                                                                       
             if "BUTTON_USER_INVALID" in str(e):
                 from aiogram.types import InlineKeyboardMarkup
                 fallback_text = users_text + "\n\n💡 Для деталей: /admin users <id>"
@@ -3242,13 +3396,13 @@ async def admin_user_details(message: types.Message, target_user_id: int):
         with get_connection() as conn:
             cursor = conn.cursor()
 
-            # Check if created_at column exists
+                                               
             cursor.execute("PRAGMA table_info(users)")
             columns = cursor.fetchall()
             column_names = [col[1] for col in columns]
             has_created_at = 'created_at' in column_names
 
-            # Get user basic info
+                                 
             if has_created_at:
                 cursor.execute("""
                     SELECT user_id, language, notify_quiet_hours_start, notify_quiet_hours_end, created_at
@@ -3270,10 +3424,10 @@ async def admin_user_details(message: types.Message, target_user_id: int):
 
             user_id, language, quiet_start, quiet_end, created_at = user_data
 
-            # Get user's subscriptions
+                                      
             subscriptions = get_user_subscriptions(user_id)
 
-            # Build detailed user info
+                                      
             user_text = f"👤 <b>{t(message.from_user.id, 'admin_user_details_title')}</b>\n\n"
             user_text += f"🆔 <b>ID:</b> <code>{user_id}</code>\n"
             user_text += f"🌐 <b>{t(message.from_user.id, 'language')}:</b> {language.upper()}\n"
@@ -3289,11 +3443,11 @@ async def admin_user_details(message: types.Message, target_user_id: int):
 
             user_text += "\n"
 
-            # Show subscriptions if any
+                                       
             if subscriptions:
                 user_text += f"📋 <b>{t(message.from_user.id, 'admin_user_subs_list')}:</b>\n\n"
 
-                for i, sub in enumerate(subscriptions[:10], 1):  # Show max 10 subscriptions
+                for i, sub in enumerate(subscriptions[:10], 1):                             
                     try:
                         (sub_id, _, url, mode, last_price, product_title, product_image,
                          min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert, tags) = sub
@@ -3320,7 +3474,7 @@ async def admin_user_details(message: types.Message, target_user_id: int):
             else:
                 user_text += f"📝 {t(message.from_user.id, 'admin_user_no_subs')}\n"
 
-        # Split message if too long (Telegram limit is 4096 chars)
+                                                                  
         if len(user_text) > 4000:
             parts = []
             current_part = ""
@@ -3335,7 +3489,7 @@ async def admin_user_details(message: types.Message, target_user_id: int):
             if current_part:
                 parts.append(current_part)
 
-            # Send in parts
+                           
             for i, part in enumerate(parts):
                 await message.answer(part, parse_mode="HTML")
                 if i < len(parts) - 1:
@@ -3355,13 +3509,13 @@ async def admin_user_details_callback(message: types.Message, target_user_id: in
         with get_connection() as conn:
             cursor = conn.cursor()
 
-            # Check if created_at column exists
+                                               
             cursor.execute("PRAGMA table_info(users)")
             columns = cursor.fetchall()
             column_names = [col[1] for col in columns]
             has_created_at = 'created_at' in column_names
 
-            # Get user basic info
+                                 
             if has_created_at:
                 cursor.execute("""
                     SELECT user_id, language, notify_quiet_hours_start, notify_quiet_hours_end, created_at
@@ -3383,14 +3537,14 @@ async def admin_user_details_callback(message: types.Message, target_user_id: in
 
             user_id, language, quiet_start, quiet_end, created_at = user_data
 
-            # Try to get Telegram user info
+                                           
             telegram_user_info = ""
             try:
-                # Get user info from Telegram (this might not work if user blocked the bot)
+                                                                                           
                 chat_member = await bot.get_chat_member(chat_id=target_user_id, user_id=target_user_id)
                 telegram_user = chat_member.user
 
-                # Build full name
+                                 
                 full_name = ""
                 if telegram_user.first_name:
                     full_name = telegram_user.first_name
@@ -3398,13 +3552,13 @@ async def admin_user_details_callback(message: types.Message, target_user_id: in
                     full_name += f" {telegram_user.last_name}"
                 full_name = full_name.strip() or "Неизвестно"
 
-                # Username
+                          
                 username = f"@{telegram_user.username}" if telegram_user.username else "Не установлен"
 
-                # Premium status
+                                
                 premium_status = "⭐ Да" if getattr(telegram_user, 'is_premium', False) else "Обычный"
 
-                # Language from Telegram
+                                        
                 telegram_lang = getattr(telegram_user, 'language_code', 'Неизвестно')
 
                 telegram_user_info = f"""
@@ -3417,10 +3571,10 @@ async def admin_user_details_callback(message: types.Message, target_user_id: in
                 logger.warning(f"Could not get Telegram user info for {target_user_id}: {e}")
                 telegram_user_info = "\n⚠️ <b>Информация из Telegram недоступна</b> (пользователь мог заблокировать бота)"
 
-            # Get user's subscriptions
+                                      
             subscriptions = get_user_subscriptions(user_id)
 
-            # Build detailed user info
+                                      
             user_text = f"👤 <b>{t(admin_user_id, 'admin_user_details_title')}</b>\n\n"
             user_text += f"🆔 <b>ID:</b> <code>{user_id}</code>\n"
             user_text += f"🌐 <b>{t(admin_user_id, 'language')}:</b> {language.upper()}\n"
@@ -3441,12 +3595,12 @@ async def admin_user_details_callback(message: types.Message, target_user_id: in
             if subscriptions:
                 user_text += f"\n📦 <b>{t(admin_user_id, 'admin_user_subs_list')}:</b>\n"
 
-                for sub in subscriptions[:10]:  # Show first 10 subscriptions
+                for sub in subscriptions[:10]:                               
                     try:
                         (sid, uid, url, mode, last_price, product_title, product_image,
                          min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert) = sub
                     except ValueError:
-                        # Fallback for old subscriptions
+                                                        
                         (sid, uid, url, mode, last_price, product_title, product_image,
                          min_price, max_price, notify_percent, notify_interval, last_notify_time) = sub[:12]
                         price_alert = None
@@ -3465,7 +3619,7 @@ async def admin_user_details_callback(message: types.Message, target_user_id: in
             else:
                 user_text += f"\n📝 {t(admin_user_id, 'admin_user_no_subs')}\n"
 
-        # Create keyboard with actions
+                                      
         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[])
@@ -3480,7 +3634,7 @@ async def admin_user_details_callback(message: types.Message, target_user_id: in
             )
         ])
 
-        # Split message if too long (Telegram limit is 4096 chars)
+                                                                  
         if len(user_text) > 4000:
             parts = []
             current_part = ""
@@ -3495,7 +3649,7 @@ async def admin_user_details_callback(message: types.Message, target_user_id: in
             if current_part:
                 parts.append(current_part)
 
-            # Send in parts
+                           
             for i, part in enumerate(parts):
                 if i == 0:
                     await message.edit_text(part, parse_mode="HTML")
@@ -3503,7 +3657,7 @@ async def admin_user_details_callback(message: types.Message, target_user_id: in
                     await message.answer(part, parse_mode="HTML")
                     await asyncio.sleep(0.5)
 
-            # Send keyboard as separate message
+                                               
             await message.answer(f"🔧 <b>Действия с пользователем {target_user_id}:</b>", reply_markup=keyboard, parse_mode="HTML")
         else:
             await message.edit_text(user_text, reply_markup=keyboard, parse_mode="HTML")
@@ -3520,17 +3674,17 @@ async def admin_cleanup(message: types.Message):
         conn = sqlite3.connect(DATABASE_PATH)
         cursor = conn.cursor()
 
-        # Count before cleanup
+                              
         cursor.execute("SELECT COUNT(*) FROM price_history WHERE ts < ?", (int(time.time()) - 30*24*3600,))
         old_price_points = cursor.fetchone()[0]
 
         cursor.execute("SELECT COUNT(*) FROM users WHERE user_id NOT IN (SELECT DISTINCT user_id FROM subscriptions)")
         inactive_users = cursor.fetchone()[0]
 
-        # Cleanup old price history (older than 30 days)
+                                                        
         cursor.execute("DELETE FROM price_history WHERE ts < ?", (int(time.time()) - 30*24*3600,))
 
-        # Cleanup users without subscriptions (older than 90 days)
+                                                                  
         cursor.execute("""
             DELETE FROM users
             WHERE user_id NOT IN (SELECT DISTINCT user_id FROM subscriptions)
@@ -3556,33 +3710,54 @@ async def admin_cleanup(message: types.Message):
         logger.exception("Error in admin_cleanup: %s", e)
         await message.answer(f"❌ Ошибка при очистке: {e}")
 
+
+def _prune_old_backups(backups_dir: Path, keep_last: int) -> int:
+    """Remove old db backups and return number of retained files."""
+    backup_files = list(backups_dir.glob("db_backup_*.db"))
+    backup_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+
+    if len(backup_files) > keep_last:
+        for old_file in backup_files[keep_last:]:
+            try:
+                old_file.unlink()
+            except Exception:
+                logger.warning("Failed to remove old backup file: %s", old_file, exc_info=True)
+
+    return min(len(backup_files), keep_last)
+
+
+async def _create_database_backup(trigger: str) -> Dict[str, Any]:
+    """Create backup and apply retention policy."""
+    timestamp = int(time.time())
+    backups_dir = Path("backups")
+    backups_dir.mkdir(exist_ok=True)
+
+    backup_path = backups_dir / f"db_backup_{timestamp}.db"
+    await asyncio.to_thread(create_sqlite_backup, str(backup_path))
+
+    retained = _prune_old_backups(backups_dir, DB_BACKUP_KEEP_FILES)
+    size_mb = backup_path.stat().st_size / 1024 / 1024
+
+    logger.info(
+        "Database backup created (trigger=%s): %s, size=%.2fMB, retained=%d",
+        trigger,
+        backup_path,
+        size_mb,
+        retained,
+    )
+    return {"path": str(backup_path), "size_mb": size_mb, "retained": retained}
+
+
 async def admin_backup(message: types.Message):
     """Manual database backup"""
     try:
-        timestamp = int(time.time())
-        backup_path = f"backups/db_backup_{timestamp}.db"
-
-        # Create backups directory if not exists
-        Path("backups").mkdir(exist_ok=True)
-
-        # Copy database
-        shutil.copy2(DATABASE_PATH, backup_path)
-
-        # Clean old backups (keep last 7)
-        backup_files = list(Path("backups").glob("db_backup_*.db"))
-        backup_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-
-        if len(backup_files) > 7:
-            for old_file in backup_files[7:]:
-                old_file.unlink()
-
-        backup_size = Path(backup_path).stat().st_size / 1024 / 1024  # MB
+        result = await _create_database_backup(trigger="admin")
 
         await message.answer(
             f"✅ <b>БЭКАП СОЗДАН</b>\n\n"
-            f"📁 Файл: {backup_path}\n"
-            f"📊 Размер: {backup_size:.1f} MB\n"
-            f"🗂️ Всего бэкапов: {len(backup_files[:7])}",
+            f"📁 Файл: {result['path']}\n"
+            f"📊 Размер: {result['size_mb']:.1f} MB\n"
+            f"🗂️ Храним бэкапов: {result['retained']}",
             parse_mode="HTML"
         )
 
@@ -3593,13 +3768,13 @@ async def admin_backup(message: types.Message):
 async def submit_user_report(user_id: int, report_text: str, message: types.Message):
     """Submit user report to admin"""
     try:
-        # Get user info from database
+                                     
         from database import get_connection
         user_lang = "ru"
         user_created = None
         with get_connection() as conn:
             cursor = conn.cursor()
-            # Check if created_at column exists
+                                               
             cursor.execute("PRAGMA table_info(users)")
             columns = cursor.fetchall()
             column_names = [col[1] for col in columns]
@@ -3616,15 +3791,15 @@ async def submit_user_report(user_id: int, report_text: str, message: types.Mess
                 if user_data:
                     user_lang = user_data[0] or "ru"
 
-        # Get user subscription count
+                                     
         subs_count = len(get_user_subscriptions(user_id))
 
-        # Get detailed user info from Telegram
+                                              
         user_info = ""
         if message and message.from_user:
             user = message.from_user
 
-            # Build full name
+                             
             full_name = ""
             if user.first_name:
                 full_name = user.first_name
@@ -3632,16 +3807,16 @@ async def submit_user_report(user_id: int, report_text: str, message: types.Mess
                 full_name += f" {user.last_name}"
             full_name = full_name.strip() or "Не указано"
 
-            # Username
+                      
             username = f"@{user.username}" if user.username else "Не установлен"
 
-            # Premium status
+                            
             premium_status = "⭐ Да" if getattr(user, 'is_premium', False) else "Обычный"
 
-            # Language from Telegram
+                                    
             telegram_lang = getattr(user, 'language_code', 'Неизвестно')
 
-            # Registration date
+                               
             created_date = "Неизвестно"
             if user_created:
                 import time
@@ -3654,7 +3829,7 @@ async def submit_user_report(user_id: int, report_text: str, message: types.Mess
 ⭐ <b>Премиум:</b> {premium_status}
 📅 <b>Регистрация:</b> {created_date}"""
 
-        # Format report for admin
+                                 
         admin_report = f"""
 📋 <b>НОВЫЙ РЕПОРТ ОТ ПОЛЬЗОВАТЕЛЯ</b>
 
@@ -3668,14 +3843,14 @@ async def submit_user_report(user_id: int, report_text: str, message: types.Mess
 <i>Используйте /admin respond {user_id} [текст ответа] для ответа</i>
 """
 
-        # Send to all admins
+                            
         for admin_id in ADMIN_IDS:
             try:
                 await bot.send_message(admin_id, admin_report, parse_mode="HTML")
             except Exception as e:
                 logger.warning(f"Failed to send report to admin {admin_id}: {e}")
 
-        # Confirm to user (if message object provided)
+                                                      
         if message:
             await message.answer(t(user_id, "report_sent"))
 
@@ -3685,7 +3860,7 @@ async def submit_user_report(user_id: int, report_text: str, message: types.Mess
             try:
                 await message.answer(t(user_id, "error_generic"))
             except Exception:
-                pass  # Ignore errors when sending error messages
+                pass                                             
 
 async def admin_respond(message: types.Message):
     """Admin command to respond to user reports"""
@@ -3702,7 +3877,7 @@ async def admin_respond(message: types.Message):
         target_user_id = int(parts[1])
         response_text = parts[2]
 
-        # Send response to user
+                               
         try:
             response_message = f"""
 💬 <b>ОТВЕТ АДМИНИСТРАТОРА</b>
@@ -3713,7 +3888,7 @@ async def admin_respond(message: types.Message):
 """
             await bot.send_message(target_user_id, response_message, parse_mode="HTML")
 
-            # Confirm to admin
+                              
             await message.answer(f"✅ Ответ отправлен пользователю {target_user_id}")
 
         except Exception as e:
@@ -3731,7 +3906,7 @@ async def admin_recommend(message: types.Message, args: List[str]):
     user_id = message.from_user.id
 
     if not args:
-        # Создаем красивую inline клавиатуру вместо текста
+                                                          
         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -3795,7 +3970,7 @@ async def admin_recommend(message: types.Message, args: List[str]):
             reason = " ".join(args[6:]) if len(args) > 6 else "Рекомендуемый товар"
 
             if add_recommended_product(title, url, price, category, brand, reason):
-                # Показываем результат с кнопкой для просмотра списка
+                                                                     
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="📋 Посмотреть список", callback_data="admin_recommend_list")]
                 ])
@@ -3933,12 +4108,12 @@ async def _admin_recommend_list(message: types.Message):
 
     keyboard_buttons = []
 
-    for i, product in enumerate(products[:10], 1):  # Максимум 10 товаров в сообщении
+    for i, product in enumerate(products[:10], 1):                                   
         priority_stars = "⭐" * min(product.get('priority', 0), 3)
         response += f"{i}. {priority_stars} <b>{product['title'][:30]}</b>\n"
         response += f"   💰 {product['price'] or '—'} | 🎯 {product['category'] or '—'}\n"
 
-        # Добавляем кнопку для управления этим товаром
+                                                      
         keyboard_buttons.append([
             InlineKeyboardButton(
                 text=f"#{product['id']} {product['title'][:15]}...",
@@ -3946,7 +4121,7 @@ async def _admin_recommend_list(message: types.Message):
             )
         ])
 
-    # Добавляем кнопки управления
+                                 
     keyboard_buttons.extend([
         [
             InlineKeyboardButton(text="➕ Добавить", callback_data="admin_recommend_add"),
@@ -3959,38 +4134,27 @@ async def _admin_recommend_list(message: types.Message):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
 
-    # Ограничение на длину сообщения
+                                    
     if len(response) > 3500:
         response = response[:3400] + "\n\n... (сообщение обрезано)"
 
     await message.answer(response, reply_markup=keyboard, parse_mode="HTML")
 
-# --- Automatic backups
+                       
 async def backup_database():
     """Create daily database backup"""
     try:
-        timestamp = int(time.time())
-        backup_path = f"backups/db_backup_{timestamp}.db"
-
-        # Create backups directory if not exists
-        Path("backups").mkdir(exist_ok=True)
-
-        # Copy database
-        shutil.copy2(DATABASE_PATH, backup_path)
-
-        # Clean old backups (keep last 7)
-        backup_files = list(Path("backups").glob("db_backup_*.db"))
-        backup_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-
-        if len(backup_files) > 7:
-            for old_file in backup_files[7:]:
-                old_file.unlink()
-
-        logger.info(f"Daily backup created: {backup_path} (kept {len(backup_files[:7])} backups)")
+        result = await _create_database_backup(trigger="scheduler")
+        logger.info(
+            "Daily backup created: %s (%.2f MB, retained=%d)",
+            result["path"],
+            result["size_mb"],
+            result["retained"],
+        )
     except Exception as e:
         logger.exception(f"Error in automatic backup: {e}")
 
-# --- Smart recommendations system
+                                  
 def analyze_user_preferences(user_id: int) -> Dict[str, Any]:
     """Analyze user's product preferences based on subscriptions"""
     try:
@@ -3999,7 +4163,7 @@ def analyze_user_preferences(user_id: int) -> Dict[str, Any]:
         with get_connection() as conn:
             cursor = conn.cursor()
 
-            # Get all user subscriptions
+                                        
             cursor.execute("""
                 SELECT url, product_title
                 FROM subscriptions
@@ -4016,23 +4180,23 @@ def analyze_user_preferences(user_id: int) -> Dict[str, Any]:
             keywords = []
 
             for url, title in subscriptions:
-                # Extract brand from URL (first part of path)
+                                                             
                 url_parts = url.replace('https://www.trendyol.com/', '').split('/')
                 if len(url_parts) > 0:
                     brand = url_parts[0].lower()
                     if brand and not brand.startswith('p-'):
                         brands.append(brand)
 
-                # Extract keywords from title
+                                             
                 if title:
-                    # Enhanced keyword extraction with more categories and brands
+                                                                                 
                     title_lower = title.lower()
 
-                    # Smartphones & Mobile
+                                          
                     if any(word in title_lower for word in ['telefon', 'iphone', 'samsung', 'xiaomi', 'huawei', 'oppo', 'vivo', 'realme']):
                         categories.append('smartphones')
                         keywords.extend(['telefon', 'smartphone', 'mobile', 'android', 'ios'])
-                        # Extract brand
+                                       
                         if 'iphone' in title_lower or 'apple' in title_lower:
                             brands.append('apple')
                         elif 'samsung' in title_lower:
@@ -4040,43 +4204,43 @@ def analyze_user_preferences(user_id: int) -> Dict[str, Any]:
                         elif 'xiaomi' in title_lower:
                             brands.append('xiaomi')
 
-                    # Home Appliances
+                                     
                     if any(word in title_lower for word in ['robot', 'supurge', 'vacuum', 'cleaner', 'dyson', 'irobot', 'roomba']):
                         categories.append('home_appliances')
                         keywords.extend(['robot', 'supurge', 'vacuum', 'cleaner', 'home'])
                         if 'dyson' in title_lower:
                             brands.append('dyson')
 
-                    # Cosmetics & Beauty
+                                        
                     if any(word in title_lower for word in ['krema', 'kosmetik', 'kozmetik', 'cream', 'moisturizer', 'makyaj', 'parfum', 'şampuan']):
                         categories.append('cosmetics')
                         keywords.extend(['krema', 'cream', 'cosmetic', 'beauty', 'skincare'])
 
-                    # Accessories
+                                 
                     if any(word in title_lower for word in ['kilif', 'case', 'cover', 'kulaklik', 'headphone', 'earbuds']):
                         categories.append('accessories')
                         keywords.extend(['kilif', 'case', 'cover', 'accessory'])
 
-                    # Fashion & Clothing
+                                        
                     if any(word in title_lower for word in ['tisort', 'gomlek', 'pantolon', 'ayakkabi', 'shirt', 'pants', 'shoes']):
                         categories.append('fashion')
                         keywords.extend(['fashion', 'clothing', 'wear'])
 
-                    # Electronics
+                                 
                     if any(word in title_lower for word in ['kulaklik', 'headphone', 'earbuds', 'mouse', 'keyboard', 'monitor']):
                         categories.append('electronics')
                         keywords.extend(['electronics', 'gadget', 'tech'])
 
-            # Count most common categories and brands
+                                                     
             from collections import Counter
             category_counts = Counter(categories)
             brand_counts = Counter(brands)
 
             return {
                 "has_subscriptions": True,
-                "categories": category_counts.most_common(3),  # Top 3 categories
-                "brands": brand_counts.most_common(3),        # Top 3 brands
-                "keywords": list(set(keywords)),              # Unique keywords
+                "categories": category_counts.most_common(3),                    
+                "brands": brand_counts.most_common(3),                      
+                "keywords": list(set(keywords)),                               
                 "total_subscriptions": len(subscriptions)
             }
 
@@ -4096,13 +4260,13 @@ async def generate_recommendations(user_id: int, limit: int = 5) -> List[Dict[st
         recommendations = []
         available_products = get_available_products()
 
-        # Personalized recommendation logic
+                                           
         user_brands = [brand.lower() for brand, _ in preferences["brands"]]
 
         for category, count in preferences["categories"]:
             category_products = [p for p in available_products if p["category"] == category]
 
-            # Prioritize products from user's preferred brands
+                                                              
             preferred_products = []
             other_products = []
 
@@ -4113,7 +4277,7 @@ async def generate_recommendations(user_id: int, limit: int = 5) -> List[Dict[st
                 else:
                     other_products.append(product)
 
-            # Mix preferred and other products (70% preferred, 30% other)
+                                                                         
             selected_products = []
             preferred_count = min(len(preferred_products), max(1, int(limit * 0.7)))
             other_count = min(len(other_products), limit - preferred_count)
@@ -4124,7 +4288,7 @@ async def generate_recommendations(user_id: int, limit: int = 5) -> List[Dict[st
                 remaining_slots = limit - len(selected_products)
                 selected_products.extend(random.sample(other_products, min(other_count, remaining_slots, len(other_products))))
 
-            # Add to recommendations
+                                    
             for product in selected_products:
                 if len(recommendations) >= limit:
                     break
@@ -4148,7 +4312,7 @@ async def generate_recommendations(user_id: int, limit: int = 5) -> List[Dict[st
                     "reason": reason
                 })
 
-        # If no category-based recommendations, add general popular products
+                                                                            
         if not recommendations:
             general_products = [p for p in available_products if p.get("popular", False)]
             if general_products:
@@ -4161,7 +4325,7 @@ async def generate_recommendations(user_id: int, limit: int = 5) -> List[Dict[st
                         "reason": "Популярный товар"
                     })
 
-        # Shuffle final recommendations for variety
+                                                   
         random.shuffle(recommendations)
 
         return recommendations[:limit]
@@ -4172,17 +4336,17 @@ async def generate_recommendations(user_id: int, limit: int = 5) -> List[Dict[st
 
 def get_available_products() -> List[Dict[str, Any]]:
     """Get list of available products for recommendations"""
-    # Сначала пытаемся получить рекомендуемые продукты из базы данных
+                                                                     
     from database import get_recommended_products
     recommended_products = get_recommended_products()
 
-    # Если есть рекомендуемые продукты, возвращаем их
+                                                     
     if recommended_products:
         return recommended_products
 
-    # Fallback на старый жестко заданный список, если база пустая
+                                                                 
     return [
-        # Smartphones
+                     
         {
             "title": "Samsung Galaxy S25 Ultra",
             "url": "https://www.trendyol.com/samsung/galaxy-s25-ultra-akilli-telefon-p-123456789",
@@ -4216,7 +4380,7 @@ def get_available_products() -> List[Dict[str, Any]]:
             "reason_template": "Камера премиум-класса"
         },
 
-        # Home Appliances
+                         
         {
             "title": "Dyson V15 Detect",
             "url": "https://www.trendyol.com/dyson/v15-detect-robot-supurge-p-123456793",
@@ -4242,7 +4406,7 @@ def get_available_products() -> List[Dict[str, Any]]:
             "reason_template": "Компактный и мощный"
         },
 
-        # Cosmetics
+                   
         {
             "title": "La Mer Crème de la Mer",
             "url": "https://www.trendyol.com/la-mer/creme-de-la-mer-yuz-kremi-p-123456796",
@@ -4268,7 +4432,7 @@ def get_available_products() -> List[Dict[str, Any]]:
             "reason_template": "Для чувствительной кожи"
         },
 
-        # Fashion
+                 
         {
             "title": "Nike Air Max 270",
             "url": "https://www.trendyol.com/nike/air-max-270-erkek-spor-ayakkabi-p-123456799",
@@ -4286,7 +4450,7 @@ def get_available_products() -> List[Dict[str, Any]]:
             "reason_template": "Комфорт и стиль"
         },
 
-        # Electronics
+                     
         {
             "title": "Sony WH-1000XM5",
             "url": "https://www.trendyol.com/sony/wh-1000xm5-kulaklik-p-123456801",
@@ -4305,7 +4469,7 @@ def get_available_products() -> List[Dict[str, Any]]:
         }
     ]
 
-# --- New user commands
+                       
 @dp.message(Command("alerts"))
 async def cmd_alerts(message: types.Message):
     """Управление ценовыми алертами для всех подписок"""
@@ -4318,7 +4482,7 @@ async def cmd_alerts(message: types.Message):
             await message.answer(t(user_id, "no_subs"))
             return
 
-        # Формируем сообщение с текущими алертами
+                                                 
         lines = [t(user_id, "alerts_header")]
 
         keyboard = []
@@ -4338,7 +4502,7 @@ async def cmd_alerts(message: types.Message):
 
             lines.append(f"📦 <b>{title}</b>\n💰 {t(user_id, 'alerts_current')}: {current_alert}\n")
 
-            # Кнопки для управления алертом
+                                           
             keyboard.append([
                 InlineKeyboardButton(
                     text=f"⚙️ {t(user_id, 'btn_edit')} ID {sub_id}",
@@ -4418,7 +4582,7 @@ async def cmd_recommend(message: types.Message):
             response += f"💰 {rec['price']}\n"
             response += f"📝 {rec['reason']}\n\n"
 
-            # Add button to view product
+                                        
             keyboard.append([
                 InlineKeyboardButton(
                     text=f"🔍 {t(user_id, 'btn_view_product')} {i}",
@@ -4436,7 +4600,7 @@ async def cmd_recommend(message: types.Message):
         logger.exception("Error in cmd_recommend: %s", e)
         await message.answer(f"❌ {t(user_id, 'error_generic')}: {e}")
 
-# --- Health checks
+                   
 async def cmd_health(message: types.Message):
     """Health check command"""
     user_id = message.from_user.id
@@ -4454,7 +4618,7 @@ async def cmd_health(message: types.Message):
             icon = "✅" if result else "❌"
             health_text += f"{icon} {check_name}\n"
 
-        # Additional info
+
         health_text += f"\n⏰ Последняя проверка: {datetime.fromtimestamp(last_health_check).strftime('%H:%M:%S') if last_health_check else 'никогда'}"
         health_text += f"\n📊 Активных задач: {len(asyncio.all_tasks())}"
 
@@ -4470,7 +4634,7 @@ async def perform_health_check() -> dict:
     results = {}
 
     try:
-        # Database connection
+                             
         import sqlite3
         conn = sqlite3.connect(DATABASE_PATH, timeout=5)
         conn.execute("SELECT 1")
@@ -4481,7 +4645,7 @@ async def perform_health_check() -> dict:
         results["База данных"] = False
 
     try:
-        # Bot connectivity
+                          
         await bot.get_me()
         results["Бот (Telegram API)"] = True
     except Exception as e:
@@ -4489,7 +4653,7 @@ async def perform_health_check() -> dict:
         results["Бот (Telegram API)"] = False
 
     try:
-        # Scheduler status
+                          
         if hasattr(scheduler, 'running') and scheduler.running:
             results["Планировщик задач"] = True
         else:
@@ -4499,9 +4663,9 @@ async def perform_health_check() -> dict:
         results["Планировщик задач"] = False
 
     try:
-        # Scraper functionality (test with a real product URL)
+                                                              
         from scraper import get_price_async
-        # Test with a known working product URL (Cream Co moisturizer)
+                                                                      
         test_result = await asyncio.wait_for(
             get_price_async("https://www.trendyol.com/cream-co/su-bazli-moisturizer-nemlendirici-aydinlatici-yuz-kremi-hyaluronik-asit-50-ml-tum-cilt-tipleri-p-318291787"),
             timeout=15
@@ -4514,19 +4678,19 @@ async def perform_health_check() -> dict:
         logger.error(f"Scraper health check failed: {e}")
         results["Парсер цен"] = False
 
-    # Update last check time
+                            
     last_health_check = int(time.time())
 
     return results
 
-# ===== HANDLER REGISTRATION (module level, executed on import) =====
+                                                                     
 def _prune_legacy_handlers_for_new_mode() -> None:
     """Drop legacy handlers that conflict with the new architecture."""
     legacy_message_callbacks = {
-        # Legacy language flow conflicts with BasicHandler in new mode.
+                                                                       
         "cmd_language_command",
         "cmd_lang_message",
-        # Legacy onboarding belongs to old /start flow only.
+                                                            
         "cmd_onboarding_try",
         "cmd_onboarding_skip",
         "cmd_onboarding_done",
@@ -4554,7 +4718,7 @@ def _prune_legacy_handlers_for_new_mode() -> None:
         )
 
 
-# Register handlers based on architecture
+                                         
 use_new_handlers_init = USE_NEW_HANDLERS
 if use_new_handlers_init:
     logger.info("Using new handler architecture")
@@ -4585,7 +4749,7 @@ if not use_new_handlers_init:
     logger.info("Using legacy handler architecture")
     from aiogram import F
     
-    # Register old handlers
+                           
     dp.message.register(cmd_start_old, Command("start"))
     dp.message.register(cmd_help_old, Command("help"))
     dp.message.register(cmd_mysubs_cmd_old, Command("mysubs"))
@@ -4598,16 +4762,16 @@ if not use_new_handlers_init:
         F.text.contains("trendyol.com") | F.text.contains("ty.gl/")
     )
     
-    # Register callback handlers for inline buttons
+                                                   
     dp.callback_query.register(callback_handler_old)
     logger.info("Legacy callback handlers registered")
 
-# Register admin commands
+                         
 dp.message.register(cmd_admin, Command("admin"))
 dp.message.register(cmd_health, Command("health"))
 logger.info("Admin commands registered")
 
-# --- main
+          
 async def set_commands_menu():
     """Устанавливает меню команд для бота в Telegram"""
     from aiogram.types import BotCommand
@@ -4636,24 +4800,50 @@ async def set_commands_menu():
         logger.error(f"❌ Failed to set bot commands menu: {e}")
 
 
+async def shutdown_runtime() -> None:
+    """Graceful runtime shutdown for polling mode."""
+    try:
+        if getattr(scheduler, "running", False):
+            scheduler.shutdown(wait=False)
+            logger.info("Scheduler shutdown completed")
+    except Exception:
+        logger.exception("Failed to shutdown scheduler cleanly")
+
+    try:
+        close_all_connections()
+        logger.info("Database connection pool closed")
+    except Exception:
+        logger.exception("Failed to close database connections")
+
+    try:
+        await bot.session.close()
+        logger.info("Bot HTTP session closed")
+    except Exception:
+        logger.exception("Failed to close bot HTTP session")
+
+
 async def main():
-    # Устанавливаем меню команд
+                               
     await set_commands_menu()
 
-    # Регистрируем антиспам middleware
+                                      
     dp.message.middleware(AntiSpamMiddleware())
     dp.callback_query.middleware(AntiSpamMiddleware())
-    # Start scheduler after loop is running
-    asyncio.create_task(start_scheduler_async())
-    # Ensure no webhook is set (prevents TelegramConflictError when polling)
+                                                                            
     try:
         await bot.delete_webhook(drop_pending_updates=True)
         logger.info("Webhook deleted / cleared (if existed)")
     except Exception as e:
         logger.warning("Failed to delete webhook (may be fine): %s", e)
 
+                                                     
+    await start_scheduler_async(delay=0.0)
+
     logger.info("Bot polling started")
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await shutdown_runtime()
 
 async def check_blocked_users():
     """Проверить, кто заблокировал бота"""
@@ -4661,7 +4851,7 @@ async def check_blocked_users():
         from database import get_connection
         from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 
-        admin_user_ids = ADMIN_IDS  # Только админы могут использовать эту функцию
+        admin_user_ids = ADMIN_IDS                                                
 
         with get_connection() as conn:
             cursor = conn.cursor()
@@ -4673,19 +4863,19 @@ async def check_blocked_users():
 
         for user_id in user_ids:
             try:
-                # Пытаемся отправить сообщение пользователю
+                                                           
                 await bot.send_chat_action(chat_id=user_id, action="typing")
                 active_users.append(user_id)
-                await asyncio.sleep(0.1)  # Небольшая задержка чтобы не превысить лимиты
+                await asyncio.sleep(0.1)                                                
             except TelegramForbiddenError:
-                # Пользователь заблокировал бота
+                                                
                 blocked_users.append(user_id)
             except TelegramBadRequest as e:
                 if "chat not found" in str(e).lower() or "user not found" in str(e).lower():
                     blocked_users.append(user_id)
             except Exception as e:
                 logger.warning(f"Error checking user {user_id}: {e}")
-                # В случае других ошибок считаем пользователя активным
+                                                                      
                 active_users.append(user_id)
 
         return blocked_users, active_users
@@ -4709,7 +4899,7 @@ async def admin_check_blocked(message: types.Message):
 
     if blocked_users:
         response += f"❌ <b>Заблокировали бота ({len(blocked_users)}):</b>\n"
-        for uid in blocked_users[:20]:  # Показываем максимум 20
+        for uid in blocked_users[:20]:                          
             response += f"• <code>{uid}</code>\n"
         if len(blocked_users) > 20:
             response += f"... и еще {len(blocked_users) - 20} пользователей\n"
@@ -4720,7 +4910,7 @@ async def admin_check_blocked(message: types.Message):
     response += f"✅ <b>Активных пользователей:</b> {len(active_users)}\n"
     response += f"📊 <b>Всего проверено:</b> {len(blocked_users) + len(active_users)}"
 
-    # Создаем клавиатуру для дополнительных действий
+                                                    
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[

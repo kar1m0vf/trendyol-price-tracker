@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 Тестирование системы получения истории цен на реальных товарах Trendyol
 """
@@ -13,14 +13,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from scraper import get_price_history_from_akakce_async, get_product_title
 import logging
 
-# Настройка логирования для тестирования
+                                        
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# This module is an integration script; skip during pytest collection by default
+                                                                                
 pytestmark = pytest.mark.skip(reason="Integration test script - skip during unit test runs")
 
-# Реальные товары Trendyol для тестирования (из рабочих тестов)
+                                                               
 TEST_PRODUCTS = [
     {
         "name": "Cream Co Moisturizer",
@@ -57,7 +57,7 @@ async def test_single_product(product):
     start_time = time.time()
 
     try:
-        # Шаг 1: Получить название товара
+                                         
         print("   📝 Получаю название товара...")
         title = get_product_title(product['url'])
         if title:
@@ -66,7 +66,7 @@ async def test_single_product(product):
             print("   ❌ Название не найдено")
             return False, 0, time.time() - start_time
 
-        # Шаг 2: Получить историю цен
+                                     
         print("   📊 Получаю историю цен...")
         history = await get_price_history_from_akakce_async(product['url'])
 
@@ -106,10 +106,10 @@ async def run_tests():
         })
         total_time += elapsed
 
-        # Небольшая пауза между запросами
+                                         
         await asyncio.sleep(2)
 
-    # Анализ результатов
+                        
     print("\n" + "=" * 80)
     print("📊 РЕЗУЛЬТАТЫ ТЕСТИРОВАНИЯ")
     print("=" * 80)
@@ -129,7 +129,7 @@ async def run_tests():
         print(f"  {i}. {status} {result['product']['name']}{points} - {result['time']:.1f} сек")
     print("\n" + "=" * 80)
 
-    # Анализ по категориям
+                          
     category_stats = {}
     for result in results:
         cat = result['product']['category']

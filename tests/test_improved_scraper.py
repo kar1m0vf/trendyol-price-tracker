@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 Тест улучшенных функций scraper.py
 """
@@ -55,7 +55,7 @@ def test_json_extraction():
     """Тестируем извлечение из JSON."""
     print('\n=== ТЕСТИРОВАНИЕ ИЗВЛЕЧЕНИЯ ИЗ JSON ===')
 
-    # Пример HTML с JSON данными
+                                
     test_html = '''
     <script>
     window.__PRODUCT_DETAIL_APP_INITIAL_STATE__ = {
@@ -74,7 +74,7 @@ def test_json_extraction():
     title = scraper._extract_title_from_json(test_html)
     print(f'Extracted title: {title}')
 
-    # Тестируем извлечение истории
+                                  
     hist = scraper._extract_price_history_from_object({"product": {"priceHistory": [
         {"date": "01.01.2024", "price": 100.0},
         {"date": "02.01.2024", "price": 95.0}

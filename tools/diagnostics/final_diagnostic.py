@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 Финальная диагностика бота
 """
@@ -10,7 +10,7 @@ def main():
     print('🎯 ФИНАЛЬНАЯ ДИАГНОСТИКА БОТА')
     print('=' * 50)
 
-    # Тест 1: Импорт всех модулей
+                                 
     print('📦 ТЕСТ ИМПОРТА МОДУЛЕЙ:')
     try:
         import bot
@@ -24,7 +24,7 @@ def main():
         print(f'❌ Ошибка импорта: {e}')
         return
 
-    # Тест 2: База данных
+                         
     print('\n💾 ТЕСТ БАЗЫ ДАННЫХ:')
     try:
         from database import init_db
@@ -33,7 +33,7 @@ def main():
     except Exception as e:
         print(f'❌ Ошибка БД: {e}')
 
-    # Тест 3: Аналитика
+                       
     print('\n📊 ТЕСТ АНАЛИТИКИ:')
     try:
         from analytics import Analytics
@@ -43,7 +43,7 @@ def main():
     except Exception as e:
         print(f'❌ Ошибка аналитики: {e}')
 
-    # Тест 4: Конфигурация
+                          
     print('\n⚙️  ТЕСТ КОНФИГУРАЦИИ:')
     try:
         from config import BOT_TOKEN
@@ -54,7 +54,7 @@ def main():
     except Exception as e:
         print(f'❌ Ошибка конфигурации: {e}')
 
-    # Тест 5: Структура проекта
+                               
     print('\n📁 ТЕСТ СТРУКТУРЫ ПРОЕКТА:')
     required_dirs = ['backups', 'logs', 'locales']
     all_dirs_exist = True

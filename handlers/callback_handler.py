@@ -27,13 +27,13 @@ class CallbackHandler(BaseHandler):
         logger.info(f"Callback received: data='{data}', user={user_id}")
 
         try:
-            # --- Detailed help ---
+                                   
             if data == "help:full":
                 await cq.answer()
                 await cq.message.edit_text(self.t(user_id, "help_full"))
                 return
 
-            # --- Language change ---
+                                     
             if data.startswith("lang:"):
                 await cq.answer()
                 lang = data.split(":", 1)[1]
@@ -51,19 +51,19 @@ class CallbackHandler(BaseHandler):
                     logger.warning("Failed to update language UI for %s: %s", user_id, e)
                 return
 
-            # --- Single unsubscribe ---
-            # --- Trending callbacks ---
+                                        
+                                        
             if data.startswith("trend:"):
                 await cq.answer()
                 try:
                     parts = data.split(":")
-                    # trend:all
+                               
                     if len(parts) >= 2 and parts[1] == "all":
                         from scraper import get_trending_all_top3_async, get_trending_sample
                         import bot as _bot
                         items = await get_trending_all_top3_async()
                         if not items:
-                            # fallback: show canned sample headlines instead of hard "no access" message
+                                                                                                        
                             sample = get_trending_sample()
                             if sample:
                                 await cq.message.edit_text(self.t(user_id, "trending_header") + "\n\n" + "\n\n".join(sample))
@@ -74,21 +74,21 @@ class CallbackHandler(BaseHandler):
                         await self.bot.send_message(user_id, header + "\n\n" + _bot.format_trending_items(user_id, items))
                         return
 
-                    # trend:catmenu
+                                   
                     if len(parts) >= 2 and parts[1] == "catmenu":
                         import bot as _bot
                         kb = _bot.trending_categories_kb(user_id)
                         await cq.message.edit_text(self.t(user_id, "trending_choose_category"), reply_markup=kb)
                         return
 
-                    # trend:search -> prompt user to enter query (state set in bot)
+                                                                                   
                     if len(parts) >= 2 and parts[1] == "search":
                         import bot as _bot
                         _bot.TREND_SEARCH_AWAIT.add(user_id)
                         await cq.message.edit_text(self.t(user_id, "trending_enter_query"))
                         return
 
-                    # trend:cat:<key>
+                                     
                     if len(parts) >= 3 and parts[1] == "cat":
                         cat_key = parts[2]
                         from scraper import get_trending_by_category_top3_async, get_trending_sample
@@ -109,7 +109,7 @@ class CallbackHandler(BaseHandler):
                     await cq.answer(self.t(user_id, "error_generic"), show_alert=True)
                 return
 
-            # --- Compare prices ---
+                                    
             if data.startswith("compare:"):
                 await cq.answer(self.t(user_id, "compare_loading"))
                 try:
@@ -158,7 +158,7 @@ class CallbackHandler(BaseHandler):
                     await cq.answer(self.t(user_id, "error_generic"), show_alert=True)
                 return
 
-            # --- Confirm mass unsubscribe ---
+                                              
             if data.startswith("confirm_unsub_all:"):
                 await cq.answer()
                 try:
@@ -173,7 +173,7 @@ class CallbackHandler(BaseHandler):
                     await cq.message.edit_text(self.t(user_id, "error_generic"))
                 return
 
-            # --- Mode change ---
+                                 
             if data.startswith("mode:"):
                 parts = data.split(":")
                 if len(parts) == 3:
@@ -186,7 +186,7 @@ class CallbackHandler(BaseHandler):
                             await cq.answer(self.t(user_id, "no_subs"), show_alert=True)
                             return
 
-                        # Check ownership
+                                         
                         owner_ok = len(sub) >= 2 and sub[1] == user_id
                         if not owner_ok:
                             await cq.answer(self.t(user_id, "error_not_your_sub"), show_alert=True)
@@ -199,7 +199,7 @@ class CallbackHandler(BaseHandler):
                             await cq.answer(self.t(user_id, "error_generic"), show_alert=True)
                             return
 
-                        # Update UI
+                                   
                         try:
                             await cq.message.edit_reply_markup(reply_markup=subscription_controls_kb_for_user(user_id, sub_id))
                             await cq.answer(self.t(user_id, "mode_changed_short").format(mode=mode))
@@ -214,7 +214,7 @@ class CallbackHandler(BaseHandler):
                         await cq.answer(self.t(user_id, "error_generic"), show_alert=True)
                 return
 
-            # --- Edit subscription ---
+                                       
             if data.startswith("edit_sub:"):
                 await cq.answer()
                 try:
@@ -224,7 +224,7 @@ class CallbackHandler(BaseHandler):
                         await cq.answer(self.t(user_id, "error_not_your_sub"), show_alert=True)
                         return
 
-                    # Extract subscription data
+                                               
                     try:
                         (_, _, url, mode, last_price, product_title, product_image,
                          min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert) = sub
@@ -233,7 +233,7 @@ class CallbackHandler(BaseHandler):
                          min_price, max_price, notify_percent, notify_interval, last_notify_time) = sub[:12]
                         price_alert = None
 
-                    # Format subscription info
+                                              
                     title = product_title if product_title else url[:60] + "..." if len(url) > 60 else url
                     price_text = f"{last_price:.0f} TL" if last_price is not None else self.t(user_id, "unknown_price")
                     mode_text = self.t(user_id, "mode_hourly") if mode == "hourly" else self.t(user_id, "mode_discount")
@@ -255,7 +255,7 @@ class CallbackHandler(BaseHandler):
                     if notify_interval is not None and notify_interval != 60:
                         edit_text += f"⏰ {self.t(user_id, 'interval')}: {notify_interval} {self.t(user_id, 'minutes')}\n"
 
-                    # Send edit message
+                                       
                     await self.bot.send_message(
                         user_id,
                         edit_text,
@@ -270,7 +270,7 @@ class CallbackHandler(BaseHandler):
                     await cq.answer(self.t(user_id, "error_generic"), show_alert=True)
                 return
 
-            # Unknown callback
+                              
             await cq.answer(self.t(user_id, "error_generic"), show_alert=True)
 
         except Exception as e:
@@ -280,18 +280,18 @@ class CallbackHandler(BaseHandler):
     async def handle_admin_user_details(self, cq: CallbackQuery):
         """Handle admin user details callbacks."""
         try:
-            # Check admin permissions
+                                     
             from config import ADMIN_IDS
             if cq.from_user.id not in ADMIN_IDS:
                 await cq.answer(self.t(cq.from_user.id, "admin_only"), show_alert=True)
                 return
 
-            # Extract user ID
+                             
             target_user_id = int(cq.data.split(":", 1)[1])
 
             await cq.answer(self.t(cq.from_user.id, "loading_user_details"))
 
-            # Delegate to main admin details implementation in bot.py
+                                                                     
             try:
                 from bot import admin_user_details_callback
                 await admin_user_details_callback(cq.message, target_user_id, cq.from_user.id)
@@ -309,13 +309,13 @@ class CallbackHandler(BaseHandler):
         """Register all callback handlers."""
         from aiogram import F
         
-        # Register admin user details handler first (more specific)
+                                                                   
         dp.callback_query.register(
             self.handle_admin_user_details,
             F.data.startswith("user_details:")
         )
         
-        # Register main callback handler (catchall for other callbacks)
+                                                                       
         dp.callback_query.register(self.handle_main_callback)
 
 

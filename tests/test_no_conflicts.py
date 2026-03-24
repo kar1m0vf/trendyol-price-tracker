@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 Тест на отсутствие конфликтов между старыми и новыми обработчиками.
 """
@@ -11,13 +11,13 @@ def test_no_double_registration():
     """Тест что обработчики не регистрируются дважды."""
     print("Testing handler conflict resolution...")
 
-    # Test with new handlers enabled
+                                    
     os.environ['USE_NEW_HANDLERS'] = 'true'
     try:
         import bot
         print("✅ New handlers mode: no conflicts detected")
 
-        # Reset modules for clean reimport
+                                          
         modules_to_reset = ['bot', 'handlers', 'handlers.basic', 'handlers.subscription_handler']
         for mod in modules_to_reset:
             if mod in sys.modules:
@@ -27,13 +27,13 @@ def test_no_double_registration():
         print(f"❌ New handlers mode failed: {e}")
         raise
 
-    # Test with old handlers enabled
+                                    
     os.environ['USE_NEW_HANDLERS'] = 'false'
     try:
         import bot
         print("✅ Old handlers mode: no conflicts detected")
 
-        # Reset modules again
+                             
         for mod in modules_to_reset:
             if mod in sys.modules:
                 del sys.modules[mod]
@@ -49,12 +49,12 @@ def test_localization_module():
     try:
         from localization import t, LOCALES
 
-        # Test translation
+                          
         result = t(12345, "start_text")
         assert isinstance(result, str), "Translation should return string"
         print("✅ Localization module works")
 
-        # Test locales loaded
+                             
         assert "ru" in LOCALES, "Russian locale should be loaded"
         print("✅ Locales loaded correctly")
         return
@@ -68,7 +68,7 @@ def test_middleware_no_cycles():
         import middleware
         print("✅ Middleware imports without cycles")
 
-        # Test AntiSpamMiddleware creation
+                                          
         mw = middleware.AntiSpamMiddleware()
         print("✅ AntiSpamMiddleware can be instantiated")
         return
@@ -82,7 +82,7 @@ async def test_handlers_functionality():
         from handlers import BasicHandler, SubscriptionHandler
         from unittest.mock import AsyncMock
 
-        # Test BasicHandler
+                           
         basic = BasicHandler()
         mock_msg = MagicMock()
         mock_msg.from_user.id = 12345
@@ -92,10 +92,10 @@ async def test_handlers_functionality():
         mock_msg.answer.assert_called_once()
         print("✅ BasicHandler functionality works")
 
-        # Test SubscriptionHandler
+                                  
         sub = SubscriptionHandler()
         await sub.handle_mysubs_command(mock_msg)
-        # Should not crash
+                          
         print("✅ SubscriptionHandler functionality works")
         return
     except Exception as e:
@@ -109,28 +109,28 @@ def main():
 
     results = []
 
-    # Test localization
+                       
     try:
         test_localization_module()
         results.append(True)
     except Exception:
         results.append(False)
 
-    # Test middleware
+                     
     try:
         test_middleware_no_cycles()
         results.append(True)
     except Exception:
         results.append(False)
 
-    # Test no double registration
+                                 
     try:
         test_no_double_registration()
         results.append(True)
     except Exception:
         results.append(False)
 
-    # Test functionality
+                        
     try:
         asyncio.run(test_handlers_functionality())
         results.append(True)

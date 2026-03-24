@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 Тесты для новых обработчиков подписок.
 """
@@ -7,7 +7,7 @@ import sys
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-# Устанавливаем переменную окружения для использования новых обработчиков
+                                                                         
 os.environ['USE_NEW_HANDLERS'] = 'true'
 
 def test_subscription_handlers_import():
@@ -16,11 +16,11 @@ def test_subscription_handlers_import():
         from handlers import SubscriptionHandler
         print("✅ SubscriptionHandler import OK")
 
-        # Создаем экземпляр
+                           
         handler = SubscriptionHandler()
         print("✅ SubscriptionHandler instance created")
 
-        # Проверяем методы
+                          
         assert hasattr(handler, 'handle_mysubs_command'), "handle_mysubs_command method missing"
         assert hasattr(handler, 'handle_unsubscribe_command'), "handle_unsubscribe_command method missing"
         assert hasattr(handler, 'handle_url_subscription'), "handle_url_subscription method missing"
@@ -37,12 +37,12 @@ def test_utils_functions():
         from utils import get_next_notification_time, parse_date_flexible
         print("✅ Utils functions import OK")
 
-        # Тест get_next_notification_time
+                                         
         result = get_next_notification_time("hourly", None, None, 12345)
         assert isinstance(result, str), "get_next_notification_time should return string"
         print("✅ get_next_notification_time works")
 
-        # Тест parse_date_flexible
+                                  
         dt = parse_date_flexible("20.09.2025")
         assert dt is not None, "parse_date_flexible should parse valid date"
         print("✅ parse_date_flexible works")
@@ -60,13 +60,13 @@ async def test_handler_functionality():
 
         handler = SubscriptionHandler()
 
-        # Mock message
+                      
         mock_message = MagicMock()
         mock_message.from_user.id = 12345
         mock_message.text = "/mysubs"
         mock_message.answer = AsyncMock()
 
-        # Тестируем handle_mysubs_command (должен вызвать answer)
+                                                                 
         await handler.handle_mysubs_command(mock_message)
         mock_message.answer.assert_called_once()
         print("✅ Handler functionality test passed")
@@ -77,18 +77,18 @@ async def test_handler_functionality():
 
 def test_old_handlers_still_work():
     """Тест что старые обработчики все еще работают при USE_NEW_HANDLERS=false."""
-    # Сохраняем оригинальное значение
+                                     
     original_value = os.environ.get('USE_NEW_HANDLERS')
 
     try:
-        # Отключаем новые обработчики
+                                     
         os.environ['USE_NEW_HANDLERS'] = 'false'
 
-        # Ensure fresh import of bot module with changed env
+                                                            
         if 'bot' in sys.modules:
             del sys.modules['bot']
 
-        # Импортируем и проверяем что старые функции доступны
+                                                             
         import bot
         assert hasattr(bot, 'cmd_mysubs'), "cmd_mysubs should still be available"
         assert hasattr(bot, 'cmd_unsubscribe'), "cmd_unsubscribe should still be available"
@@ -98,7 +98,7 @@ def test_old_handlers_still_work():
         print(f"❌ Old handlers test failed: {e}")
         raise
     finally:
-        # Восстанавливаем значение
+                                  
         if original_value is not None:
             os.environ['USE_NEW_HANDLERS'] = original_value
         elif 'USE_NEW_HANDLERS' in os.environ:
@@ -111,7 +111,7 @@ def main():
 
     results = []
 
-    # Тесты импорта
+                   
     try:
         test_subscription_handlers_import()
         results.append(True)
@@ -124,7 +124,7 @@ def main():
     except Exception:
         results.append(False)
 
-    # Тест функциональности
+                           
     try:
         asyncio.run(test_handler_functionality())
         results.append(True)
@@ -133,7 +133,7 @@ def main():
         print(f"❌ Handler functionality test failed: {e}")
         results.append(False)
 
-    # Тест обратной совместимости
+                                 
     try:
         test_old_handlers_still_work()
         results.append(True)

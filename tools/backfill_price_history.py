@@ -20,7 +20,7 @@ import sqlite3
 import logging
 import os
 
-# Use relative imports from project
+                                   
 from scraper import get_price
 from database import get_all_subscriptions, add_price_point
 
@@ -49,14 +49,14 @@ def query_cdx(url, from_ts=None, to_ts=None, limit=50):
         r = requests.get(CDX_URL, params=params, headers=HEADERS, timeout=20)
         r.raise_for_status()
         data = r.json()
-        # first row is header
+                             
         if len(data) <= 1:
             return []
         rows = data[1:]
-        # rows: [timestamp, original, ...] depending on output; default includes timestamp at index 1
+                                                                                                     
         snapshots = []
         for row in rows:
-            # some CDX endpoints return ["original","timestamp",...]
+                                                                    
             if len(row) >= 2:
                 ts = row[1]
                 snapshots.append(ts)
@@ -89,9 +89,9 @@ def main(limit=None, days=None):
         if not snapshots:
             logger.info("No snapshots for %s", url)
             continue
-        # iterate snapshots from oldest to newest
+                                                 
         for ts in sorted(snapshots):
-            # optional date filtering
+                                     
             if days:
                 try:
                     snap_dt = datetime.strptime(ts, "%Y%m%d%H%M%S")
@@ -103,17 +103,17 @@ def main(limit=None, days=None):
                 snap_html = fetch_wayback_snapshot(url, ts)
                 if not snap_html:
                     continue
-                # try to extract price using get_price, but get_price expects live url; we can attempt parse with BeautifulSoup
-                # simplest approach: save point with unknown price? Instead attempt to parse with scraper.parse_price_text via temporary file
-                # We'll write snapshot to a temp file and use scraper.get_price on the original Wayback URL (it may not work), so
-                # better: attempt simple regex for TL in snapshot
+                                                                                                                               
+                                                                                                                                             
+                                                                                                                                 
+                                                                 
                 import re
                 m = re.search(r"(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)\s*TL", snap_html)
                 if m:
                     from scraper import parse_price_text
                     p = parse_price_text(m.group(1))
                     if p:
-                        # convert snapshot ts to POSIX
+                                                      
                         try:
                             snap_dt = datetime.strptime(ts, "%Y%m%d%H%M%S")
                             snap_ts = int(snap_dt.timestamp())
@@ -122,7 +122,7 @@ def main(limit=None, days=None):
                         add_price_point(sub_id, url, float(p), ts=snap_ts or None, source='wayback')
                         count_points += 1
                         logger.info("Saved point %s -> %s TL", ts, p)
-                # be polite
+                           
                 time.sleep(0.5)
             except Exception as e:
                 logger.exception("Error processing snapshot %s for %s: %s", ts, url, e)

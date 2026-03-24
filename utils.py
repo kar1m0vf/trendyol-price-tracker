@@ -7,7 +7,7 @@ import asyncio
 from typing import Any, Callable, TypeVar, Optional
 from datetime import datetime
 
-# Настройка логирования
+                       
 def setup_logger(name: str, log_file: str, level=logging.INFO) -> logging.Logger:
     """Настраивает и возвращает logger с ротацией файлов"""
     formatter = logging.Formatter(
@@ -20,7 +20,7 @@ def setup_logger(name: str, log_file: str, level=logging.INFO) -> logging.Logger
 
     handler = RotatingFileHandler(
         f'logs/{log_file}',
-        maxBytes=10*1024*1024,  # 10MB
+        maxBytes=10*1024*1024,        
         backupCount=5
     )
     handler.setFormatter(formatter)
@@ -31,7 +31,7 @@ def setup_logger(name: str, log_file: str, level=logging.INFO) -> logging.Logger
     
     return logger
 
-# Декоратор для повторных попыток
+                                 
 def retry(
     exceptions: tuple = (Exception,),
     tries: int = 3,
@@ -73,7 +73,7 @@ def retry(
 
     return decorator
 
-# Асинхронная версия декоратора retry
+                                     
 def async_retry(
     exceptions: tuple = (Exception,),
     tries: int = 3,
@@ -111,7 +111,7 @@ def async_retry(
 
     return decorator
 
-# Rate limiting
+               
 class RateLimiter:
     """
     Простой rate limiter на основе sliding window
@@ -137,7 +137,7 @@ class RateLimiter:
         self._cleanup_old_requests()
         self.requests.append(time.time())
 
-# Асинхронная версия rate limiter
+                                 
 class AsyncRateLimiter:
     """
     Асинхронная версия rate limiter
@@ -183,16 +183,16 @@ def parse_date_flexible(date_str: str) -> Optional[datetime]:
 
     date_str = date_str.strip()
 
-    # Список форматов для попытки парсинга (в порядке вероятности)
+                                                                  
     formats = [
-        "%d.%m.%Y %H:%M:%S",      # 20.09.2025 14:30:00
-        "%d.%m.%Y %H:%M",         # 20.09.2025 14:30
-        "%d.%m.%Y",                # 20.09.2025
-        "%Y-%m-%d %H:%M:%S",       # 2025-09-20 14:30:00
-        "%Y-%m-%d %H:%M",          # 2025-09-20 14:30
-        "%Y-%m-%d",                # 2025-09-20
-        "%d/%m/%Y",                # 20/09/2025
-        "%m/%d/%Y",                # 09/20/2025
+        "%d.%m.%Y %H:%M:%S",                           
+        "%d.%m.%Y %H:%M",                           
+        "%d.%m.%Y",                            
+        "%Y-%m-%d %H:%M:%S",                            
+        "%Y-%m-%d %H:%M",                            
+        "%Y-%m-%d",                            
+        "%d/%m/%Y",                            
+        "%m/%d/%Y",                            
     ]
 
     for fmt in formats:
@@ -222,28 +222,28 @@ def get_next_notification_time(mode: str, last_notify_time: Optional[int], notif
     """
     try:
         if mode == "discount":
-            # Для режима "только при скидке" показываем, что уведомления приходят при изменениях
+                                                                                                
             return translate_func(user_id, "next_notify_discount") if translate_func else "next_notify_discount"
         elif mode == "hourly":
-            # Для почасового режима рассчитываем точное время следующего уведомления
+                                                                                    
             if last_notify_time and notify_interval:
-                # notify_interval в минутах, переводим в секунды
+                                                                
                 interval_seconds = notify_interval * 60
                 next_time = last_notify_time + interval_seconds
                 current_time = int(time.time())
 
                 if next_time > current_time:
-                    # Показываем время в формате HH:MM
+                                                      
                     dt = datetime.fromtimestamp(next_time)
                     return dt.strftime("%H:%M")
                 else:
-                    # Если время уже прошло, показываем ближайшее следующее время
-                    # Округляем до следующего часа
+                                                                                 
+                                                  
                     current_hour = datetime.now().hour
                     next_hour = (current_hour + 1) % 24
                     return f"{next_hour:02d}:00"
             else:
-                # Если нет данных, показываем следующий час
+                                                           
                 next_hour = (datetime.now().hour + 1) % 24
                 return f"{next_hour:02d}:00"
         else:

@@ -8,18 +8,18 @@ async def test_callback_registration():
     """Test that callback handlers are registered."""
     dp = Dispatcher()
     
-    # Simulate registering a callback handler
+                                             
     async def test_handler(cq: CallbackQuery):
         print(f"✅ Handler called with data: {cq.data}")
     
-    # Register the handler
+                          
     dp.callback_query.register(test_handler)
     
-    # Check that it's registered
+                                
     print(f"Callback query middleware: {dp.callback_query}")
     print(f"Callback query handlers: {dp.callback_query.handlers}")
     
-    # Try to find handlers
+                          
     handlers = dp.callback_query.handlers
     if handlers:
         print(f"✅ Found {len(handlers)} handler(s) for callback_query")

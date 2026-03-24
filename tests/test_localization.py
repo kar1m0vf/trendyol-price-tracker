@@ -12,7 +12,7 @@ print("=" * 60)
 locales_dir = Path("locales")
 languages = ["ru", "en", "az", "tr"]
 
-# Загружаем все локали
+                      
 locales = {}
 for lang in languages:
     locale_file = locales_dir / f"{lang}.json"
@@ -30,14 +30,14 @@ if not locales:
     print("❌ Не удалось загрузить ни одну локализацию!")
     exit(1)
 
-# Собираем все ключи из всех локалей
+                                    
 all_keys = set()
 for lang, keys in locales.items():
     all_keys.update(keys.keys())
 
 print(f"\nВсего уникальных ключей: {len(all_keys)}")
 
-# Проверяем наличие всех ключей во всех языках
+                                              
 missing_keys = {}
 for lang in languages:
     if lang not in locales:
@@ -51,14 +51,14 @@ if missing_keys:
     print("\n❌ НАЙДЕНЫ ОТСУТСТВУЮЩИЕ КЛЮЧИ:")
     for lang, keys in missing_keys.items():
         print(f"\n  {lang.upper()}: {len(keys)} отсутствующих ключей")
-        for key in sorted(keys)[:10]:  # Показываем первые 10
+        for key in sorted(keys)[:10]:                        
             print(f"    - {key}")
         if len(keys) > 10:
             print(f"    ... и еще {len(keys) - 10}")
 else:
     print("\n✅ Все ключи присутствуют во всех языках!")
 
-# Проверяем пустые значения
+                           
 print("\n[Проверка пустых значений]")
 empty_values = {}
 for lang in languages:
@@ -77,7 +77,7 @@ if empty_values:
 else:
     print("✅ Пустых значений не найдено")
 
-# Проверяем форматирование (наличие {placeholders})
+                                                   
 print("\n[Проверка форматирования]")
 format_issues = []
 for lang in languages:
@@ -85,7 +85,7 @@ for lang in languages:
         continue
     for key, value in locales[lang].items():
         if isinstance(value, str):
-            # Проверяем несоответствие фигурных скобок
+                                                      
             open_braces = value.count("{")
             close_braces = value.count("}")
             if open_braces != close_braces:

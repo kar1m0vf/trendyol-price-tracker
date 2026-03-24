@@ -1,45 +1,7 @@
-# Python artifacts
-__pycache__/
-*.py[cod]
-*$py.class
-
-# Virtual environment
-venv/
-ENV/
-env/
-
-# Pytest
-.pytest_cache/
-
-# IDEs
-.vscode/
-.idea/
-
-# SQLite artifacts and backups
-trendyol_bot.db
-trendyol_bot.db-shm
-trendyol_bot.db-wal
-*.db.backup
-
-# Logs
-logs/
-
-# OS
-.DS_Store
-# Environment variables
+# Environment
 .env
-.env.local
-.env.*.local
-
-# Database files
-*.db
-*.sqlite
-*.sqlite3
-trendyol_bot.db
-
-# Logs
-*.log
-logs/
+.env.*
+!.env.example
 
 # Python
 __pycache__/
@@ -47,62 +9,60 @@ __pycache__/
 *$py.class
 *.so
 .Python
+.pytest_cache/
+.coverage
+htmlcov/
+.cache/
+.mypy_cache/
+.ruff_cache/
+
+# Build artifacts
 build/
-develop-eggs/
 dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
+.eggs/
 *.egg
-MANIFEST
 
 # Virtual environments
+.venv/
 venv/
-ENV/
 env/
-.venv
+ENV/
 
-# IDE
+# IDEs / editors
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+
+# OS files
 .DS_Store
+Thumbs.db
 
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
+# Logs
+logs/
+*.log
 
-# Backup files
-*.bak
-*.swp
-*~
-savedlastcode.txt
-
-# Cached files
-.cache/
-
-# Backups / bundles / temp
-backups/
-*.bundle
+# Database files (SQLite)
+*.db
 *.db-journal
 *.db-shm
 *.db-wal
+*.sqlite
 *.sqlite-journal
 *.sqlite-shm
 *.sqlite-wal
+*.sqlite3
 *.sqlite3-journal
 *.sqlite3-shm
 *.sqlite3-wal
-*.tmp
+
+# Backups / temp
+backups/
 tmp/
+*.tmp
+*.bak
+*.backup
+*.bundle
+artifacts/

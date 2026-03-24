@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 from pprint import pprint
 
-# Ensure project root is on sys.path
+                                    
 ROOT = str(Path(__file__).resolve().parents[1])
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
@@ -21,18 +21,18 @@ else:
     if handlers:
         for i, h in enumerate(handlers):
             print('--- Handler', i)
-            # aiogram internals differ by version; try some common attrs
+                                                                        
             for attr in ('func', 'callback', 'handler', 'filters', 'filters_chain'):
                 if hasattr(h, attr):
                     print('  ', attr, '=>', getattr(h, attr))
-            # representation
+                            
             print('  repr:', repr(h))
 
-# Also try to find function names in module
+                                           
 names = [n for n in dir(bot) if n.lower().startswith('cmd_') or n.lower().startswith('handle_')]
 print('Possible handler function names in bot module:', names)
 
-# Try to show a few handler functions' source names
+                                                   
 for n in names:
     try:
         obj = getattr(bot, n)

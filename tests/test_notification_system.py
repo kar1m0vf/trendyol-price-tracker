@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 Комплексный тест системы уведомлений бота
 """
@@ -8,10 +8,10 @@ import asyncio
 import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch
 
-# Добавляем корневую директорию в путь
+                                      
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-# Создаем временную БД для тестов
+                                 
 TEST_DB = tempfile.mktemp(suffix='.db')
 
 def test_notification_logic():
@@ -19,9 +19,9 @@ def test_notification_logic():
     print("🧪 Тестируем логику уведомлений...")
 
     try:
-        # Тест условий уведомлений
+                                  
         test_cases = [
-            # (mode, last_price, current_price, notify_percent, price_alert, expected_result, description)
+                                                                                                          
             ("hourly", 1000.0, 950.0, None, None, True, "Почасовое уведомление"),
             ("discount", 1000.0, 950.0, 5.0, None, True, "Уведомление при скидке > 5%"),
             ("discount", 1000.0, 980.0, 5.0, None, False, "Уведомление при скидке < 5%"),
@@ -35,7 +35,7 @@ def test_notification_logic():
         for mode, last_price, current_price, notify_percent, price_alert, expected, desc in test_cases:
             notification_needed = False
 
-            # Проверяем price_alert (целевая цена)
+                                                  
             if price_alert is not None and current_price <= price_alert:
                 notification_needed = True
             elif mode == "hourly":
@@ -68,7 +68,7 @@ async def test_send_grouped_notifications():
     try:
         from bot import send_grouped_notifications
 
-        # Mock notification service
+                                   
         mock_notifications = {
             12345: [
                 ("Цена товара X упала до 950 TL", "http://example.com/image1.jpg"),
@@ -80,11 +80,11 @@ async def test_send_grouped_notifications():
         }
 
         with patch('bot.send_notification_with_timeout') as mock_send:
-            mock_send.return_value = None  # Не проверяем результат
+            mock_send.return_value = None                          
 
             await send_grouped_notifications(mock_notifications)
 
-            # Проверяем что функция была вызвана
+                                                
             assert mock_send.call_count >= 2, f"Ожидалось минимум 2 вызова, получено {mock_send.call_count}"
 
             print("✅ Групповые уведомления отправляются корректно")
@@ -102,10 +102,10 @@ async def test_scheduler_setup():
         from bot import start_scheduler_async, scheduler
         from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-        # Проверяем что scheduler существует
+                                            
         assert isinstance(scheduler, AsyncIOScheduler), "Scheduler должен быть AsyncIOScheduler"
 
-        # Проверяем что функция start_scheduler_async существует
+                                                                
         assert callable(start_scheduler_async), "start_scheduler_async должна быть функцией"
 
         print("✅ Планировщик настроен корректно")
@@ -122,24 +122,24 @@ async def test_notification_service_methods():
     try:
         from services.notification_service import NotificationService
 
-        # Mock bot
+                  
         mock_bot = MagicMock()
         mock_bot.send_message = AsyncMock()
         mock_bot.send_photo = AsyncMock()
 
         service = NotificationService(mock_bot)
 
-        # Тест send_notification_safe - текст
+                                             
         mock_bot.send_message.reset_mock()
         result = await service.send_notification_safe(12345, "Test message")
         assert result == True, "send_notification_safe должен вернуть True"
         assert mock_bot.send_message.called, "send_message должен быть вызван"
 
-        # Тест send_notification_safe - фото с fallback
+                                                       
         mock_bot.send_photo.reset_mock()
         mock_bot.send_message.reset_mock()
 
-        # Имитируем timeout для фото
+                                    
         mock_bot.send_photo.side_effect = asyncio.TimeoutError()
         result = await service.send_notification_safe(12345, "Test message", image="http://example.com/image.jpg")
         assert result == True, "Должен быть fallback на текст при timeout фото"
@@ -161,14 +161,14 @@ async def test_quiet_hours_logic():
     try:
         from datetime import datetime
 
-        # Тестовые случаи тихих часов
+                                     
         test_cases = [
-            # (current_hour, quiet_start, quiet_end, expected_quiet, description)
-            (2, 23, 7, True, "Ночь между днями"),  # 2:00 входит в 23:00-7:00
-            (14, 23, 7, False, "День"),  # 14:00 не входит в 23:00-7:00
-            (6, 23, 7, True, "Раннее утро"),  # 6:00 входит в 23:00-7:00
-            (10, 9, 18, True, "Рабочий день"),  # 10:00 входит в 9:00-18:00
-            (20, 9, 18, False, "Вечер после работы"),  # 20:00 не входит в 9:00-18:00
+                                                                                 
+            (2, 23, 7, True, "Ночь между днями"),                            
+            (14, 23, 7, False, "День"),                                
+            (6, 23, 7, True, "Раннее утро"),                            
+            (10, 9, 18, True, "Рабочий день"),                             
+            (20, 9, 18, False, "Вечер после работы"),                                
         ]
 
         passed = 0
@@ -176,7 +176,7 @@ async def test_quiet_hours_logic():
             is_quiet_time = False
             if quiet_start <= quiet_end:
                 is_quiet_time = quiet_start <= current_hour < quiet_end
-            else:  # например, 23:00 - 7:00
+            else:                          
                 is_quiet_time = current_hour >= quiet_start or current_hour < quiet_end
 
             if is_quiet_time == expected:
@@ -199,7 +199,7 @@ async def test_notification_templates():
     try:
         from localization import t
 
-        # Проверяем основные шаблоны
+                                    
         templates = [
             ('hourly_msg', 'price', 'url'),
             ('discount_msg', 'old', 'new', 'url'),
@@ -213,7 +213,7 @@ async def test_notification_templates():
                 template = t(12345, template_key)
                 assert template, f"Шаблон {template_key} пустой"
 
-                # Проверяем что в шаблоне есть плейсхолдеры
+                                                           
                 for param in params:
                     assert f"{{{param}}}" in template, f"В шаблоне {template_key} нет плейсхолдера {{{param}}}"
 
@@ -258,7 +258,7 @@ async def main():
             print(f"❌ Критическая ошибка в {test_func.__name__}: {e}")
             results.append(False)
 
-    # Итоги
+           
     print("\n" + "=" * 70)
     passed = sum(results)
     total = len(results)

@@ -20,18 +20,18 @@ async def test_send_history_plot_not_enough_data(monkeypatch):
     bot = DummyBot()
     svc = NotificationService(bot)
 
-    # Use a history with a single point -> should trigger 'not enough data' path
+                                                                                
     hist = [("20.09.2025", 3000.0)]
 
     await svc.send_history_plot(123, "https://trendyol.com/p-1", hist)
 
-    # Expect a send_message call with a not-enough-data text
+                                                            
     assert any(item[0] == 'msg' for item in bot.sent)
 
 
 @pytest.mark.asyncio
 async def test_send_history_plot_with_matplotlib(monkeypatch):
-    # Provide minimal matplotlib replacement to allow savefig
+                                                             
     class DummyPlt:
         class FuncFormatter:
             def __init__(self, fn):
@@ -65,17 +65,17 @@ async def test_send_history_plot_with_matplotlib(monkeypatch):
         def close(self, fig):
             pass
 
-    # Monkeypatch real matplotlib.pyplot and related modules used in NotificationService
+                                                                                        
     monkeypatch.setitem(__import__('sys').modules, 'matplotlib.pyplot', DummyPlt())
     monkeypatch.setitem(__import__('sys').modules, 'matplotlib.dates', SimpleNamespace(DateFormatter=lambda f: None, DayLocator=lambda interval: None))
 
     bot = DummyBot()
     svc = NotificationService(bot)
 
-    # Prepare at least two datetime objects for plotting (use strings parseable by parse_date_flexible)
+                                                                                                       
     hist = [("20.09.2025", 3000.0), ("21.09.2025", 2900.0)]
 
     await svc.send_history_plot(123, "https://trendyol.com/p-1", hist)
 
-    # Expect either photo or message to be sent
+                                               
     assert any(item[0] in ('photo', 'msg') for item in bot.sent)

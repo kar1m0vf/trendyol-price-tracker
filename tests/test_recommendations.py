@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 Тест системы умных рекомендаций
 """
@@ -9,7 +9,7 @@ sys.path.append('.')
 import pytest
 from bot import analyze_user_preferences, generate_recommendations
 
-# Integration script - skip during unit test runs
+                                                 
 pytestmark = pytest.mark.skip(reason="Integration script - skip during unit test runs")
 import asyncio
 
@@ -17,8 +17,8 @@ def test_preferences_analysis():
     """Тест анализа предпочтений пользователя"""
     print("🧪 ТЕСТИРОВАНИЕ АНАЛИЗА ПРЕДПОЧТЕНИЙ")
 
-    # Тест с существующим пользователем
-    user_id = 975282591  # Ваш ID из кода
+                                       
+    user_id = 975282591                  
 
     try:
         preferences = analyze_user_preferences(user_id)
@@ -60,10 +60,10 @@ def main():
     print("🚀 ЗАПУСК ТЕСТОВ СИСТЕМЫ РЕКОМЕНДАЦИЙ")
     print("=" * 50)
 
-    # Тест 1: Анализ предпочтений
+                                 
     preferences = test_preferences_analysis()
 
-    # Тест 2: Генерация рекомендаций
+                                    
     success = asyncio.run(test_recommendations())
 
     print("\n" + "=" * 50)

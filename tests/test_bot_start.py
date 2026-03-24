@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 Тест запуска бота для диагностики проблем.
 """
@@ -11,7 +11,7 @@ async def test_bot_start():
     try:
         print("🔍 Testing bot startup...")
 
-        # Импортируем основные компоненты
+                                         
         from config import BOT_TOKEN, _check_bot_token, USE_NEW_HANDLERS
         print(f"✅ Config loaded: USE_NEW_HANDLERS={USE_NEW_HANDLERS}")
 
@@ -20,13 +20,13 @@ async def test_bot_start():
         dp = Dispatcher()
         print("✅ Bot and Dispatcher created")
 
-        # Проверяем регистрацию обработчиков
+                                            
         from middleware import AntiSpamMiddleware
         dp.message.middleware(AntiSpamMiddleware())
         dp.callback_query.middleware(AntiSpamMiddleware())
         print("✅ Middleware registered")
 
-        # Проверяем регистрацию хендлеров
+                                         
         use_new_handlers = USE_NEW_HANDLERS
         if use_new_handlers:
             print("🔄 Testing new handlers registration...")
@@ -45,7 +45,7 @@ async def test_bot_start():
 
         if not use_new_handlers:
             print("🔄 Testing old handlers registration...")
-            # Регистрируем старые обработчики
+                                             
             from bot import cmd_start_old, cmd_help_old, cmd_mysubs_cmd_old, cmd_unsubscribe_old, handle_url_old
             from aiogram.filters import Command
 
@@ -56,7 +56,7 @@ async def test_bot_start():
             dp.message.register(handle_url_old, lambda m: m.text and ('trendyol.com' in (m.text or '').lower() or 'ty.gl/' in (m.text or '').lower()))
             print("✅ Old handlers registered")
 
-        # Проверяем webhook deletion
+                                    
         try:
             await bot.delete_webhook(drop_pending_updates=True)
             print("✅ Webhook deleted")

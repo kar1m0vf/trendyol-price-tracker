@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 Комплексные тесты для админских команд бота
 """
@@ -7,7 +7,7 @@ import os
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-# Добавляем корневую директорию в путь
+                                      
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 async def test_admin_command():
@@ -17,13 +17,13 @@ async def test_admin_command():
     try:
         import bot
 
-        # Mock message от админа
+                                
         mock_msg = MagicMock()
-        mock_msg.from_user.id = 975282591  # ADMIN ID из config
+        mock_msg.from_user.id = 975282591                      
         mock_msg.text = "/admin"
         mock_msg.answer = AsyncMock()
 
-        # Тест команды /admin
+                             
         await bot.cmd_admin(mock_msg)
 
         assert mock_msg.answer.called, "Должен быть ответ на команду /admin"
@@ -42,13 +42,13 @@ async def test_admin_stats():
     try:
         import bot
 
-        # Mock message от админа
+                                
         mock_msg = MagicMock()
         mock_msg.from_user.id = 975282591
         mock_msg.text = "/admin stats"
         mock_msg.answer = AsyncMock()
 
-        # Тест команды /admin stats
+                                   
         await bot.cmd_admin(mock_msg)
 
         assert mock_msg.answer.called, "Должен быть ответ на команду /admin stats"
@@ -67,22 +67,22 @@ async def test_admin_broadcast():
     try:
         import bot
 
-        # Mock message от админа
+                                
         mock_msg = MagicMock()
         mock_msg.from_user.id = 975282591
         mock_msg.text = "/admin broadcast Тестовое сообщение"
         mock_msg.answer = AsyncMock()
 
-        # Mock bot.send_message
+                               
         with patch.object(bot, 'bot') as mock_bot:
             mock_bot.send_message = AsyncMock()
 
-            # Тест команды /admin broadcast
+                                           
             await bot.cmd_admin(mock_msg)
 
-            # Проверяем что сообщение отправлено
+                                                
             assert mock_msg.answer.called, "Должен быть ответ админу"
-            # Проверяем что broadcast был запущен (bot.send_message может быть вызван или нет сразу)
+                                                                                                    
 
         print("✅ Команда /admin broadcast работает корректно")
         return True
@@ -98,13 +98,13 @@ async def test_admin_broadcast_empty():
     try:
         import bot
 
-        # Mock message от админа
+                                
         mock_msg = MagicMock()
         mock_msg.from_user.id = 975282591
         mock_msg.text = "/admin broadcast"
         mock_msg.answer = AsyncMock()
 
-        # Тест команды /admin broadcast без текста
+                                                  
         await bot.cmd_admin(mock_msg)
 
         assert mock_msg.answer.called, "Должен быть ответ об ошибке"
@@ -123,13 +123,13 @@ async def test_admin_users():
     try:
         import bot
 
-        # Mock message от админа
+                                
         mock_msg = MagicMock()
         mock_msg.from_user.id = 975282591
         mock_msg.text = "/admin users"
         mock_msg.answer = AsyncMock()
 
-        # Тест команды /admin users
+                                   
         await bot.cmd_admin(mock_msg)
 
         assert mock_msg.answer.called, "Должен быть ответ на команду /admin users"
@@ -148,13 +148,13 @@ async def test_admin_cleanup():
     try:
         import bot
 
-        # Mock message от админа
+                                
         mock_msg = MagicMock()
         mock_msg.from_user.id = 975282591
         mock_msg.text = "/admin cleanup"
         mock_msg.answer = AsyncMock()
 
-        # Тест команды /admin cleanup
+                                     
         await bot.cmd_admin(mock_msg)
 
         assert mock_msg.answer.called, "Должен быть ответ на команду /admin cleanup"
@@ -173,13 +173,13 @@ async def test_admin_backup():
     try:
         import bot
 
-        # Mock message от админа
+                                
         mock_msg = MagicMock()
         mock_msg.from_user.id = 975282591
         mock_msg.text = "/admin backup"
         mock_msg.answer = AsyncMock()
 
-        # Тест команды /admin backup
+                                    
         await bot.cmd_admin(mock_msg)
 
         assert mock_msg.answer.called, "Должен быть ответ на команду /admin backup"
@@ -198,13 +198,13 @@ async def test_admin_respond():
     try:
         import bot
 
-        # Mock message от админа
+                                
         mock_msg = MagicMock()
         mock_msg.from_user.id = 975282591
         mock_msg.text = "/admin respond"
         mock_msg.answer = AsyncMock()
 
-        # Тест команды /admin respond
+                                     
         await bot.cmd_admin(mock_msg)
 
         assert mock_msg.answer.called, "Должен быть ответ на команду /admin respond"
@@ -223,13 +223,13 @@ async def test_admin_unknown_command():
     try:
         import bot
 
-        # Mock message от админа
+                                
         mock_msg = MagicMock()
         mock_msg.from_user.id = 975282591
         mock_msg.text = "/admin unknown_command"
         mock_msg.answer = AsyncMock()
 
-        # Тест неизвестной команды
+                                  
         await bot.cmd_admin(mock_msg)
 
         assert mock_msg.answer.called, "Должен быть ответ на неизвестную команду"
@@ -248,13 +248,13 @@ async def test_admin_non_admin():
     try:
         import bot
 
-        # Mock message от обычного пользователя
+                                               
         mock_msg = MagicMock()
-        mock_msg.from_user.id = 12345  # Не админ
+        mock_msg.from_user.id = 12345            
         mock_msg.text = "/admin"
         mock_msg.answer = AsyncMock()
 
-        # Тест доступа не-админа
+                                
         await bot.cmd_admin(mock_msg)
 
         assert mock_msg.answer.called, "Должен быть отказ в доступе"
@@ -273,13 +273,13 @@ async def test_is_admin_function():
     try:
         from bot import is_admin
 
-        # Тест с админом
+                        
         assert is_admin(975282591), "Должен вернуть True для админа"
 
-        # Тест с не-админом
+                           
         assert not is_admin(12345), "Должен вернуть False для не-админа"
 
-        # Тест с не-админом
+                           
         assert not is_admin(123456789), "Должен вернуть False для не-админа"
 
         print("✅ Функция is_admin работает корректно")
@@ -319,7 +319,7 @@ async def main():
             print(f"❌ Критическая ошибка в {test_func.__name__}: {e}")
             results.append(False)
 
-    # Итоги
+           
     print("\n" + "=" * 60)
     passed = sum(results)
     total = len(results)

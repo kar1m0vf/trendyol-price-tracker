@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 Скрипт проверки что бот готов к запуску.
 Проверяет все критические компоненты.
@@ -121,7 +121,7 @@ def main():
             results.append(False)
         print()
     
-    # Сводка
+            
     print("=" * 60)
     passed = sum(results)
     total = len(results)

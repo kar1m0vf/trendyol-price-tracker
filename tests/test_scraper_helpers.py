@@ -27,8 +27,8 @@ class DummyResponse:
 
 
 def test_find_similar_products_filters_same_id(monkeypatch):
-    # prepare fake search HTML with two product links, one matching current product id
-    # use hrefs containing '/p-' pattern expected by parser
+                                                                                      
+                                                           
     search_html = '''
     <a href="https://www.trendyol.com/p-12345">Product A</a>
     <a href="https://www.trendyol.com/p-99999">Product B</a>
@@ -44,6 +44,6 @@ def test_find_similar_products_filters_same_id(monkeypatch):
 
     res = scraper.find_similar_products("Some product", "https://www.trendyol.com/x/p-12345", limit=5)
     assert isinstance(res, list)
-    # Should not include the same product URL
+                                             
     urls = {r['url'] for r in res}
     assert "https://www.trendyol.com/x/p-12345" not in urls

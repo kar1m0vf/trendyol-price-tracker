@@ -22,28 +22,28 @@ class Analytics:
         with get_connection() as conn:
             cur = conn.cursor()
 
-            # Проверяем структуру таблицы users
+                                               
             cur.execute("PRAGMA table_info(users)")
             columns = cur.fetchall()
             column_names = [col[1] for col in columns]
             has_created_at = 'created_at' in column_names
 
-            # Общая статистика пользователей
+                                            
             cur.execute("SELECT COUNT(*) FROM users")
             total_users = cur.fetchone()[0]
 
-            # Активные пользователи (с подписками)
+                                                  
             cur.execute("SELECT COUNT(DISTINCT user_id) FROM subscriptions")
             active_users = cur.fetchone()[0]
 
-            # Новые пользователи за последнюю неделю
+                                                    
             new_users_week = 0
             if has_created_at:
                 week_ago = int(time.time()) - 7*24*3600
                 cur.execute("SELECT COUNT(*) FROM users WHERE created_at > ?", (week_ago,))
                 new_users_week = cur.fetchone()[0]
 
-            # Распределение по языкам
+                                     
             cur.execute("SELECT language, COUNT(*) FROM users GROUP BY language")
             language_stats = dict(cur.fetchall())
 
@@ -61,26 +61,26 @@ class Analytics:
         with get_connection() as conn:
             cur = conn.cursor()
 
-            # Общая статистика подписок
+                                       
             cur.execute("SELECT COUNT(*) FROM subscriptions")
             total_subs = cur.fetchone()[0]
 
-            # Распределение по режимам уведомлений
+                                                  
             cur.execute("SELECT notify_mode, COUNT(*) FROM subscriptions GROUP BY notify_mode")
             mode_stats = dict(cur.fetchall())
 
-            # Среднее количество подписок на пользователя
+                                                         
             avg_subs_per_user = total_subs / max(Analytics.get_user_stats()['active_users'], 1)
 
-            # Подписки с установленными ценовыми алертами
+                                                         
             cur.execute("SELECT COUNT(*) FROM subscriptions WHERE price_alert IS NOT NULL")
             subs_with_alerts = cur.fetchone()[0]
 
-            # Подписки с диапазонами цен
+                                        
             cur.execute("SELECT COUNT(*) FROM subscriptions WHERE min_price IS NOT NULL OR max_price IS NOT NULL")
             subs_with_ranges = cur.fetchone()[0]
 
-            # Популярные домены (топ 10)
+                                        
             cur.execute("""
                 SELECT
                     CASE
@@ -112,11 +112,11 @@ class Analytics:
 
             since_time = int(time.time()) - days * 24 * 3600
 
-            # Общее количество точек цены
+                                         
             cur.execute("SELECT COUNT(*) FROM price_history WHERE ts > ?", (since_time,))
             total_points = cur.fetchone()[0]
 
-            # Среднее количество точек на подписку
+                                                  
             cur.execute("""
                 SELECT AVG(point_count) FROM (
                     SELECT COUNT(*) as point_count
@@ -127,11 +127,11 @@ class Analytics:
             """, (since_time,))
             avg_points_per_sub = cur.fetchone()[0] or 0
 
-            # Распределение по источникам
+                                         
             cur.execute("SELECT source, COUNT(*) FROM price_history WHERE ts > ? GROUP BY source", (since_time,))
             source_stats = dict(cur.fetchall())
 
-            # Изменения цен - используем самосоединение вместо оконных функций
+                                                                              
             cur.execute("""
                 SELECT
                     COUNT(CASE WHEN ph1.price < ph2.price THEN 1 END) as price_drops,
@@ -149,7 +149,7 @@ class Analytics:
             changes = cur.fetchone()
             price_drops, price_increases, total_changes = changes if changes else (0, 0, 0)
 
-            # Топ падений цен - используем самосоединение
+                                                         
             cur.execute("""
                 SELECT
                     s.id,
@@ -180,7 +180,7 @@ class Analytics:
                     'increases': price_increases,
                     'total': total_changes
                 },
-                'top_price_drops': top_drops[:5]  # Топ 5
+                'top_price_drops': top_drops[:5]         
             }
 
     @staticmethod
@@ -191,11 +191,11 @@ class Analytics:
 
             since_time = int(time.time()) - hours * 3600
 
-            # Статистика уведомлений
+                                    
             cur.execute("SELECT COUNT(*) FROM subscriptions WHERE last_notify_time > ?", (since_time,))
             notifications_sent = cur.fetchone()[0]
 
-            # Успешность парсинга (отношение успешных точек к общему количеству проверок)
+                                                                                         
             cur.execute("""
                 SELECT
                     COUNT(DISTINCT ph.subscription_id) as successful_parses,
@@ -222,18 +222,18 @@ class Analytics:
             import psutil
             import os
 
-            # Память
+                    
             memory = psutil.virtual_memory()
             memory_usage = memory.percent
 
-            # Диск
+                  
             disk = psutil.disk_usage('/')
             disk_usage = disk.percent
 
-            # CPU
+                 
             cpu_usage = psutil.cpu_percent(interval=1)
 
-            # База данных
+                         
             db_size = os.path.getsize(DB) if os.path.exists(DB) else 0
             db_size_mb = db_size / (1024 * 1024)
 

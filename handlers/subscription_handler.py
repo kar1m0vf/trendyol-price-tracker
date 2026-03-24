@@ -71,14 +71,14 @@ class SubscriptionHandler(BaseHandler):
 
             add_user_if_not_exists(message.from_user.id)
 
-            # Check for duplicates
+                                  
             subs = get_user_subscriptions(message.from_user.id)
             for sub in subs:
                 try:
                     (sid, user_id, u, mode, last_price, product_title, product_image,
                      min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert) = sub
                 except ValueError:
-                    # Fallback для старых подписок
+                                                  
                     (sid, user_id, u, mode, last_price, product_title, product_image,
                      min_price, max_price, notify_percent, notify_interval, last_notify_time) = sub[:12]
 
@@ -86,24 +86,24 @@ class SubscriptionHandler(BaseHandler):
                     await message.answer(self.t(message.from_user.id, "already_subscribed"))
                     return
 
-            # Create subscription
+                                 
             sub_id = add_subscription(message.from_user.id, url, DEFAULT_NOTIFY_MODE)
 
-            # Get product info
+                              
             try:
                 price, title, image = await get_product_info_async(url)
             except Exception as e:
                 logging.getLogger(__name__).warning("Error fetching product info: %s", e)
                 price, title, image = None, None, None
 
-            # Update subscription metadata
+                                          
             try:
                 if title or image:
                     update_subscription_meta(sub_id, title, image)
             except Exception as e:
                 logging.getLogger(__name__).warning("Error updating subscription meta: %s", e)
 
-            # Send confirmation message with friendlier styling
+                                                               
             controls = subscription_controls_kb_for_user(message.from_user.id, sub_id)
             if price is not None:
                 try:
@@ -113,17 +113,17 @@ class SubscriptionHandler(BaseHandler):
                         header = f"*{title}*\n\n"
                         text = header + text
 
-                    # Use Markdown and emojis for nicer look
+                                                            
                     try:
                         if image:
-                            # Use centralized NotificationService to send photo with fallback
+                                                                                             
                             await bot.notification_service.send_notification_safe(
                                 message.from_user.id,
                                 text,
                                 image=image,
                                 parse_mode="Markdown",
                             )
-                            # edit: still include keyboard by sending a separate message with controls
+                                                                                                      
                             try:
                                 await message.answer("", reply_markup=controls)
                             except Exception:
@@ -154,7 +154,7 @@ class SubscriptionHandler(BaseHandler):
             await message.answer(self.t(user_id, "no_subs"))
             return
 
-        # Формируем одно сообщение со списком всех подписок
+                                                           
         lines = [self.t(user_id, "mysubs_header")]
         inline_buttons = []
 
@@ -163,37 +163,37 @@ class SubscriptionHandler(BaseHandler):
                 (sub_id, _, url, mode, last_price, product_title, product_image,
                  min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert) = sub
             except ValueError:
-                # Fallback для старых подписок
+                                              
                 (sub_id, _, url, mode, last_price, product_title, product_image,
                  min_price, max_price, notify_percent, notify_interval, last_notify_time) = sub[:12]
                 price_alert = None
 
-            # Определяем статус подписки
+                                        
             status_icon = "✅" if last_price is not None else "⚠️"
             status_text = self.t(user_id, "status_active") if last_price is not None else self.t(user_id, "status_inactive")
 
-            # Форматируем цену
+                              
             price_text = f"{last_price:.0f} TL" if last_price is not None else self.t(user_id, "unknown_price")
 
-            # Форматируем режим и время следующего уведомления
+                                                              
             mode_text = self.t(user_id, "mode_hourly") if mode == "hourly" else self.t(user_id, "mode_discount")
             next_notify = get_next_notification_time(mode, last_notify_time, notify_interval, user_id, self.t)
 
-            # Используем название товара или URL
+                                                
             title = product_title if product_title else url[:50] + "..." if len(url) > 50 else url
 
-            # Формируем строку для подписки
+                                           
             sub_line = f"\n{status_icon} *{status_text}* | ID: `{sub_id}`\n"
             sub_line += f"📦 {title}\n"
             sub_line += f"💰 {price_text} | 🔔 {next_notify}\n"
 
-            # Добавляем информацию о целевой цене, если установлена
+                                                                   
             if price_alert is not None:
                 sub_line += f"🎯 {self.t(user_id, 'price_alert_label')}: {price_alert:.0f} TL\n"
 
             lines.append(sub_line)
 
-            # Добавляем кнопку для редактирования этой подписки
+                                                               
             inline_buttons.append([
                 InlineKeyboardButton(
                     text=f"⚙️ {self.t(user_id, 'btn_edit')} ID {sub_id}",
@@ -201,25 +201,25 @@ class SubscriptionHandler(BaseHandler):
                 )
             ])
 
-        # Разбиваем на части если слишком длинное сообщение
+                                                           
         full_text = "\n".join(lines)
-        if len(full_text) > 4000:  # Telegram limit
-            # Если сообщение слишком длинное, разбиваем на части
+        if len(full_text) > 4000:                  
+                                                                
             warning_msg = f"⚠️ У вас {len(subs)} подписок. Показываю первые 10:\n\n"
-            short_lines = lines[:11]  # header + 10 subs
+            short_lines = lines[:11]                    
             short_text = "\n".join(short_lines)
             short_keyboard = InlineKeyboardMarkup(inline_keyboard=inline_buttons[:10])
 
             await message.answer(warning_msg + short_text, reply_markup=short_keyboard, parse_mode="Markdown")
             return
 
-        # Создаем клавиатуру с кнопками
+                                       
         keyboard = InlineKeyboardMarkup(inline_keyboard=inline_buttons)
 
         try:
             await message.answer(full_text, reply_markup=keyboard, parse_mode="Markdown")
         except Exception as e:
-            # Fallback без клавиатуры если что-то пошло не так
+                                                              
             print(f"Error sending keyboard: {e}")
             await message.answer(full_text, parse_mode="Markdown")
 
@@ -228,11 +228,11 @@ class SubscriptionHandler(BaseHandler):
         from aiogram import F
         from aiogram.filters import Command
         
-        # Commands
+                  
         dp.message.register(self.handle_mysubs_command, Command("mysubs"))
         dp.message.register(self.handle_unsubscribe_command, Command("unsubscribe"))
 
-        # URL subscription handler
+                                  
         dp.message.register(
             self.handle_url_subscription,
             F.text.contains("trendyol.com") | F.text.contains("ty.gl/")

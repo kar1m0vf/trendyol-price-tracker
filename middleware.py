@@ -32,10 +32,10 @@ class UserRateLimit:
 class AntiSpamMiddleware(BaseMiddleware):
     def __init__(
         self,
-        message_limit: int = 20,     # Максимум сообщений
-        message_interval: float = 60, # За 60 секунд
-        callback_limit: int = 30,     # Максимум нажатий кнопок
-        callback_interval: float = 60  # За 60 секунд
+        message_limit: int = 20,                         
+        message_interval: float = 60,               
+        callback_limit: int = 30,                              
+        callback_interval: float = 60                
     ):
         self.message_limiter = UserRateLimit(message_limit, message_interval)
         self.callback_limiter = UserRateLimit(callback_limit, callback_interval)
@@ -59,9 +59,9 @@ class AntiSpamMiddleware(BaseMiddleware):
             
         if not limiter.can_proceed(user_id):
             logger.warning(f"Rate limit exceeded for user {user_id} ({action})")
-            # Для колбэков просто отвечаем в alerts
+                                                   
             if isinstance(event, CallbackQuery):
-                # Используем локализацию, если доступна
+                                                       
                 try:
                     from localization import t
                     msg = t(user_id, "rate_limit_exceeded")
@@ -69,7 +69,7 @@ class AntiSpamMiddleware(BaseMiddleware):
                     logger.exception("Failed to get localized rate limit message for user %s: %s", user_id, e)
                     msg = "Пожалуйста, подождите немного перед следующим действием"
                 await event.answer(msg, show_alert=True)
-            # Для сообщений отправляем ответ
+                                            
             else:
                 try:
                     from localization import t

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 Тест для проверки работы многоязычности и функции изменения языка
 """
@@ -8,11 +8,11 @@ from dotenv import load_dotenv
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# Загружаем переменные окружения
+                                
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# Импортируем локализацию
+                         
 import sys
 sys.path.append('.')
 from localization import t
@@ -36,17 +36,17 @@ async def test_language_functionality():
         print(f"\n📋 Тестируем язык: {lang.upper()}")
         user_id = {'ru': 975282591, 'en': 123456789, 'az': 987654321, 'tr': 111111111}[lang]
 
-        # Тестируем кнопку подробной справки
+                                            
         detailed_help_text = t(user_id, "btn_detailed_help")
         print(f"  ✅ Кнопка подробной справки: '{detailed_help_text}'")
 
-        # Тестируем текст справки
+                                 
         help_text = t(user_id, "help_text")
         help_full = t(user_id, "help_full")
         print(f"  ✅ Краткая справка: {len(help_text)} символов")
         print(f"  ✅ Полная справка: {len(help_full)} символов")
 
-        # Тестируем клавиатуру выбора языка
+                                           
         lang_kb = InlineKeyboardMarkup(inline_keyboard=[
             [
                 InlineKeyboardButton(text=t(user_id, "lang_ru"), callback_data="lang:ru"),
@@ -77,7 +77,7 @@ async def test_language_functionality():
         print(f"  📚 Полная справка: {results['help_full_len']} симв.")
         print()
 
-    # Тестируем отправку сообщения с кнопкой на разных языках
+                                                             
     print("📤 Отправляем тестовые сообщения с кнопками...")
 
     for lang in languages:

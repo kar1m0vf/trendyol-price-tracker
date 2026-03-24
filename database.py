@@ -2,15 +2,18 @@ import sqlite3
 import time
 import logging
 import threading
-from typing import List, Tuple, Optional, Dict, Any
+import os
+from typing import List, Tuple, Optional, Dict, Any, Iterator
 from datetime import datetime
 
-# Настройка логирования
+                       
 logger = logging.getLogger('database')
 
-DB = "trendyol_bot.db"
+                                                                
+                                                         
+DB = os.getenv("DATABASE_PATH", "trendyol_bot.db")
 
-# Connection pooling for better performance
+                                           
 _connection_pool = {}
 _pool_lock = threading.Lock()
 _current_db = None
@@ -19,7 +22,7 @@ def get_connection():
     """Get database connection from pool or create new one"""
     thread_id = threading.get_ident()
     global _current_db
-    # If DB path changed (tests may monkeypatch `database.DB`), reset pool
+                                                                          
     if _current_db != DB:
         with _pool_lock:
             for conn in _connection_pool.values():
@@ -48,7 +51,7 @@ def close_all_connections():
                 pass
         _connection_pool.clear()
 
-# Context manager for database operations with connection pooling
+                                                                 
 class DatabaseConnection:
     """Context manager for database operations using connection pooling"""
     def __enter__(self):
@@ -56,7 +59,7 @@ class DatabaseConnection:
         return self.conn
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        # Connection stays in pool, just commit if needed
+                                                         
         if exc_type is None:
             self.conn.commit()
         else:
@@ -71,6 +74,28 @@ def execute_batch(queries: List[Tuple[str, Tuple]], commit_every: int = 100):
             if (i + 1) % commit_every == 0:
                 conn.commit()
         conn.commit()
+
+def create_sqlite_backup(backup_path: str) -> None:
+    """Create a consistent SQLite backup using native backup API."""
+    src_conn = None
+    dst_conn = None
+    try:
+        src_conn = sqlite3.connect(DB, timeout=30.0)
+        src_conn.execute("PRAGMA busy_timeout = 5000")
+        dst_conn = sqlite3.connect(backup_path, timeout=30.0)
+        src_conn.backup(dst_conn)
+        dst_conn.commit()
+    finally:
+        if dst_conn is not None:
+            try:
+                dst_conn.close()
+            except Exception:
+                pass
+        if src_conn is not None:
+            try:
+                src_conn.close()
+            except Exception:
+                pass
 
 def save_price_points_batch(price_points: List[Tuple[int, float, int, str]]):
     """
@@ -96,32 +121,32 @@ def save_price_points_batch(price_points: List[Tuple[int, float, int, str]]):
 
     execute_batch(queries, commit_every=50)
 
-def init_db():
-    # Проверяем существующую схему и добавляем недостающие колонки
+def init_db(run_maintenance: bool = True):
+                                                                  
     with sqlite3.connect(DB) as conn:
         cur = conn.cursor()
-        # Удалим возможные старые триггеры, оставшиеся в файле БД.
-        # Эти триггеры могли быть созданы предыдущими версиями кода и могут
-        # нежелательно модифицировать/удалять записи при UPDATE.
+                                                                  
+                                                                           
+                                                                
         try:
             cur.execute("DROP TRIGGER IF EXISTS update_subscription_timestamp")
             cur.execute("DROP TRIGGER IF EXISTS cleanup_old_subscriptions")
         except Exception:
-            # если триггер отсутствует или база несовместима — продолжим
+                                                                        
             logger.debug("No legacy triggers to drop or error during drop", exc_info=True)
         
-        # Получаем список существующих колонок в таблице subscriptions
+                                                                      
         try:
             cur.execute("SELECT * FROM subscriptions LIMIT 0")
             columns = [description[0] for description in cur.description]
         except sqlite3.OperationalError:
             columns = []
             
-        # Добавляем недостающие колонки если таблица существует
+                                                               
         if columns:
             current_time = int(time.time())
             
-            # Проверяем и добавляем каждую недостающую колонку
+                                                              
             missing_columns = {
                 'updated_at': f"ALTER TABLE subscriptions ADD COLUMN updated_at INTEGER DEFAULT {current_time}",
                 'created_at': f"ALTER TABLE subscriptions ADD COLUMN created_at INTEGER DEFAULT {current_time}",
@@ -143,7 +168,7 @@ def init_db():
                         logger.warning(f"Could not add column {col_name}: {e}")
             
             conn.commit()
-        # Также проверим таблицу users на наличие колонок для тихих часов
+                                                                         
         try:
             cur.execute("SELECT * FROM users LIMIT 0")
             user_columns = [description[0] for description in cur.description]
@@ -151,9 +176,12 @@ def init_db():
             user_columns = []
 
         if user_columns:
+            now_ts = int(time.time())
             user_missing = {
                 'notify_quiet_hours_start': "ALTER TABLE users ADD COLUMN notify_quiet_hours_start INTEGER DEFAULT 23",
-                'notify_quiet_hours_end': "ALTER TABLE users ADD COLUMN notify_quiet_hours_end INTEGER DEFAULT 7"
+                'notify_quiet_hours_end': "ALTER TABLE users ADD COLUMN notify_quiet_hours_end INTEGER DEFAULT 7",
+                                                                   
+                'created_at': f"ALTER TABLE users ADD COLUMN created_at INTEGER DEFAULT {now_ts}",
             }
             for col_name, alter_sql in user_missing.items():
                 if col_name not in user_columns:
@@ -164,28 +192,29 @@ def init_db():
                         logger.warning(f"Could not add user column {col_name}: {e}")
             conn.commit()
     
-    # Выполняем операции обслуживания базы данных
-    with sqlite3.connect(DB) as conn:
-        conn.execute("PRAGMA foreign_keys = OFF")  # Временно отключаем для обслуживания
-        conn.execute("VACUUM")  # Оптимизируем размер файла БД
-        conn.execute("ANALYZE")  # Обновляем статистику для оптимизатора запросов
+                                                       
+    if run_maintenance:
+        with sqlite3.connect(DB) as conn:
+            conn.execute("PRAGMA foreign_keys = OFF")                                       
+            conn.execute("VACUUM")                                
+            conn.execute("ANALYZE")                                                  
         
-    # Теперь настраиваем основную конфигурацию
+                                              
     with sqlite3.connect(DB) as conn:
-        # Включаем поддержку внешних ключей
+                                           
         conn.execute("PRAGMA foreign_keys = ON")
         
-        # Оптимизация производительности
-        conn.execute("PRAGMA journal_mode = WAL")  # Write-Ahead Logging
+                                        
+        conn.execute("PRAGMA journal_mode = WAL")                       
         conn.execute("PRAGMA synchronous = NORMAL")
-        conn.execute("PRAGMA cache_size = -20000")  # Увеличиваем кэш (в килобайтах)
+        conn.execute("PRAGMA cache_size = -20000")                                  
         conn.execute("PRAGMA temp_store = MEMORY")
-        conn.execute("PRAGMA mmap_size = 30000000000")  # Используем memory-mapped I/O
-        conn.execute("PRAGMA page_size = 4096")  # Оптимальный размер страницы
+        conn.execute("PRAGMA mmap_size = 30000000000")                                
+        conn.execute("PRAGMA page_size = 4096")                               
         
         cur = conn.cursor()
         
-        # Создаем таблицы, если их нет
+                                      
         cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -216,35 +245,35 @@ def init_db():
         )
         """)
         
-        # Создаем оптимизированные индексы с учетом частых запросов
-        # Основной индекс для поиска подписок пользователя с учетом сортировки
+                                                                   
+                                                                              
         cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_subscriptions_user_compound ON subscriptions(user_id, updated_at DESC)
         """)
         
-        # Индекс для URL с учетом режима уведомлений
+                                                    
         cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_subscriptions_url_mode ON subscriptions(url, notify_mode)
         """)
         
-        # Индекс для оптимизации выборки по времени уведомления
+                                                               
         cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_subscriptions_notify_time ON subscriptions(last_notify_time, notify_interval)
         """)
         
-        # Индекс для языковых настроек пользователей
+                                                    
         cur.execute("CREATE INDEX IF NOT EXISTS idx_users_language ON users(language)")
         
-        # NOTE: triggers that modify or delete rows on UPDATE caused
-        # accidental deletions when business logic updated a subscription.
-        # We'll avoid triggers that perform UPDATE/DELETE and instead update
-        # `updated_at` from application code to keep behavior explicit and safe.
+                                                                    
+                                                                          
+                                                                            
+                                                                                
         conn.commit()
         
-        # Подсказка оптимизатору по типичным размерам таблиц
+                                                            
         cur.execute("ANALYZE subscriptions")
         cur.execute("ANALYZE users")
-        # Price history table to store collected price points for subscriptions
+                                                                               
         cur.execute("""
         CREATE TABLE IF NOT EXISTS price_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -257,24 +286,24 @@ def init_db():
         )
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_price_history_sub_ts ON price_history(subscription_id, ts DESC)")
-        # НОВЫЙ ИНДЕКС: для быстрого поиска по URL
+                                                  
         cur.execute("CREATE INDEX IF NOT EXISTS idx_price_history_url_ts ON price_history(url, ts DESC)")
         cur.execute("ANALYZE price_history")
         
-        # Миграция: добавляем поле price_alert для отслеживания целевой цены
+                                                                            
         try:
             cur.execute("ALTER TABLE subscriptions ADD COLUMN price_alert REAL")
             logger.info("Migration: Added price_alert column to subscriptions table")
         except sqlite3.OperationalError:
-            pass  # Column already exists
-        # Миграция: добавляем поле tags (комма-разделённый список меток)
+            pass                         
+                                                                        
         try:
             cur.execute("ALTER TABLE subscriptions ADD COLUMN tags TEXT")
             logger.info("Migration: Added tags column to subscriptions table")
         except sqlite3.OperationalError:
-            pass  # Column already exists
+            pass                         
 
-        # Создаем таблицу рекомендуемых продуктов
+                                                 
         cur.execute("""
         CREATE TABLE IF NOT EXISTS recommended_products (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -291,7 +320,7 @@ def init_db():
         )
         """)
 
-        # Глобальные тексты/настройки бота (например, текст рекомендаций)
+                                                                         
         cur.execute("""
         CREATE TABLE IF NOT EXISTS bot_texts (
             key TEXT NOT NULL,
@@ -302,9 +331,9 @@ def init_db():
         )
         """)
 
-        # Дополнительные индексы для оптимизации производительности
+                                                                   
         try:
-            # Проверяем существующие индексы и создаем недостающие
+                                                                  
             existing_indexes = set()
             cur.execute("SELECT name FROM sqlite_master WHERE type='index'")
             existing_indexes = {row[0] for row in cur.fetchall()}
@@ -343,8 +372,8 @@ def add_user_if_not_exists(user_id: int, language: str = "ru") -> None:
 def set_user_language(user_id: int, language: str) -> None:
     with DatabaseConnection() as conn:
         cur = conn.cursor()
-        # IMPORTANT: avoid INSERT OR REPLACE because REPLACE deletes and recreates
-        # the row, which resets other user settings (quiet hours, created_at, etc.).
+                                                                                  
+                                                                                    
         cur.execute("INSERT OR IGNORE INTO users (user_id, language) VALUES (?, ?)", (user_id, language))
         cur.execute("UPDATE users SET language = ? WHERE user_id = ?", (language, user_id))
 
@@ -519,7 +548,7 @@ def get_user_subscriptions_by_tag(user_id: int, tag: str) -> List[Tuple]:
     """Return subscriptions for user that have the given tag (exact match in comma-separated tags)."""
     with sqlite3.connect(DB) as conn:
         cur = conn.cursor()
-        # Match as substring with separators to avoid partial matches
+                                                                     
         cur.execute("""
             SELECT id, user_id, url, notify_mode, last_price, product_title, product_image,
                    min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert, tags
@@ -535,12 +564,12 @@ def export_user_subscriptions(user_id: int) -> List[dict]:
     rows = get_user_subscriptions(user_id)
     out = []
     for r in rows:
-        # r expected to be (id,user_id,url,mode,last_price,product_title,product_image,min_price,max_price,notify_percent,notify_interval,last_notify_time,price_alert,tags)
+                                                                                                                                                                            
         try:
             (sub_id, uid, url, mode, last_price, product_title, product_image,
              min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert, tags) = r
         except ValueError:
-            # Fallback for older rows
+                                     
             vals = list(r)
             while len(vals) < 14:
                 vals.append(None)
@@ -564,17 +593,24 @@ def export_user_subscriptions(user_id: int) -> List[dict]:
         })
     return out
 
-def get_all_subscriptions(batch_size: int = 1000) -> List[Tuple[int, int, str, str, Optional[float]]]:
-    """
-    Получает все подписки с поддержкой пакетной обработки.
-    :param batch_size: размер пакета для обработки
-    """
-    all_rows = []
+def get_subscriptions_count() -> int:
+    """Return total number of subscriptions."""
     with sqlite3.connect(DB) as conn:
         cur = conn.cursor()
-        # Используем курсор для пакетной обработки
-        # SQLite does not support the NULLS FIRST/NULLS LAST syntax; use COALESCE
-        # to provide deterministic ordering when values may be NULL.
+        cur.execute("SELECT COUNT(*) FROM subscriptions")
+        row = cur.fetchone()
+    return int(row[0]) if row and row[0] is not None else 0
+
+
+def iter_all_subscriptions(batch_size: int = 1000) -> Iterator[Tuple[int, int, str, str, Optional[float]]]:
+    """
+    Stream subscriptions in DB batches to avoid loading everything into memory.
+    """
+    with sqlite3.connect(DB) as conn:
+        cur = conn.cursor()
+                                                  
+                                                                                 
+                                                                    
         cur.execute("""
             SELECT id, user_id, url, notify_mode, last_price, product_title, product_image,
                    min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert
@@ -585,8 +621,15 @@ def get_all_subscriptions(batch_size: int = 1000) -> List[Tuple[int, int, str, s
             rows = cur.fetchmany(batch_size)
             if not rows:
                 break
-            all_rows.extend(rows)
-    return all_rows
+            for row in rows:
+                yield row
+
+
+def get_all_subscriptions(batch_size: int = 1000) -> List[Tuple[int, int, str, str, Optional[float]]]:
+    """
+    Backward-compatible helper that returns all subscriptions as a list.
+    """
+    return list(iter_all_subscriptions(batch_size=batch_size))
 
 def update_last_price(sub_id: int, price: float) -> None:
     with sqlite3.connect(DB) as conn:
@@ -632,7 +675,7 @@ def update_subscription_settings(sub_id: int, **kwargs):
                 params.append(v)
         if not sets:
             return
-        # Always update updated_at explicitly to reflect changes
+                                                                
         sets.append("updated_at = ?")
         params.append(int(time.time()))
         params.append(sub_id)
@@ -663,7 +706,7 @@ def get_user_settings(user_id: int):
             row = cur.fetchone()
         if not row:
             return ("ru", 23, 7)
-        # Нормализуем возвращаемые значения
+                                           
         lang = row[0] if row and row[0] else "ru"
         try:
             start = int(row[1]) if row and row[1] is not None else 23
@@ -691,7 +734,7 @@ def update_user_settings(user_id: int, **kwargs):
         
     with sqlite3.connect(DB) as conn:
         cur = conn.cursor()
-        # Гарантируем существование пользователя перед обновлением.
+                                                                   
         cur.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
         sets = []
         params = []
@@ -763,7 +806,7 @@ def save_price_point(
         with DatabaseConnection() as conn:
             cur = conn.cursor()
             
-            # Проверяем дубликат в последний час
+                                                
             one_hour_ago = ts - 3600
             cur.execute("""
                 SELECT id FROM price_history 
@@ -777,7 +820,7 @@ def save_price_point(
                 logger.debug(f"Duplicate price point detected for sub {subscription_id}")
                 return -1
             
-            # Вставляем новую точку
+                                   
             cur.execute("""
                 INSERT INTO price_history 
                 (subscription_id, url, price, ts, source) 
@@ -787,7 +830,7 @@ def save_price_point(
             
             new_id = cur.lastrowid
             
-            # Удаляем старые точки если превышен лимит
+                                                      
             cur.execute("""
                 SELECT COUNT(*) FROM price_history 
                 WHERE subscription_id = ?
@@ -818,13 +861,13 @@ def save_price_point(
         logger.exception(f"Error saving price point for sub {subscription_id}: {e}")
         return -1
 
-# === ВОЛНА 2: Функции анализа цен ===
+                                      
 
 def get_price_stats(subscription_id: int) -> dict:
     """Получить статистику цен по подписке: мин/макс/среднее/тренд"""
     with sqlite3.connect(DB) as conn:
         cur = conn.cursor()
-        # Получаем последние 90 дней истории
+                                            
         now = int(time.time())
         since_ts = now - (90 * 24 * 3600)
         
@@ -839,7 +882,7 @@ def get_price_stats(subscription_id: int) -> dict:
         """, (subscription_id, since_ts))
         
         row = cur.fetchone()
-        if not row or not row[3]:  # Нет истории или count=0
+        if not row or not row[3]:                           
             return {
                 'min': None, 'max': None, 'avg': None, 'current': None, 
                 'trend': 'unknown', 'days': 0, 'count': 0
@@ -847,7 +890,7 @@ def get_price_stats(subscription_id: int) -> dict:
         
         min_price, max_price, avg_price, count = row
         
-        # Получаем текущую цену (последняя точка)
+                                                 
         cur.execute("""
             SELECT price FROM price_history 
             WHERE subscription_id = ? 
@@ -857,7 +900,7 @@ def get_price_stats(subscription_id: int) -> dict:
         current_row = cur.fetchone()
         current_price = current_row[0] if current_row else None
         
-        # Определяем тренд: сравниваем среднюю цену за последние 7 дней с общей средней
+                                                                                       
         week_ago = now - (7 * 24 * 3600)
         cur.execute("""
             SELECT AVG(price) FROM price_history 
@@ -868,9 +911,9 @@ def get_price_stats(subscription_id: int) -> dict:
         week_avg = week_avg_row[0] if week_avg_row and week_avg_row[0] else avg_price
         
         if week_avg and avg_price:
-            if week_avg < avg_price * 0.98:  # На 2% ниже
+            if week_avg < avg_price * 0.98:              
                 trend = '📉 Падает'
-            elif week_avg > avg_price * 1.02:  # На 2% выше
+            elif week_avg > avg_price * 1.02:              
                 trend = '📈 Растет'
             else:
                 trend = '➡️ Стабильна'
@@ -896,7 +939,7 @@ def get_top_price_drops(user_id: int, limit: int = 10) -> List[tuple]:
         now = int(time.time())
         month_ago = now - (30 * 24 * 3600)
         
-        # Для каждой подписки пользователя находим цену месяц назад и сейчас
+                                                                            
         cur.execute("""
             WITH user_subs AS (
                 SELECT id, url, product_title, last_price
@@ -937,7 +980,7 @@ def get_top_price_drops(user_id: int, limit: int = 10) -> List[tuple]:
 
         return cur.fetchall()
 
-# --- Recommended Products Management ---
+                                         
 
 def add_recommended_product(title: str, url: str, price: str = "",
                           category: str = "", brand: str = "",
@@ -1013,7 +1056,7 @@ def update_recommended_product_priority(product_id: int, priority: int) -> bool:
         logger.error(f"Error updating recommended product priority: {e}")
         return False
 
-# --- Bot text settings ---
+                           
 
 def get_bot_text(key: str, language: Optional[str] = None) -> Optional[str]:
     """Получить кастомный текст по ключу (с fallback на '*' язык)."""

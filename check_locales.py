@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 Script to check localization files for missing keys and differences.
 """
@@ -20,10 +20,10 @@ def main():
     print("LOCALIZATION FILES CHECK")
     print("=" * 70)
     
-    # Load all locales
+                      
     locales = {lang: load_locale(lang) for lang in LANGUAGES}
     
-    # Get all keys from all locales
+                                   
     all_keys_set = set()
     for lang_data in locales.values():
         all_keys_set.update(lang_data.keys())
@@ -32,7 +32,7 @@ def main():
     
     print(f"\nTotal unique keys: {len(all_keys)}\n")
     
-    # Check each language
+                         
     issues = {}
     for lang in LANGUAGES:
         lang_data = locales[lang]
@@ -41,14 +41,14 @@ def main():
         if missing:
             issues[lang] = list(missing)
             print(f"\n🔴 {lang.upper()}: Missing {len(missing)} key(s):")
-            for key in sorted(missing)[:10]:  # Show first 10
+            for key in sorted(missing)[:10]:                 
                 print(f"   - {key}")
             if len(missing) > 10:
                 print(f"   ... and {len(missing) - 10} more")
         else:
             print(f"✅ {lang.upper()}: All keys present ({len(lang_data)} keys)")
     
-    # Print summary
+                   
     print("\n" + "=" * 70)
     print("SUMMARY")
     print("=" * 70)
@@ -61,7 +61,7 @@ def main():
         else:
             print(" ✅")
     
-    # Show which keys are missing in which languages
+                                                    
     if issues:
         print("\n" + "=" * 70)
         print("MISSING KEYS BY LANGUAGE")

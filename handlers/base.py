@@ -5,7 +5,7 @@ from typing import Optional, Dict, Any
 from aiogram import Bot
 from localization import t as translate_func, get_user_language_safe
 
-# Import bot lazily to avoid circular imports
+                                             
 _bot = None
 
 def get_bot() -> Bot:
@@ -16,16 +16,16 @@ def get_bot() -> Bot:
             from config import bot as config_bot
             _bot = config_bot
         except ImportError:
-            # Fallback - try to import from bot module
+                                                      
             from bot import bot as bot_bot
             _bot = bot_bot
     return _bot
 
-# Импорт локалей из localization модуля
+                                       
 try:
     from localization import LOCALES
 except ImportError:
-    # Fallback если импорт не работает
+                                      
     LOCALES = {}
 
 class BaseHandler:
@@ -52,13 +52,13 @@ class BaseHandler:
             True if sent successfully, False otherwise
         """
         try:
-            if hasattr(message_or_query, 'answer'):  # CallbackQuery
+            if hasattr(message_or_query, 'answer'):                 
                 await message_or_query.answer(text, **kwargs)
-            else:  # Message
+            else:           
                 await message_or_query.answer(text, **kwargs)
             return True
         except Exception as e:
-            # Логируем но не крашим
+                                   
             print(f"Failed to send answer: {e}")
             return False
 

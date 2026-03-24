@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 Тесты для новых обработчиков.
 """
@@ -7,7 +7,7 @@ import sys
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-# Устанавливаем переменную окружения для использования новых обработчиков
+                                                                         
 os.environ['USE_NEW_HANDLERS'] = 'true'
 
 def test_basic_handlers_import():
@@ -16,11 +16,11 @@ def test_basic_handlers_import():
         from handlers import BasicHandler
         print("✅ BasicHandler import OK")
 
-        # Создаем экземпляр
+                           
         handler = BasicHandler()
         print("✅ BasicHandler instance created")
 
-        # Проверяем методы
+                          
         assert hasattr(handler, 'handle_start'), "handle_start method missing"
         assert hasattr(handler, 'handle_help'), "handle_help method missing"
         assert hasattr(handler, 'handle_language_command'), "handle_language_command method missing"
@@ -37,7 +37,7 @@ def test_keyboard_import():
         import keyboards
         print("✅ keyboards import OK")
 
-        # Проверяем функции
+                           
         assert hasattr(keyboards, 'get_main_kb'), "get_main_kb function missing"
         print("✅ Keyboard functions present")
 
@@ -52,12 +52,12 @@ def test_services_import():
         from services import NotificationService
         print("✅ NotificationService import OK")
 
-        # Создаем экземпляр (нужен mock bot)
+                                            
         mock_bot = MagicMock()
         service = NotificationService(mock_bot)
         print("✅ NotificationService instance created")
 
-        # Проверяем методы
+                          
         assert hasattr(service, 'send_notification_safe'), "send_notification_safe method missing"
         print("✅ Service methods present")
 
@@ -74,15 +74,15 @@ async def test_handler_functionality():
 
         handler = BasicHandler()
 
-        # Mock message
+                      
         mock_message = MagicMock()
         mock_message.from_user.id = 12345
         mock_message.answer = AsyncMock()
 
-        # Тестируем handle_help (простая функция)
+                                                 
         await handler.handle_help(mock_message)
 
-        # Проверяем что answer был вызван
+                                         
         mock_message.answer.assert_called_once()
         print("✅ Handler functionality test passed")
 
@@ -98,7 +98,7 @@ def main():
 
     results = []
 
-    # Тесты импорта
+                   
     try:
         test_basic_handlers_import()
         results.append(True)
@@ -117,7 +117,7 @@ def main():
     except Exception:
         results.append(False)
 
-    # Асинхронный тест
+                      
     try:
         asyncio.run(test_handler_functionality())
         results.append(True)

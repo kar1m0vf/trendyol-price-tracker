@@ -9,11 +9,11 @@ print('Creating test subscription...')
 sub_id = add_subscription(TEST_USER, 'https://www.trendyol.com/test-p-wave2', product_title='Wave2 Test Product')
 print('Created subscription id:', sub_id)
 
-# Insert 30 days of price history: price decreases then increases
+                                                                 
 now = int(time.time())
 for i in range(30):
     ts = now - (29 - i) * 24 * 3600
-    # price sim: start 3000 down to 2000 then back to 2600
+                                                          
     if i < 15:
         price = 3000 - i * 66
     else:

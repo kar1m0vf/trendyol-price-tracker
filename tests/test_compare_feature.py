@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 Тест новой функции сравнения товаров
 """
@@ -14,7 +14,7 @@ def test_similarity_algorithm():
     """Тестируем алгоритм поиска похожих товаров"""
     print("=== ТЕСТИРОВАНИЕ АЛГОРИТМА ПОИСКА ПОХОЖИХ ТОВАРОВ ===")
 
-    # Тестовые данные
+                     
     test_cases = [
         {
             "title": "iPhone 15 Pro Max 256GB Black",
@@ -36,7 +36,7 @@ def test_similarity_algorithm():
     for i, test_case in enumerate(test_cases, 1):
         print(f"\n{i}. Тестируем: '{test_case['title']}'")
 
-        # Тестируем функцию поиска
+                                  
         similar = find_similar_products(test_case['title'], test_case['url'], limit=3)
 
         if similar:
@@ -50,30 +50,30 @@ async def test_full_comparison():
     """Тестируем полную функцию сравнения"""
     print("\n=== ТЕСТИРОВАНИЕ ПОЛНОЙ ФУНКЦИИ СРАВНЕНИЯ ===")
 
-    # Импортируем функцию сравнения
+                                   
     from scraper import get_similar_products_comparison
     from database import get_all_subscriptions
 
-    # Получаем существующую подписку для тестирования
+                                                     
     try:
         subs = get_all_subscriptions()
         if not subs:
             print("❌ Нет подписок для тестирования")
             return
 
-        # Берем первую подписку
+                               
         test_sub = subs[0]
         sub_id = test_sub[0]
         user_id = test_sub[1]
 
         print(f"Тестируем сравнение для подписки ID {sub_id}")
 
-        # Выполняем сравнение
+                             
         result = await get_similar_products_comparison(user_id, sub_id)
 
         if result:
             print("✅ Сравнение выполнено успешно")
-            # Показываем первые 200 символов результата
+                                                       
             preview = result.replace('\n', ' ').replace('*', '')[:200]
             print(f"Превью: {preview}...")
         else:
@@ -86,10 +86,10 @@ async def test_full_comparison():
 
 if __name__ == '__main__':
     try:
-        # Синхронные тесты
+                          
         test_similarity_algorithm()
 
-        # Асинхронные тесты
+                           
         asyncio.run(test_full_comparison())
 
         print("\n🎉 Тестирование завершено!")

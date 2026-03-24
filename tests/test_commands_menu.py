@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 Тест для проверки установки меню команд бота
 """
@@ -10,7 +10,7 @@ from aiogram import Bot
 from aiogram.types import BotCommand
 from aiogram.utils.token import TokenValidationError, validate_token
 
-# Загружаем переменные окружения
+                                
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 

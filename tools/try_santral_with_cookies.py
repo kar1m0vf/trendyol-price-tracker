@@ -12,10 +12,10 @@ HEADERS = {
 
 def extract_listing_ids(html):
     ids = set()
-    # ищем все listingId поля в HTML
+                                    
     for m in re.finditer(r'"listingId"\s*:\s*"([0-9a-f]{16,32})"', html, flags=re.I):
         ids.add(m.group(1))
-    # также ищем itemNumber/listing patterns
+                                            
     for m in re.finditer(r'listingId\s*[:=]\s*"([0-9a-f]{16,32})"', html, flags=re.I):
         ids.add(m.group(1))
     return list(ids)
@@ -27,7 +27,7 @@ def try_with_session(url):
     print('Status page:', r.status_code)
     ids = extract_listing_ids(r.text)
     print('Found listing ids:', ids[:10])
-    # Try calling santral with cookies and headers
+                                                  
     api = 'https://apigw.trendyol.com/discovery-pdp-websfxpricehistory-santral'
     for lid in ids[:10]:
         params = {'listingId': lid}
