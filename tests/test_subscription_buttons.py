@@ -14,17 +14,24 @@ def test_buttons_creation():
     """Тест что кнопки создаются правильно."""
     try:
         from handlers import SubscriptionHandler
-        from database import add_user_if_not_exists
+        from database import add_user_if_not_exists, add_subscription, remove_subscriptions_by_user
 
                             
         handler = SubscriptionHandler()
 
                                           
-        add_user_if_not_exists(12345)
+        user_id = 12345
+        add_user_if_not_exists(user_id)
+        remove_subscriptions_by_user(user_id)
+        add_subscription(
+            user_id,
+            "https://www.trendyol.com/test/test-product-p-1",
+            product_title="Test product",
+        )
 
                       
         mock_msg = MagicMock()
-        mock_msg.from_user.id = 12345
+        mock_msg.from_user.id = user_id
         mock_msg.answer = AsyncMock()
 
                              
@@ -40,6 +47,9 @@ def test_buttons_creation():
 
         print(f"✅ Message sent with text: {text[:100]}...")
         print(f"✅ Reply markup included: {'reply_markup' in kwargs}")
+
+        assert "Test product" in text
+        assert text.count("Test product") == 1
 
         if 'reply_markup' in kwargs:
             markup = kwargs['reply_markup']

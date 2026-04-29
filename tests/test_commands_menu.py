@@ -4,6 +4,7 @@
 """
 import asyncio
 import os
+from pathlib import Path
 import pytest
 from dotenv import load_dotenv
 from aiogram import Bot
@@ -11,7 +12,8 @@ from aiogram.types import BotCommand
 from aiogram.utils.token import TokenValidationError, validate_token
 
                                 
-load_dotenv()
+ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(dotenv_path=ROOT / ".env")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 async def test_set_commands_menu():
@@ -29,7 +31,7 @@ async def test_set_commands_menu():
     commands = [
         BotCommand(command="start", description="🚀 Start the bot"),
         BotCommand(command="help", description="❓ Help and commands"),
-        BotCommand(command="mysubs", description="📃 My subscriptions"),
+        BotCommand(command="mysubs", description="📦 My products"),
         BotCommand(command="compare", description="⚖️ Compare prices"),
         BotCommand(command="recommend", description="💡 Recommendations"),
         BotCommand(command="settings", description="⚙️ Bot settings"),

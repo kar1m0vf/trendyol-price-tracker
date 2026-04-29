@@ -15,9 +15,9 @@ def _load_env() -> None:
 
     env_path = Path(__file__).parent / ".env"
     if env_path.exists():
-        load_dotenv(dotenv_path=env_path, override=True)
+        load_dotenv(dotenv_path=env_path, override=False)
     else:
-        load_dotenv(override=True)
+        load_dotenv(override=False)
 
 
 def _parse_admin_ids(raw: str) -> List[int]:
@@ -36,11 +36,13 @@ def _parse_admin_ids(raw: str) -> List[int]:
 _load_env()
 
 BOT_TOKEN: Optional[str] = os.getenv("BOT_TOKEN")
-DEFAULT_NOTIFY_MODE = os.getenv("DEFAULT_NOTIFY_MODE", "hourly")
+DEFAULT_NOTIFY_MODE = os.getenv("DEFAULT_NOTIFY_MODE", "discount")
 ADMIN_IDS = _parse_admin_ids(os.getenv("ADMIN_IDS", ""))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 DATABASE_PATH = os.getenv("DATABASE_PATH", "trendyol_bot.db")
-USE_NEW_HANDLERS = os.getenv("USE_NEW_HANDLERS", "false").lower() == "true"
+# Kept for compatibility with older diagnostics/tests. The bot now always uses
+# the package-based handler registration path.
+USE_NEW_HANDLERS = True
 
 
 def _check_bot_token() -> bool:

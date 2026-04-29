@@ -1,11 +1,8 @@
 """
 Handlers for subscription-related commands and functionality.
 """
-from typing import List, Tuple
 from aiogram import types
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from aiogram.types import InlineKeyboardButton
 
 from .base import BaseHandler
 from database import (
@@ -14,12 +11,8 @@ from database import (
     update_subscription_meta
 )
 from config import DEFAULT_NOTIFY_MODE
-from scraper import get_product_info_async, get_price_history_from_akakce_async
-from services.notification_service import NotificationService
+from scraper import get_product_info_async
 from keyboards import subscription_controls_kb_for_user
-import bot
-from bot import normalize_url, is_trendyol_product_url, resolve_short_url, send_history_plot
-from utils import get_next_notification_time
 import logging
 
 
@@ -28,7 +21,6 @@ class SubscriptionHandler(BaseHandler):
 
     def __init__(self):
         super().__init__()
-        self.notification_service = NotificationService(self.bot)
 
     async def handle_mysubs_command(self, message: types.Message):
         """Handle /mysubs command."""
@@ -55,6 +47,15 @@ class SubscriptionHandler(BaseHandler):
 
     async def handle_url_subscription(self, message: types.Message):
         """Handle Trendyol URL subscription."""
+        from bot import (
+            normalize_url,
+            is_trendyol_product_url,
+            resolve_short_url,
+            send_subscription_added_message,
+        )
+
+        user_id = message.from_user.id
+        status_message = None
         try:
             raw = (message.text or "").strip()
             url = await resolve_short_url(raw)
@@ -62,32 +63,37 @@ class SubscriptionHandler(BaseHandler):
             url_lower = url.lower()
 
             if "trendyol.com" not in url_lower and "ty.gl/" not in url_lower:
-                await message.answer(self.t(message.from_user.id, "not_trendyol"))
+                await message.answer(self.t(user_id, "not_trendyol"))
                 return
 
             if not is_trendyol_product_url(url):
-                await message.answer(self.t(message.from_user.id, "not_product_url"))
+                await message.answer(self.t(user_id, "not_product_url"))
                 return
 
-            add_user_if_not_exists(message.from_user.id)
+            add_user_if_not_exists(user_id)
 
                                   
-            subs = get_user_subscriptions(message.from_user.id)
+            subs = get_user_subscriptions(user_id)
             for sub in subs:
                 try:
-                    (sid, user_id, u, mode, last_price, product_title, product_image,
+                    (sid, _sub_user_id, u, mode, last_price, product_title, product_image,
                      min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert) = sub
                 except ValueError:
-                                                  
-                    (sid, user_id, u, mode, last_price, product_title, product_image,
+
+                    (sid, _sub_user_id, u, mode, last_price, product_title, product_image,
                      min_price, max_price, notify_percent, notify_interval, last_notify_time) = sub[:12]
 
                 if normalize_url(u).lower() == url_lower:
-                    await message.answer(self.t(message.from_user.id, "already_subscribed"))
+                    await message.answer(self.t(user_id, "already_subscribed"))
                     return
 
-                                 
-            sub_id = add_subscription(message.from_user.id, url, DEFAULT_NOTIFY_MODE)
+            status_message = await self.send_status_message(
+                message,
+                self.t(user_id, "status_checking_product"),
+            )
+
+
+            sub_id = add_subscription(user_id, url, DEFAULT_NOTIFY_MODE)
 
                               
             try:
@@ -103,50 +109,49 @@ class SubscriptionHandler(BaseHandler):
             except Exception as e:
                 logging.getLogger(__name__).warning("Error updating subscription meta: %s", e)
 
-                                                               
-            controls = subscription_controls_kb_for_user(message.from_user.id, sub_id)
             if price is not None:
                 try:
                     update_last_price(sub_id, price)
-                    text = self.t(message.from_user.id, "subscribed_now").format(price=price)
-                    if title:
-                        header = f"*{title}*\n\n"
-                        text = header + text
-
-                                                            
-                    try:
-                        if image:
-                                                                                             
-                            await bot.notification_service.send_notification_safe(
-                                message.from_user.id,
-                                text,
-                                image=image,
-                                parse_mode="Markdown",
-                            )
-                                                                                                      
-                            try:
-                                await message.answer("", reply_markup=controls)
-                            except Exception:
-                                pass
-                        else:
-                            await message.answer(text, reply_markup=controls, parse_mode="Markdown")
-                    except Exception:
-                        await message.answer(text, reply_markup=controls, parse_mode="Markdown")
+                    await send_subscription_added_message(
+                        message,
+                        user_id,
+                        sub_id,
+                        url,
+                        title,
+                        price,
+                        image,
+                        DEFAULT_NOTIFY_MODE,
+                    )
                 except Exception as e:
                     logging.getLogger(__name__).exception("Error sending subscription confirmation: %s", e)
-                    await message.answer(self.t(message.from_user.id, "subscribed"), reply_markup=controls)
+                    await message.answer(
+                        self.t(user_id, "subscribed"),
+                        reply_markup=subscription_controls_kb_for_user(user_id, sub_id),
+                    )
             else:
-                text = self.t(message.from_user.id, "subscribed_no_price")
-                if title:
-                    text = f"*{title}*\n\n" + text
-                await message.answer(text, reply_markup=controls, parse_mode="Markdown")
+                await send_subscription_added_message(
+                    message,
+                    user_id,
+                    sub_id,
+                    url,
+                    title,
+                    None,
+                    image,
+                    DEFAULT_NOTIFY_MODE,
+                )
+            await self.clear_status_message(status_message)
 
         except Exception as e:
             logging.getLogger(__name__).exception("Error in handle_url_subscription: %s", e)
-            await message.answer(self.t(message.from_user.id, "error_generic"))
+            if status_message is not None:
+                await self.replace_status_message(status_message, self.t(user_id, "error_generic"), fallback_target=message)
+            else:
+                await message.answer(self.t(user_id, "error_generic"))
 
     async def _show_user_subscriptions(self, message: types.Message):
         """Show user's subscriptions."""
+        from bot import build_subscriptions_overview
+
         user_id = message.from_user.id
         subs = get_user_subscriptions(user_id)
 
@@ -154,74 +159,17 @@ class SubscriptionHandler(BaseHandler):
             await message.answer(self.t(user_id, "no_subs"))
             return
 
-                                                           
-        lines = [self.t(user_id, "mysubs_header")]
-        inline_buttons = []
-
-        for sub in subs:
-            try:
-                (sub_id, _, url, mode, last_price, product_title, product_image,
-                 min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert) = sub
-            except ValueError:
-                                              
-                (sub_id, _, url, mode, last_price, product_title, product_image,
-                 min_price, max_price, notify_percent, notify_interval, last_notify_time) = sub[:12]
-                price_alert = None
-
-                                        
-            status_icon = "✅" if last_price is not None else "⚠️"
-            status_text = self.t(user_id, "status_active") if last_price is not None else self.t(user_id, "status_inactive")
-
-                              
-            price_text = f"{last_price:.0f} TL" if last_price is not None else self.t(user_id, "unknown_price")
-
-                                                              
-            mode_text = self.t(user_id, "mode_hourly") if mode == "hourly" else self.t(user_id, "mode_discount")
-            next_notify = get_next_notification_time(mode, last_notify_time, notify_interval, user_id, self.t)
-
-                                                
-            title = product_title if product_title else url[:50] + "..." if len(url) > 50 else url
-
-                                           
-            sub_line = f"\n{status_icon} *{status_text}* | ID: `{sub_id}`\n"
-            sub_line += f"📦 {title}\n"
-            sub_line += f"💰 {price_text} | 🔔 {next_notify}\n"
-
-                                                                   
-            if price_alert is not None:
-                sub_line += f"🎯 {self.t(user_id, 'price_alert_label')}: {price_alert:.0f} TL\n"
-
-            lines.append(sub_line)
-
-                                                               
-            inline_buttons.append([
-                InlineKeyboardButton(
-                    text=f"⚙️ {self.t(user_id, 'btn_edit')} ID {sub_id}",
-                    callback_data=f"edit_sub:{sub_id}"
-                )
-            ])
-
-                                                           
-        full_text = "\n".join(lines)
-        if len(full_text) > 4000:                  
-                                                                
-            warning_msg = f"⚠️ У вас {len(subs)} подписок. Показываю первые 10:\n\n"
-            short_lines = lines[:11]                    
-            short_text = "\n".join(short_lines)
-            short_keyboard = InlineKeyboardMarkup(inline_keyboard=inline_buttons[:10])
-
-            await message.answer(warning_msg + short_text, reply_markup=short_keyboard, parse_mode="Markdown")
-            return
-
-                                       
-        keyboard = InlineKeyboardMarkup(inline_keyboard=inline_buttons)
-
         try:
-            await message.answer(full_text, reply_markup=keyboard, parse_mode="Markdown")
+            overview_text, overview_keyboard = build_subscriptions_overview(user_id, subs)
+            await message.answer(
+                overview_text,
+                reply_markup=overview_keyboard,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
         except Exception as e:
-                                                              
-            print(f"Error sending keyboard: {e}")
-            await message.answer(full_text, parse_mode="Markdown")
+            logging.getLogger(__name__).exception("Error sending subscriptions overview: %s", e)
+            await message.answer(self.t(user_id, "error_generic"))
 
     def register(self, dp):
         """Register all subscription-related handlers."""

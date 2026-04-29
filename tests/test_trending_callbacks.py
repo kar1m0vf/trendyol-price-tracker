@@ -1,4 +1,4 @@
-                      
+
 """
 Тесты для callback handlers трендов в боте
 """
@@ -7,7 +7,7 @@ import os
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-                                      
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 async def test_trending_callbacks():
@@ -15,10 +15,11 @@ async def test_trending_callbacks():
     print("🧪 Тестируем callback handlers трендов...")
 
     try:
-                                                              
-        import bot
 
-                                         
+        import bot
+        from handlers import CallbackHandler
+
+
         mock_cq = MagicMock()
         mock_cq.from_user.id = 12345
         mock_cq.data = "trend:all"
@@ -27,45 +28,47 @@ async def test_trending_callbacks():
         mock_cq.message.delete = AsyncMock()
         mock_cq.answer = AsyncMock()
 
-                               
+
         with patch.object(bot, 'bot') as mock_bot:
             mock_bot.send_message = AsyncMock()
+            handler = CallbackHandler()
+            handler._bot = mock_bot
 
-                                       
-            await bot.callback_handler_old(mock_cq)
 
-                                                   
+            await handler.handle_main_callback(mock_cq)
+
+
             assert mock_bot.send_message.called, "bot.send_message не был вызван для trend:all"
 
-                         
+
             mock_bot.send_message.reset_mock()
             mock_cq.data = "trend:catmenu"
             mock_cq.message.edit_text.reset_mock()
 
-                                           
-            await bot.callback_handler_old(mock_cq)
 
-                                                
+            await handler.handle_main_callback(mock_cq)
+
+
             assert mock_cq.message.edit_text.called, "message.edit_text не был вызван для trend:catmenu"
 
-                         
+
             mock_cq.message.edit_text.reset_mock()
             mock_cq.data = "trend:cat:electronics"
 
-                                                   
-            await bot.callback_handler_old(mock_cq)
 
-                                                   
+            await handler.handle_main_callback(mock_cq)
+
+
             assert mock_bot.send_message.called, "bot.send_message не был вызван для trend:cat:electronics"
 
-                         
+
             mock_bot.send_message.reset_mock()
             mock_cq.data = "trend:search"
 
-                                          
-            await bot.callback_handler_old(mock_cq)
 
-                                                
+            await handler.handle_main_callback(mock_cq)
+
+
             assert mock_cq.message.edit_text.called, "message.edit_text не был вызван для trend:search"
 
         print("✅ Callback handlers трендов работают корректно")
@@ -87,11 +90,11 @@ async def test_trending_menu_kb():
         kb = trending_menu_kb(12345)
         assert kb is not None, "Клавиатура не создана"
 
-                                   
+
         assert hasattr(kb, 'inline_keyboard'), "Клавиатура должна иметь inline_keyboard"
         assert len(kb.inline_keyboard) > 0, "Клавиатура должна содержать кнопки"
 
-                                        
+
         button_callbacks = []
         for row in kb.inline_keyboard:
             for button in row:
@@ -119,11 +122,11 @@ async def test_trending_categories_kb():
         kb = trending_categories_kb(12345)
         assert kb is not None, "Клавиатура категорий не создана"
 
-                                   
+
         assert hasattr(kb, 'inline_keyboard'), "Клавиатура должна иметь inline_keyboard"
         assert len(kb.inline_keyboard) > 0, "Клавиатура должна содержать кнопки"
 
-                                        
+
         button_callbacks = []
         for row in kb.inline_keyboard:
             for button in row:
@@ -148,12 +151,12 @@ async def test_format_trending_items():
     try:
         from bot import format_trending_items
 
-                               
+
         result_empty = format_trending_items(12345, [])
         assert isinstance(result_empty, str), "Должен вернуть строку"
         assert len(result_empty) == 0, "Пустой список должен вернуть пустую строку"
 
-                         
+
         items = [
             ("iPhone 15 Pro", 45000.0, "https://trendyol.com/iphone-p-123"),
             ("Samsung Galaxy", None, "https://trendyol.com/samsung-p-456"),
@@ -164,7 +167,7 @@ async def test_format_trending_items():
         assert isinstance(result, str), "Должен вернуть строку"
         assert len(result) > 0, "Строка не должна быть пустой"
 
-                                                      
+
         assert "45000.0 TL" in result, "Цена должна быть отформатирована"
         assert "цена неизвестна" in result, "Неизвестная цена должна быть обработана"
 
@@ -182,30 +185,30 @@ async def test_send_trending_list():
     try:
         from bot import send_trending_list
 
-                  
+
         with patch('bot.bot') as mock_bot:
             mock_bot.send_message = AsyncMock()
 
-                                   
+
             await send_trending_list(12345, [])
             assert mock_bot.send_message.called, "send_message должен быть вызван для пустого списка"
 
-                                                                
+
             call_args = mock_bot.send_message.call_args
-            message_text = call_args[0][1]                                     
+            message_text = call_args[0][1]
             assert "недоступ" in message_text.lower() or "доступ" in message_text.lower(),\
                 "Должно быть сообщение о недоступности"
 
-                        
+
             mock_bot.send_message.reset_mock()
 
-                             
+
             items = [("Test Product", 1000.0, "https://trendyol.com/test-p-123")]
             await send_trending_list(12345, items)
 
             assert mock_bot.send_message.called, "send_message должен быть вызван для списка товаров"
 
-                                                                              
+
             assert mock_bot.send_message.call_count == 1, "Должно быть отправлено 1 сообщение"
 
         print("✅ send_trending_list работает корректно")
@@ -239,7 +242,7 @@ async def main():
             print(f"❌ Критическая ошибка в {test_func.__name__}: {e}")
             results.append(False)
 
-           
+
     print("\n" + "=" * 60)
     passed = sum(results)
     total = len(results)

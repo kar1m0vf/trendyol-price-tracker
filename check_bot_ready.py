@@ -56,8 +56,12 @@ def check_token_validation() -> bool:
 
 def check_bot_initialization() -> bool:
     try:
-        from bot import bot, dp, check_all  # noqa: F401
-        print("OK: bot.py imported, Bot and Dispatcher initialized")
+        from bot import create_app, router, check_all  # noqa: F401
+        if not callable(create_app):
+            raise RuntimeError("create_app is not callable")
+        if router is None:
+            raise RuntimeError("router is not available")
+        print("OK: bot.py imported, runtime factory and router handlers are available")
         return True
     except Exception as exc:
         print(f"FAIL: bot.py initialization failed: {exc}")

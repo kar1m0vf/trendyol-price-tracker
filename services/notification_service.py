@@ -3,14 +3,18 @@ Service for handling notifications and alerts.
 """
 import asyncio
 import logging
+import os
 from typing import Optional, List, Tuple, Union
 from datetime import datetime
 
 from aiogram import Bot
+from aiogram.types import BufferedInputFile
 import aiogram.exceptions
 
 from database import get_user_language
 from utils import parse_date_flexible
+
+os.environ.setdefault("MPLBACKEND", "Agg")
 
 logger = logging.getLogger(__name__)
 
@@ -104,10 +108,14 @@ class NotificationService:
     ):
         """Send history plot for a product."""
         try:
-                                                             
-            import matplotlib.pyplot as plt
+            import matplotlib
             import matplotlib.dates as mdates
+            from matplotlib.backends.backend_agg import FigureCanvasAgg
+            from matplotlib.figure import Figure
+            from matplotlib.ticker import FuncFormatter
             from io import BytesIO
+
+            matplotlib.use("Agg", force=True)
 
                                   
             processed = []
@@ -143,7 +151,9 @@ class NotificationService:
                 return
 
                          
-            fig, ax = plt.subplots(figsize=(10, 6))
+            fig = Figure(figsize=(10, 6))
+            FigureCanvasAgg(fig)
+            ax = fig.subplots()
 
                                                      
             datetime_data = [(d, p) for d, p in processed if isinstance(d, datetime)]
@@ -154,7 +164,8 @@ class NotificationService:
                 ax.plot(dates, prices, 'b-o', linewidth=2, markersize=4)
                 ax.xaxis.set_major_formatter(mdates.DateFormatter('%d.%m'))
                 ax.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, len(dates)//10)))
-                plt.setp(ax.xaxis.get_majorticklabels(), rotation=45)
+                for label in ax.xaxis.get_majorticklabels():
+                    label.set_rotation(45)
             else:
                                                 
                 indices = list(range(len(non_datetime_data)))
@@ -167,20 +178,21 @@ class NotificationService:
             ax.grid(True, alpha=0.3)
 
                                  
-            ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.0f}'))
+            ax.yaxis.set_major_formatter(FuncFormatter(lambda x, p: f'{x:.0f}'))
 
-            plt.tight_layout()
+            fig.tight_layout()
 
                             
             buf = BytesIO()
             fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
             buf.seek(0)
-            plt.close(fig)
+            image = BufferedInputFile(buf.getvalue(), filename="price_history.png")
+            fig.clear()
 
                        
             await self.bot.send_photo(
                 user_id,
-                photo=buf,
+                photo=image,
                 caption=f"📊 Price history for {url[:50]}..."
             )
 

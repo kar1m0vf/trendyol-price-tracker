@@ -1,4 +1,4 @@
-"""Verify that callback_handler_old is registered when bot loads."""
+"""Verify that callback handlers are registered when bot loads."""
 import sys
 import logging
 
@@ -15,17 +15,17 @@ async def test_bot_handlers():
         print(f"  - Using handlers: USE_NEW_HANDLERS={bot_module.USE_NEW_HANDLERS}")
         
                           
-        dp = bot_module.dp
-        print(f"OK: Dispatcher found: {dp}")
+        router = bot_module.router
+        print(f"OK: Router found: {router}")
         
                                        
-        callback_handlers = dp.callback_query.handlers
+        callback_handlers = router.callback_query.handlers
         print(f"Callback query handlers: {len(callback_handlers)} handler(s)")
         for i, handler in enumerate(callback_handlers):
             print(f"  Handler {i}: {handler}")
         
                                 
-        message_handlers = dp.message.handlers
+        message_handlers = router.message.handlers
         print(f"Message handlers: {len(message_handlers)} handler(s)")
         
         if callback_handlers:

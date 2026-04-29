@@ -1,9 +1,12 @@
 """
 Base handler with common utilities and shared functionality.
 """
+import logging
 from typing import Optional, Dict, Any
 from aiogram import Bot
 from localization import t as translate_func, get_user_language_safe
+
+logger = logging.getLogger(__name__)
 
                                              
 _bot = None
@@ -60,6 +63,45 @@ class BaseHandler:
         except Exception as e:
                                    
             print(f"Failed to send answer: {e}")
+            return False
+
+    async def send_status_message(self, target, text: str, **kwargs):
+        """Send a temporary user-facing status message.
+
+        The returned message can later be edited or deleted so long-running
+        actions feel responsive without leaving extra noise in chat.
+        """
+        try:
+            if hasattr(target, "answer"):
+                return await target.answer(text, **kwargs)
+            return await self.bot.send_message(target, text, **kwargs)
+        except Exception:
+            logger.debug("Failed to send status message", exc_info=True)
+            return None
+
+    async def replace_status_message(self, status_message, text: str, *, fallback_target=None, **kwargs) -> bool:
+        """Replace a status message with the final user-facing result."""
+        if status_message is not None:
+            try:
+                await status_message.edit_text(text, **kwargs)
+                return True
+            except Exception:
+                logger.debug("Failed to edit status message", exc_info=True)
+
+        if fallback_target is not None:
+            sent = await self.send_status_message(fallback_target, text, **kwargs)
+            return sent is not None
+        return False
+
+    async def clear_status_message(self, status_message) -> bool:
+        """Remove a temporary status message after a separate result was sent."""
+        if status_message is None:
+            return False
+        try:
+            await status_message.delete()
+            return True
+        except Exception:
+            logger.debug("Failed to delete status message", exc_info=True)
             return False
 
     def get_user_language(self, user_id: int) -> str:

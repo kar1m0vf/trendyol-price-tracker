@@ -1,5 +1,6 @@
 import pytest
 import asyncio
+import sys
 from types import SimpleNamespace
 from services.notification_service import NotificationService
 
@@ -79,3 +80,20 @@ async def test_send_history_plot_with_matplotlib(monkeypatch):
 
                                                
     assert any(item[0] in ('photo', 'msg') for item in bot.sent)
+
+
+@pytest.mark.asyncio
+async def test_send_history_plot_does_not_import_pyplot(monkeypatch):
+    class ForbiddenPyplot:
+        def __getattr__(self, name):
+            raise AssertionError("send_history_plot must not use matplotlib.pyplot")
+
+    monkeypatch.setitem(sys.modules, 'matplotlib.pyplot', ForbiddenPyplot())
+
+    bot = DummyBot()
+    svc = NotificationService(bot)
+    hist = [("20.09.2025", 3000.0), ("21.09.2025", 2900.0)]
+
+    await svc.send_history_plot(123, "https://trendyol.com/p-1", hist)
+
+    assert any(item[0] == 'photo' for item in bot.sent)

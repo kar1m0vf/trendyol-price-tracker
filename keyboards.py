@@ -45,12 +45,12 @@ def get_notify_inline_kb(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text=translate_func(user_id, "btn_mode_hourly"),
-                        callback_data=f"mode:{sub_id}:hourly",
-                    ),
-                    InlineKeyboardButton(
                         text=translate_func(user_id, "btn_mode_discount"),
                         callback_data=f"mode:{sub_id}:discount",
+                    ),
+                    InlineKeyboardButton(
+                        text=translate_func(user_id, "btn_mode_hourly"),
+                        callback_data=f"mode:{sub_id}:hourly",
                     ),
                 ]
             ]
@@ -60,12 +60,12 @@ def get_notify_inline_kb(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=translate_func(user_id, "btn_mode_hourly"),
-                    callback_data="mode:hourly",
-                ),
-                InlineKeyboardButton(
                     text=translate_func(user_id, "btn_mode_discount"),
                     callback_data="mode:discount",
+                ),
+                InlineKeyboardButton(
+                    text=translate_func(user_id, "btn_mode_hourly"),
+                    callback_data="mode:hourly",
                 ),
             ]
         ]
@@ -93,9 +93,9 @@ def subscription_controls_kb_for_user(
                 mode_db = None
 
             if mode_db == "hourly":
-                mode_label_hourly = "[x] " + mode_label_hourly
+                mode_label_hourly = "✅ " + mode_label_hourly
             elif mode_db == "discount":
-                mode_label_discount = "[x] " + mode_label_discount
+                mode_label_discount = "✅ " + mode_label_discount
     except Exception as exc:
         logger.exception(
             "Error while building subscription controls keyboard for sub %s: %s",
@@ -107,10 +107,10 @@ def subscription_controls_kb_for_user(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=mode_label_hourly, callback_data=f"mode:{sub_id}:hourly"
+                    text=mode_label_discount, callback_data=f"mode:{sub_id}:discount"
                 ),
                 InlineKeyboardButton(
-                    text=mode_label_discount, callback_data=f"mode:{sub_id}:discount"
+                    text=mode_label_hourly, callback_data=f"mode:{sub_id}:hourly"
                 ),
             ],
             [
@@ -119,14 +119,18 @@ def subscription_controls_kb_for_user(
                     callback_data=f"history:{sub_id}",
                 ),
                 InlineKeyboardButton(
-                    text=translate_func(user_id, "btn_unsubscribe_inline"),
-                    callback_data=f"unsubscribe:{sub_id}",
+                    text=translate_func(user_id, "btn_price_alert"),
+                    callback_data=f"alert_edit:{sub_id}",
                 ),
             ],
             [
                 InlineKeyboardButton(
                     text=translate_func(user_id, "btn_compare"),
                     callback_data=f"compare:{sub_id}",
+                ),
+                InlineKeyboardButton(
+                    text=translate_func(user_id, "btn_unsubscribe_inline"),
+                    callback_data=f"unsubscribe:{sub_id}",
                 )
             ],
         ]

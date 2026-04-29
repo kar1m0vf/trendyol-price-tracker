@@ -1,6 +1,5 @@
-                      
 """
-Тест на отсутствие конфликтов между старыми и новыми обработчиками.
+Тест на отсутствие конфликтов при единой регистрации обработчиков.
 """
 import os
 import sys
@@ -10,37 +9,42 @@ from unittest.mock import MagicMock, AsyncMock
 def test_no_double_registration():
     """Тест что обработчики не регистрируются дважды."""
     print("Testing handler conflict resolution...")
+    original_value = os.environ.get('USE_NEW_HANDLERS')
 
-                                    
-    os.environ['USE_NEW_HANDLERS'] = 'true'
     try:
-        import bot
-        print("✅ New handlers mode: no conflicts detected")
+        try:
+            import bot
+            print("✅ Package handler architecture: no conflicts detected")
+            assert bot.USE_NEW_HANDLERS is True
 
-                                          
-        modules_to_reset = ['bot', 'handlers', 'handlers.basic', 'handlers.subscription_handler']
-        for mod in modules_to_reset:
-            if mod in sys.modules:
-                del sys.modules[mod]
+            modules_to_reset = ['bot', 'handlers', 'handlers.basic', 'handlers.subscription_handler']
+            for mod in modules_to_reset:
+                if mod in sys.modules:
+                    del sys.modules[mod]
 
-    except Exception as e:
-        print(f"❌ New handlers mode failed: {e}")
-        raise
+        except Exception as e:
+            print(f"❌ Handler architecture failed: {e}")
+            raise
 
-                                    
-    os.environ['USE_NEW_HANDLERS'] = 'false'
-    try:
-        import bot
-        print("✅ Old handlers mode: no conflicts detected")
+        # The old USE_NEW_HANDLERS=false switch is ignored for compatibility.
+        os.environ['USE_NEW_HANDLERS'] = 'false'
+        try:
+            import bot
+            assert bot.USE_NEW_HANDLERS is True
+            print("✅ Deprecated handler switch does not re-enable legacy registration")
 
-                             
-        for mod in modules_to_reset:
-            if mod in sys.modules:
-                del sys.modules[mod]
+            for mod in modules_to_reset:
+                if mod in sys.modules:
+                    del sys.modules[mod]
 
-    except Exception as e:
-        print(f"❌ Old handlers mode failed: {e}")
-        raise
+        except Exception as e:
+            print(f"❌ Deprecated handler switch check failed: {e}")
+            raise
+    finally:
+        if original_value is not None:
+            os.environ['USE_NEW_HANDLERS'] = original_value
+        elif 'USE_NEW_HANDLERS' in os.environ:
+            del os.environ['USE_NEW_HANDLERS']
 
     return
 

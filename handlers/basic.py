@@ -123,6 +123,10 @@ class BasicHandler(BaseHandler):
         """Handle language button press."""
         await self.handle_language_menu(message)
 
+    async def handle_help_button(self, message: types.Message):
+        """Handle help button press."""
+        await self.handle_help(message)
+
     def register(self, dp):
         """Register all handlers."""
         dp.message.register(self.handle_start, Command("start"))
@@ -142,6 +146,20 @@ class BasicHandler(BaseHandler):
                 return False
 
         dp.message.register(self.handle_language_button, is_language_button)
+
+        async def is_help_button(message):
+            if not message.text:
+                return False
+            try:
+                return any(
+                    locale.get("btn_help") == message.text
+                    for locale in LOCALES.values()
+                )
+            except Exception as exc:
+                logger.exception("is_help_button check failed: %s", exc)
+                return False
+
+        dp.message.register(self.handle_help_button, is_help_button)
 
 
 

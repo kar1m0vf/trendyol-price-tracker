@@ -75,24 +75,18 @@ async def test_handler_functionality():
         print(f"❌ Handler functionality test failed: {e}")
         raise
 
-def test_old_handlers_still_work():
-    """Тест что старые обработчики все еще работают при USE_NEW_HANDLERS=false."""
-                                     
+def test_legacy_handler_functions_remain_available_for_compatibility():
+    """Тест что совместимые legacy-функции все еще доступны напрямую."""
     original_value = os.environ.get('USE_NEW_HANDLERS')
 
     try:
-                                     
-        os.environ['USE_NEW_HANDLERS'] = 'false'
-
-                                                            
         if 'bot' in sys.modules:
             del sys.modules['bot']
 
-                                                             
         import bot
         assert hasattr(bot, 'cmd_mysubs'), "cmd_mysubs should still be available"
         assert hasattr(bot, 'cmd_unsubscribe'), "cmd_unsubscribe should still be available"
-        print("✅ Old handlers still available when USE_NEW_HANDLERS=false")
+        print("✅ Legacy compatibility functions still available")
         return
     except Exception as e:
         print(f"❌ Old handlers test failed: {e}")

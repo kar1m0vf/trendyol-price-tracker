@@ -158,13 +158,21 @@ def check_locales() -> None:
 
 
 def check_command_coverage() -> None:
-    bot_path = BASE_DIR / "bot.py"
-    text = bot_path.read_text(encoding="utf-8", errors="ignore")
+    source_files = [BASE_DIR / "bot.py"]
+    source_files.extend((BASE_DIR / "handlers").glob("*.py"))
+    text = "\n".join(
+        p.read_text(encoding="utf-8", errors="ignore")
+        for p in source_files
+        if p.exists()
+    )
     found = set(re.findall(r'Command\("([^"]+)"\)', text))
 
     missing = sorted(REQUIRED_COMMANDS - found)
     if missing:
-        raise CheckError(f"required commands are not registered in bot.py: {', '.join(missing)}")
+        raise CheckError(
+            "required commands are not registered in bot.py/handlers: "
+            + ", ".join(missing)
+        )
 
     _ok(f"required command coverage looks good ({len(REQUIRED_COMMANDS)})")
 

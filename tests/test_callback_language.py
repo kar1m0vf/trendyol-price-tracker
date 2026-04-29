@@ -4,17 +4,19 @@
 """
 import asyncio
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 from aiogram import Bot
 from aiogram.types import CallbackQuery, User
 
                                 
-load_dotenv()
+ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(dotenv_path=ROOT / ".env")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
                                     
 import sys
-sys.path.append('.')
+sys.path.insert(0, str(ROOT))
 from localization import t, update_language_cache
 from database import get_user_language, set_user_language
 

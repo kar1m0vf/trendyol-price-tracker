@@ -6,6 +6,11 @@ import json
 import sys
 from pathlib import Path
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 LOCALES_DIR = Path(__file__).parent / "locales"
 LANGUAGES = ["ru", "en", "az", "tr"]
 

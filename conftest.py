@@ -1,13 +1,32 @@
-                                                                              
 pytest_plugins = ["pytest_asyncio"]
-
-                                                         
 
 import gc
 import asyncio
-import warnings
+import os
+import sys
+from pathlib import Path
 
 import aiohttp
+
+ROOT = Path(__file__).resolve().parent
+ARTIFACTS_DIR = ROOT / "artifacts"
+ARTIFACTS_DIR.mkdir(exist_ok=True)
+
+if str(ROOT) not in sys.path:
+	sys.path.insert(0, str(ROOT))
+
+os.environ.setdefault("BOT_TOKEN", "1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi")
+os.environ.setdefault("ADMIN_IDS", "975282591")
+os.environ.setdefault("DATABASE_PATH", str(ARTIFACTS_DIR / "pytest_trendyol_bot.db"))
+
+
+def pytest_sessionstart(session):
+	try:
+		from database import init_db
+
+		init_db(run_maintenance=False)
+	except Exception as exc:
+		raise RuntimeError(f"Failed to initialize test database: {exc}") from exc
 
 
 def _close_aiohttp_sessions():
