@@ -1,5 +1,8 @@
 # Deploy Smoke Checklist
 
+Owner/internal checklist. This document does not grant permission to deploy a
+copy of the bot; it exists so the project owner can validate the live service.
+
 Run this before and right after deployment.
 
 ## 1. Pre-Deploy Local Checks

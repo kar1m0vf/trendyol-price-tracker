@@ -1,229 +1,44 @@
-# 📚 Документация и файлы проекта
+# Project Documentation Index
 
-## 🎯 БЫСТРЫЙ СТАРТ
+This repository is source-available for portfolio review. It is not a public self-hosting package.
 
-**Хотите запустить бота прямо сейчас?**
+## Primary Review Path
 
-1. Проверьте готовность:
-   ```bash
-   python check_bot_ready.py
-   ```
+| Document | Audience | Purpose |
+| --- | --- | --- |
+| [README.md](README.md) | Recruiters, engineers, reviewers | Product overview, capabilities, ownership policy |
+| [User Guide](docs/guides/USER_GUIDE.md) | Product reviewers | Telegram user experience and workflows |
+| [Architecture](docs/ARCHITECTURE.md) | Engineers | Runtime, modules, data model, scheduler, callbacks |
 
-2. Если все ✅, запустите:
-   ```bash
-   python bot.py
-   ```
+## Diagnostics
 
-3. Найдите бота в Telegram и отправьте `/start`
+| File | Purpose |
+| --- | --- |
+| [check_bot_ready.py](check_bot_ready.py) | Runtime readiness check |
+| [deploy_smoke_check.py](tools/diagnostics/deploy_smoke_check.py) | Deploy smoke check |
+| [check_locales.py](check_locales.py) | Localization key consistency |
+| [Deploy Smoke Checklist](docs/guides/DEPLOY_SMOKE_CHECKLIST.md) | Owner/internal post-deploy checklist |
 
----
+## Code Map
 
-## 📖 Документация по использованию
+| Path | Purpose |
+| --- | --- |
+| [bot.py](bot.py) | Entry point, runtime, scheduler, common helpers |
+| [handlers/](handlers) | aiogram handler package |
+| [database.py](database.py) | SQLite schema, migrations, subscriptions, history, recommendations |
+| [scraper.py](scraper.py) | Trendyol data collection and parsing |
+| [services/notification_service.py](services/notification_service.py) | Notifications and chart delivery |
+| [locales/](locales) | RU/EN/AZ/TR localization |
+| [tests/](tests) | pytest test suite |
 
-| Файл | Содержание | Для кого |
-|------|-----------|---------|
-| **docs/guides/RUN_BOT.md** | Полная инструкция по запуску | Все пользователи |
-| **docs/reports/STATUS_REPORT.md** | Статус исправлений и готовность | Все пользователи |
-| **check_bot_ready.py** | Скрипт проверки готовности | Все пользователи |
+## Documentation Policy
 
----
+The repository intentionally keeps a compact documentation set:
 
-## 📋 Документация по исправлениям
+- product overview;
+- user-facing Telegram workflow;
+- architecture;
+- owner-only operations;
+- deploy smoke checklist.
 
-| Файл | Содержание | Для кого |
-|------|-----------|---------|
-| **docs/fixes/FIXES_COMPLETED.md** | Детальное описание всех исправлений | Разработчики |
-| **docs/fixes/FIXES_APPLIED.md** | Краткая сводка примененных исправлений | Разработчики |
-| **docs/reports/CODE_REVIEW_ANALYSIS.md** | Полный анализ кода и проблем | Разработчики |
-| **docs/fixes/FIXES_AND_CODE_SAMPLES.md** | Примеры кода с исправлениями | Разработчики |
-| **docs/fixes/QUICK_FIX_GUIDE.md** | Быстрое руководство по исправлениям | Разработчики |
-| **docs/reports/PER_FILE_AUDIT.md** | Аудит по каждому файлу | Разработчики |
-| **docs/reports/ANALYSIS_SUMMARY.md** | Сводка анализа проблем | Разработчики |
-| **docs/reports/FINAL_REPORT.md** | Финальный отчет с рекомендациями | Разработчики |
-
----
-
-## 🔧 Файлы конфигурации
-
-| Файл | Назначение | Статус |
-|------|-----------|--------|
-| **.env** | Конфиденциальные переменные окружения | ✅ Создан |
-| **.env.example** | Шаблон для разработчиков | ✅ Создан |
-| **.gitignore** | Защита .env от git | ✅ Создан |
-| **requirements.txt** | Список зависимостей Python | ✅ Обновлен |
-
----
-
-## 💾 Основные файлы проекта
-
-| Файл | Назначение | Статус |
-|------|-----------|--------|
-| **bot.py** | Основная логика бота и обработчики | ✅ Исправлен |
-| **config.py** | Конфигурация и загрузка .env | ✅ Исправлен |
-| **database.py** | Работа с SQLite БД | ✅ Улучшен |
-| **scraper.py** | Парсинг Trendyol | ✅ Не требует изменений |
-| **middleware.py** | Антиспам и rate limiting | ✅ Не требует изменений |
-| **keyboards.py** | Inline кнопки и меню | ✅ Не требует изменений |
-| **utils.py** | Вспомогательные функции | ✅ Не требует изменений |
-
----
-
-## 🧪 Файлы тестирования и отладки
-
-| Файл | Назначение |
-|------|-----------|
-| **check_bot_ready.py** | Скрипт проверки готовности бота |
-| **test_price_history.py** | Тесты истории цен |
-| **tools/test_trendyol_api.py** | Тесты парсера Trendyol |
-| **tools/test_trendyol_history.py** | Тесты истории тендеров |
-| **tools/test_handle_url.py** | Тесты обработки URL |
-| **tools/inspect_handlers.py** | Инспектор обработчиков |
-
----
-
-## 📊 Структура проекта
-
-```
-telegrambot/
-├── bot.py                      # Главный файл с логикой бота ✅
-├── config.py                   # Конфигурация и .env ✅
-├── database.py                 # SQLite операции ✅
-├── scraper.py                  # Парсинг Trendyol
-├── middleware.py               # Rate limiting
-├── keyboards.py                # Inline кнопки
-├── utils.py                    # Утилиты
-│
-├── .env                        # Конфиденциальные переменные (не коммитить!)
-├── .env.example                # Шаблон .env
-├── .gitignore                  # Правила git
-├── requirements.txt            # Зависимости Python
-│
-├── check_bot_ready.py          # Скрипт проверки готовности
-├── trendyol_bot.db             # SQLite база данных
-│
-├── locales/                    # Локализация (4 языка)
-├── logs/                       # Логи бота
-├── backups/                    # Резервные копии БД
-├── tools/                      # Дополнительные инструменты
-│
-├── docs/reports/STATUS_REPORT.md            # Статус и результаты ✅
-├── docs/guides/RUN_BOT.md                  # Инструкции по запуску ✅
-├── docs/fixes/FIXES_COMPLETED.md          # Описание исправлений ✅
-├── docs/reports/CODE_REVIEW_ANALYSIS.md     # Анализ кода
-├── docs/fixes/FIXES_AND_CODE_SAMPLES.md   # Примеры кода
-├── docs/fixes/FIXES_APPLIED.md            # Краткая сводка исправлений
-├── docs/fixes/QUICK_FIX_GUIDE.md          # Быстрое руководство
-├── docs/reports/PER_FILE_AUDIT.md           # Аудит по файлам
-├── docs/reports/ANALYSIS_SUMMARY.md         # Сводка анализа
-└── docs/reports/FINAL_REPORT.md             # Финальный отчет
-```
-
----
-
-## 🚀 Рекомендуемый порядок чтения
-
-### Для пользователей (Non-programmers)
-1. **docs/reports/STATUS_REPORT.md** - Что было исправлено и статус
-2. **docs/guides/RUN_BOT.md** - Как запустить бота
-3. **check_bot_ready.py** - Проверить что всё готово
-
-### Для разработчиков
-1. **docs/fixes/FIXES_COMPLETED.md** - Что было исправлено
-2. **docs/reports/CODE_REVIEW_ANALYSIS.md** - Полный анализ проблем
-3. **docs/fixes/FIXES_AND_CODE_SAMPLES.md** - Примеры кода
-4. **docs/reports/PER_FILE_AUDIT.md** - Изменения в каждом файле
-
-### Для код-ревью
-1. **docs/reports/CODE_REVIEW_ANALYSIS.md** - Выявленные проблемы
-2. **docs/reports/FINAL_REPORT.md** - Рекомендации и итоги
-3. Просмотр самих файлов (bot.py, config.py, database.py)
-
----
-
-## 🔍 Что было исправлено
-
-### 6 критических проблем устранены:
-
-1. ✅ **Безопасность** - BOT_TOKEN перемещен в .env
-2. ✅ **Надежность** - get_user_settings() теперь безопасна
-3. ✅ **Производительность** - Кэширование user_settings
-4. ✅ **Стабильность** - send_notification_safe() с таймаутом
-5. ✅ **Гибкость** - parse_date_flexible() для разных форматов
-6. ✅ **Инициализация** - Валидация BOT_TOKEN перед Bot()
-
----
-
-## 💡 Ключевые улучшения
-
-| Проблема | Улучшение | Результат |
-|----------|-----------|-----------|
-| Захардкодированный токен | Переместить в .env | 🔒 Безопасность |
-| None от get_user_settings() | Гарантировать значения | 🛡️ Надежность |
-| N+1 запросы в scheduler | Кэширование | ⚡ 3-6x быстрее |
-| Зависание send_photo() | Таймаут + fallback | 🔄 Стабильность |
-| Ошибки парсинга дат | 8 форматов + fallback | 📅 Гибкость |
-| BOT_TOKEN is None | Валидация перед Bot() | ✅ Работает |
-
----
-
-## 📞 Часто задаваемые вопросы
-
-### Как запустить бота?
-Используйте: `python bot.py`
-Или прочитайте: `docs/guides/RUN_BOT.md`
-
-### Как проверить что всё готово?
-Запустите: `python check_bot_ready.py`
-
-### Что изменилось в кодe?
-Прочитайте: `docs/fixes/FIXES_COMPLETED.md`
-
-### Где находится BOT_TOKEN?
-В файле `.env` (не коммитится в git)
-
-### Как добавить нового пользователя к админ списку?
-Отредактируйте переменную `ADMIN_IDS` в `.env`
-
-### Как изменить язык бота?
-Прочитайте: `docs/fixes/QUICK_FIX_GUIDE.md`
-
----
-
-## ✅ Проверочный лист перед запуском
-
-- [ ] Python 3.11+ установлен
-- [ ] Virtual environment активирован (`venv/`)
-- [ ] Зависимости установлены (`pip install -r requirements.txt`)
-- [ ] `.env` файл создан с `BOT_TOKEN`
-- [ ] Скрипт проверки пройден (`python check_bot_ready.py`)
-- [ ] Бот готов к запуску!
-
----
-
-## 📝 История изменений
-
-- **Исправление 1-6** - Решены все критические проблемы
-- **Документация** - Создано 8 файлов анализа и руководств
-- **Конфигурация** - Добавлена загрузка .env файла
-- **Тестирование** - Скрипт проверки готовности
-- **Статус** - ✅ ВСЕ ГОТОВО
-
----
-
-## 🎓 Образовательная ценность
-
-Этот проект демонстрирует:
-- ✅ Безопасное управление конфиденциальными данными
-- ✅ Асинхронное программирование в Python
-- ✅ Работу с SQLite БД и оптимизацию
-- ✅ Обработку ошибок и graceful degradation
-- ✅ Планирование задач с APScheduler
-- ✅ Разработку Telegram ботов с aiogram
-
----
-
-**Статус:** ✅ ГОТОВО К ИСПОЛЬЗОВАНИЮ
-
-Дата: 2024
-
-Качество: Профессиональное
+Old reports, fix logs, duplicate quick starts, and local run notes were removed to avoid presenting the project as a public self-hosting template.

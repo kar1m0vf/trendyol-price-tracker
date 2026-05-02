@@ -66,3 +66,7 @@ tmp/
 *.backup
 *.bundle
 artifacts/
+
+# Private owner docs
+docs/guides/OPERATIONS.md
+docs/private/
