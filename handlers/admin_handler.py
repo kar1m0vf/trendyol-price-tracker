@@ -6,6 +6,7 @@ import os
 import secrets
 import shlex
 import sqlite3
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -53,15 +54,24 @@ def _get_env_int(name: str, default: int, *, min_value: Optional[int] = None, ma
 
 DB_BACKUP_KEEP_FILES = _get_env_int("DB_BACKUP_KEEP_FILES", 7, min_value=1, max_value=365)
 ADMIN_ACTION_TTL_SECONDS = _get_env_int("ADMIN_ACTION_TTL_SECONDS", 30 * 60, min_value=60, max_value=24 * 3600)
+ADMIN_USERS_PAGE_SIZE = _get_env_int("ADMIN_USERS_PAGE_SIZE", 10, min_value=5, max_value=25)
 
 _PENDING_BROADCASTS: Dict[str, Dict[str, Any]] = {}
 _PENDING_CLEANUPS: Dict[str, Dict[str, Any]] = {}
 
 
-def _get_runtime_bot():
-    from bot import bot as runtime_bot
+class ReportDeliveryError(RuntimeError):
+    """Raised when a user report could not be delivered to any admin."""
 
-    return runtime_bot
+
+def _get_runtime_bot():
+    for module_name in ("__main__", "bot"):
+        module = sys.modules.get(module_name)
+        runtime_bot = getattr(module, "bot", None) if module else None
+        if runtime_bot is not None:
+            return runtime_bot
+
+    raise RuntimeError("Bot runtime is not initialized. Call create_app() first.")
 
 
 def _safe_html(value: Any) -> str:
@@ -91,6 +101,33 @@ def _user_display_html(
     last_name: Optional[str] = None,
 ) -> str:
     return _safe_html(_user_display_name(user_id, username, first_name, last_name))
+
+
+def _admin_greeting_name(message: types.Message, user_id: int) -> str:
+    user = getattr(message, "from_user", None)
+    if user is not None:
+        name = _user_display_name(
+            user_id,
+            getattr(user, "username", None),
+            getattr(user, "first_name", None),
+            getattr(user, "last_name", None),
+        )
+        if name != f"ID {user_id}":
+            return name
+
+    try:
+        from database import get_user_profile
+
+        profile = get_user_profile(user_id) or {}
+        return _user_display_name(
+            user_id,
+            profile.get("username"),
+            profile.get("first_name"),
+            profile.get("last_name"),
+        )
+    except Exception:
+        logger.debug("Could not load admin profile for greeting", exc_info=True)
+        return f"ID {user_id}"
 
 
 def _user_profile_block(
@@ -143,6 +180,143 @@ def _profile_select_exprs(column_names: List[str]) -> str:
 
 def _is_message_not_modified_error(exc: Exception) -> bool:
     return "message is not modified" in str(exc).lower()
+
+
+def _format_dt(ts: Any, fmt: str = "%d.%m.%Y %H:%M") -> str:
+    if not ts:
+        return "-"
+    try:
+        return datetime.fromtimestamp(int(ts)).strftime(fmt)
+    except Exception:
+        return "-"
+
+
+def _admin_user_button_text(
+    row_number: int,
+    user_id: int,
+    username: Optional[str],
+    first_name: Optional[str],
+    last_name: Optional[str],
+) -> str:
+    text = f"{row_number}. {_user_display_name(user_id, username, first_name, last_name)}"
+    return text[:61] + "..." if len(text) > 64 else text
+
+
+def _fetch_admin_users_page(offset: int, limit: int = ADMIN_USERS_PAGE_SIZE) -> Dict[str, Any]:
+    from database import get_connection
+
+    offset = max(0, int(offset or 0))
+    limit = max(1, int(limit or ADMIN_USERS_PAGE_SIZE))
+
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(users)")
+        columns = cursor.fetchall()
+        column_names = [col[1] for col in columns]
+        cursor.execute("SELECT COUNT(*) FROM users")
+        total_users = int(cursor.fetchone()[0])
+
+        if total_users == 0:
+            return {"total": 0, "offset": 0, "limit": limit, "users": []}
+
+        max_offset = ((total_users - 1) // limit) * limit
+        offset = min(offset, max_offset)
+
+        created_expr = "u.created_at" if "created_at" in column_names else "0"
+        profile_exprs = _profile_select_exprs(column_names)
+        order_expr = "u.created_at DESC" if "created_at" in column_names else "u.user_id DESC"
+        query = f"""
+            SELECT
+                u.user_id,
+                u.language,
+                {created_expr} AS created_at,
+                {profile_exprs},
+                COUNT(s.id) as subs_count
+            FROM users u
+            LEFT JOIN subscriptions s ON u.user_id = s.user_id
+            GROUP BY u.user_id
+            ORDER BY {order_expr}
+            LIMIT ? OFFSET ?
+        """
+
+        cursor.execute(query, (limit, offset))
+        users = cursor.fetchall()
+
+    return {"total": total_users, "offset": offset, "limit": limit, "users": users}
+
+
+def _build_admin_users_page(admin_user_id: int, offset: int = 0) -> Tuple[str, InlineKeyboardMarkup]:
+    page = _fetch_admin_users_page(offset)
+    users = page["users"]
+    total_users = page["total"]
+    offset = page["offset"]
+    limit = page["limit"]
+
+    if total_users == 0:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="admin_main_menu")]
+        ])
+        return t(admin_user_id, "admin_users_none"), keyboard
+
+    page_number = offset // limit + 1
+    total_pages = (total_users + limit - 1) // limit
+    shown_from = offset + 1
+    shown_to = offset + len(users)
+
+    users_text = "👥 <b>Управление пользователями</b>\n\n"
+    users_text += f"📊 <b>Всего в базе:</b> {total_users}\n"
+    users_text += f"📄 <b>Страница:</b> {page_number}/{total_pages}\n"
+    users_text += f"📋 <b>Показано:</b> {shown_from}-{shown_to} из {total_users}\n\n"
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[])
+
+    for index, user_data in enumerate(users, start=shown_from):
+        (
+            user_id,
+            language,
+            created_at,
+            username,
+            first_name,
+            last_name,
+            _telegram_language_code,
+            _is_premium,
+            last_seen_at,
+            subs_count,
+        ) = user_data
+        users_text += (
+            f"{index}. 👤 <b>{_user_display_html(user_id, username, first_name, last_name)}</b> "
+            f"| <code>{user_id}</code>\n"
+            f"   🌐 {(language or '-').upper()} | 📦 {subs_count} | "
+            f"📅 {_format_dt(created_at)} | 🕒 {_format_dt(last_seen_at)}\n"
+        )
+
+        keyboard.inline_keyboard.append([
+            InlineKeyboardButton(
+                text=_admin_user_button_text(index, user_id, username, first_name, last_name),
+                callback_data=f"user_details:{user_id}",
+            )
+        ])
+
+    nav_row = []
+    if offset > 0:
+        nav_row.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"admin_users_page:{max(0, offset - limit)}"))
+    if shown_to < total_users:
+        nav_row.append(InlineKeyboardButton(text="➡️ Вперёд", callback_data=f"admin_users_page:{offset + limit}"))
+    if nav_row:
+        keyboard.inline_keyboard.append(nav_row)
+
+    keyboard.inline_keyboard.extend([
+        [
+            InlineKeyboardButton(text="🔄 Обновить", callback_data=f"admin_users_refresh:{offset}"),
+            InlineKeyboardButton(text="🚫 Проверить блокировки", callback_data="admin_check_blocked"),
+        ],
+        [
+            InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats_refresh"),
+            InlineKeyboardButton(text="🏠 Главное меню", callback_data="admin_main_menu"),
+        ],
+    ])
+
+    return users_text, keyboard
 
 
 def _new_admin_action_token() -> str:
@@ -258,8 +432,10 @@ async def admin_main_menu(message: types.Message):
         ]
     ])
 
+    greeting_name = _safe_html(_admin_greeting_name(message, user_id))
     welcome_text = "🚀 <b>Панель администратора</b>\n\n"
-    welcome_text += f"👋 Добро пожаловать, <code>{user_id}</code>!\n\n"
+    welcome_text += f"👋 Добро пожаловать, <b>{greeting_name}</b>.\n"
+    welcome_text += f"🆔 Ваш ID: <code>{user_id}</code>\n\n"
     welcome_text += "Выберите действие из меню ниже или используйте текстовые команды.\n\n"
     welcome_text += "<b>⚠️ Важно:</b> Все действия логируются для безопасности."
 
@@ -508,235 +684,19 @@ async def admin_users(message: types.Message):
 async def admin_users_list(message: types.Message):
     """Show list of active users"""
     try:
-        from database import get_connection
-
         admin_user_id = _get_request_user_id(message)
-
-        with get_connection() as conn:
-            cursor = conn.cursor()
-
-
-            cursor.execute("PRAGMA table_info(users)")
-            columns = cursor.fetchall()
-            column_names = [col[1] for col in columns]
-            cursor.execute("SELECT COUNT(*) FROM users")
-            total_users = int(cursor.fetchone()[0])
-
-            created_expr = "u.created_at" if "created_at" in column_names else "0"
-            profile_exprs = _profile_select_exprs(column_names)
-            order_expr = "u.created_at DESC" if "created_at" in column_names else "u.user_id DESC"
-            query = f"""
-                SELECT
-                    u.user_id,
-                    u.language,
-                    {created_expr} AS created_at,
-                    {profile_exprs},
-                    COUNT(s.id) as subs_count
-                FROM users u
-                LEFT JOIN subscriptions s ON u.user_id = s.user_id
-                GROUP BY u.user_id
-                ORDER BY {order_expr}
-                LIMIT 50
-            """
-
-            cursor.execute(query)
-            users = cursor.fetchall()
-
-        if not users:
-            await message.answer(t(message.from_user.id, "admin_users_none"))
-            return
-
-
-        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[])
-        users_text = f"👥 <b>{t(admin_user_id, 'admin_users_title')}</b>\n\n"
-        users_text += f"📊 <b>Всего в базе:</b> {total_users}\n"
-        users_text += f"📋 <b>Показано:</b> {len(users)} последних пользователей\n\n"
-
-        for user_data in users:
-            (
-                user_id,
-                language,
-                created_at,
-                username,
-                first_name,
-                last_name,
-                _telegram_language_code,
-                _is_premium,
-                last_seen_at,
-                subs_count,
-            ) = user_data
-            display_name = _user_display_html(user_id, username, first_name, last_name)
-            created_str = datetime.fromtimestamp(created_at).strftime('%d.%m.%Y %H:%M') if created_at else "-"
-            last_seen_str = datetime.fromtimestamp(last_seen_at).strftime('%d.%m.%Y %H:%M') if last_seen_at else "-"
-            user_line = (
-                f"👤 <b>{display_name}</b> | <code>{user_id}</code>\n"
-                f"   🌐 {language.upper()} | 📦 {subs_count} | 📅 {created_str} | 🕒 {last_seen_str}"
-            )
-
-            users_text += user_line + "\n"
-
-
-            keyboard.inline_keyboard.append([
-                InlineKeyboardButton(
-                    text=f"📋 {_user_display_name(user_id, username, first_name, last_name)[:40]}",
-                    callback_data=f"user_details:{user_id}"
-                )
-            ])
-
-        users_text += f"\n💡 {t(admin_user_id, 'admin_users_interactive_hint')}"
-
+        users_text, keyboard = _build_admin_users_page(admin_user_id, offset=0)
         await message.answer(users_text, reply_markup=keyboard, parse_mode="HTML")
 
     except Exception as e:
         logger.exception("Error in admin_users_list: %s", e)
         await message.answer(f"❌ {t(message.from_user.id, 'error_generic')}: {e}")
 
-async def admin_users_list_interactive(message: types.Message):
+async def admin_users_list_interactive(message: types.Message, offset: int = 0):
     """Callback version of admin_users_list for refresh functionality"""
     try:
-        from database import get_connection
-
         admin_user_id = _get_request_user_id(message)
-
-        with get_connection() as conn:
-            cursor = conn.cursor()
-
-
-            cursor.execute("PRAGMA table_info(users)")
-            columns = cursor.fetchall()
-            column_names = [col[1] for col in columns]
-            cursor.execute("SELECT COUNT(*) FROM users")
-            total_users = int(cursor.fetchone()[0])
-
-            created_expr = "u.created_at" if "created_at" in column_names else "0"
-            profile_exprs = _profile_select_exprs(column_names)
-            order_expr = "u.created_at DESC" if "created_at" in column_names else "u.user_id DESC"
-            query = f"""
-                SELECT
-                    u.user_id,
-                    u.language,
-                    {created_expr} AS created_at,
-                    {profile_exprs},
-                    COUNT(s.id) as subs_count
-                FROM users u
-                LEFT JOIN subscriptions s ON u.user_id = s.user_id
-                GROUP BY u.user_id
-                ORDER BY {order_expr}
-                LIMIT 50
-            """
-
-            cursor.execute(query)
-            users = cursor.fetchall()
-
-        if not users:
-            await message.edit_text(t(admin_user_id, "admin_users_none"))
-            return
-
-
-        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-
-
-        users_text = "👥 <b>Управление пользователями</b>\n\n"
-        users_text += f"📊 <b>Всего в базе:</b> {total_users}\n"
-        users_text += f"📋 <b>Загружено:</b> {len(users)} последних пользователей\n"
-        users_text += "🔎 <b>Ниже:</b> короткий срез активных и неактивных\n\n"
-
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[])
-
-
-        active_users = [u for u in users if u[9] > 0]
-        inactive_users = [u for u in users if u[9] == 0]
-
-        def _safe_user_button(user_id_raw, subs_count, username=None, first_name=None, last_name=None, inactive: bool = False):
-            try:
-                user_id_int = int(user_id_raw)
-                if user_id_int <= 0:
-                    return None
-            except Exception:
-                return None
-            display_name = _user_display_name(user_id_int, username, first_name, last_name)
-            if inactive:
-                text = f"👤 {display_name} (неактивен)"
-            else:
-                text = f"👤 {display_name} ({subs_count} подписок)"
-                if subs_count > 5:
-                    text += " ⭐"
-
-            if len(text) > 64:
-                text = text[:61] + "..."
-            cb = f"user_details:{user_id_int}"
-            if len(cb) > 64:
-                return None
-            return InlineKeyboardButton(text=text, callback_data=cb)
-
-        if active_users:
-            users_text += "🟢 <b>Активные пользователи:</b>\n"
-            for user_data in active_users[:15]:
-                (
-                    user_id,
-                    language,
-                    created_at,
-                    username,
-                    first_name,
-                    last_name,
-                    _telegram_language_code,
-                    _is_premium,
-                    last_seen_at,
-                    subs_count,
-                ) = user_data
-                created_str = datetime.fromtimestamp(created_at).strftime('%d.%m.%Y') if created_at else "-"
-                last_seen_str = datetime.fromtimestamp(last_seen_at).strftime('%d.%m.%Y') if last_seen_at else "-"
-                users_text += (
-                    f"  👤 <b>{_user_display_html(user_id, username, first_name, last_name)}</b> "
-                    f"| <code>{user_id}</code> | 🌐 {language.upper()} | 📦 {subs_count} "
-                    f"| 📅 {created_str} | 🕒 {last_seen_str}\n"
-                )
-
-
-                button = _safe_user_button(user_id, subs_count, username, first_name, last_name, inactive=False)
-                if button:
-                    keyboard.inline_keyboard.append([button])
-
-        if inactive_users and len(keyboard.inline_keyboard) < 10:
-            users_text += "\n🟡 <b>Неактивные пользователи:</b>\n"
-            for user_data in inactive_users[:5]:
-                (
-                    user_id,
-                    language,
-                    created_at,
-                    username,
-                    first_name,
-                    last_name,
-                    _telegram_language_code,
-                    _is_premium,
-                    last_seen_at,
-                    subs_count,
-                ) = user_data
-                created_str = datetime.fromtimestamp(created_at).strftime('%d.%m.%Y') if created_at else "-"
-                last_seen_str = datetime.fromtimestamp(last_seen_at).strftime('%d.%m.%Y') if last_seen_at else "-"
-                users_text += (
-                    f"  👤 <b>{_user_display_html(user_id, username, first_name, last_name)}</b> "
-                    f"| <code>{user_id}</code> | 🌐 {language.upper()} | 📅 {created_str} | 🕒 {last_seen_str}\n"
-                )
-
-                button = _safe_user_button(user_id, subs_count, username, first_name, last_name, inactive=True)
-                if button:
-                    keyboard.inline_keyboard.append([button])
-
-
-        control_rows = [
-            [
-                InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_users_refresh"),
-                InlineKeyboardButton(text="🚫 Проверить блокировки", callback_data="admin_check_blocked")
-            ],
-            [
-                InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats_refresh"),
-                InlineKeyboardButton(text="🏠 Главное меню", callback_data="admin_main_menu")
-            ]
-        ]
-        keyboard.inline_keyboard.extend(control_rows)
+        users_text, keyboard = _build_admin_users_page(admin_user_id, offset=offset)
 
         try:
             await message.edit_text(users_text, reply_markup=keyboard, parse_mode="HTML")
@@ -747,7 +707,12 @@ async def admin_users_list_interactive(message: types.Message):
 
 
             if "BUTTON_USER_INVALID" in str(e):
-                from aiogram.types import InlineKeyboardMarkup
+                control_rows = [
+                    [
+                        InlineKeyboardButton(text="🔄 Обновить", callback_data=f"admin_users_refresh:{offset}"),
+                        InlineKeyboardButton(text="🏠 Главное меню", callback_data="admin_main_menu"),
+                    ]
+                ]
                 fallback_text = users_text + "\n\n💡 Для деталей: /admin users <id>"
                 fallback_kb = InlineKeyboardMarkup(inline_keyboard=control_rows)
                 try:
@@ -1426,22 +1391,55 @@ async def submit_user_report(user_id: int, report_text: str, message: types.Mess
 """
 
 
+        if not ADMIN_IDS:
+            raise ReportDeliveryError("No admin recipients configured")
+
+        try:
+            runtime_bot = _get_runtime_bot()
+        except Exception as exc:
+            raise ReportDeliveryError("Bot runtime is unavailable") from exc
+
+        sent_count = 0
+        failed_count = 0
         for admin_id in ADMIN_IDS:
             try:
-                await _get_runtime_bot().send_message(admin_id, admin_report, parse_mode="HTML")
+                await runtime_bot.send_message(admin_id, admin_report, parse_mode="HTML")
+                sent_count += 1
+            except (TelegramForbiddenError, TelegramBadRequest) as e:
+                failed_count += 1
+                logger.warning("Failed to send report to admin %s: %s", admin_id, e)
             except Exception as e:
-                logger.warning(f"Failed to send report to admin {admin_id}: {e}")
+                failed_count += 1
+                logger.warning("Failed to send report to admin %s: %s", admin_id, e)
 
-        action_event("USER", "sent report to admins", user=user_id, admins=len(ADMIN_IDS), chars=len(report_text or ""))
+        if sent_count == 0:
+            action_event(
+                "USER",
+                "report delivery failed",
+                user=user_id,
+                admins=len(ADMIN_IDS),
+                chars=len(report_text or ""),
+            )
+            raise ReportDeliveryError("Report delivery failed for all admins")
+
+        action_event(
+            "USER",
+            "sent report to admins",
+            user=user_id,
+            admins=sent_count,
+            failed_admins=failed_count,
+            chars=len(report_text or ""),
+        )
 
         if message:
-            await message.answer(t(user_id, "report_sent"))
+            await message.answer(t(user_id, "report_sent"), parse_mode="HTML")
 
     except Exception as e:
         logger.exception("Error submitting user report: %s", e)
         if message and hasattr(message, 'answer'):
             try:
-                await message.answer(t(user_id, "error_generic"))
+                error_key = "report_delivery_failed" if isinstance(e, ReportDeliveryError) else "error_generic"
+                await message.answer(t(user_id, error_key))
             except Exception:
                 pass
 

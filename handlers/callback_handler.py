@@ -19,6 +19,7 @@ from database import (
 from keyboards import subscription_controls_kb_for_user, get_main_kb
 from logging_utils import action_event, actor_label
 from localization import update_language_cache
+from user_texts import format_start_text
 import sqlite3
 import logging
 
@@ -57,7 +58,7 @@ class CallbackHandler(BaseHandler):
                 try:
                     await self.bot.send_message(
                         user_id,
-                        self.t(user_id, "start_text"),
+                        format_start_text(user_id, cq.from_user, self.t),
                         reply_markup=get_main_kb(user_id),
                         parse_mode="Markdown",
                     )
@@ -74,35 +75,41 @@ class CallbackHandler(BaseHandler):
                 try:
                     parts = data.split(":")
 
-                    if len(parts) >= 2 and parts[1] == "all":
-                        from scraper import get_trending_all_top3_async, get_trending_sample
+                    if len(parts) >= 2 and parts[1] == "menu":
                         import bot as _bot
-                        status_message = await self.send_status_message(
-                            user_id,
-                            self.t(user_id, "status_loading_trends"),
+                        await cq.message.edit_text(
+                            self.t(user_id, "trending_header"),
+                            reply_markup=_bot.trending_menu_kb(user_id),
                         )
+                        return
+
+                    if len(parts) >= 2 and parts[1] == "all":
+                        from scraper import get_trending_all_top3_async
+                        import bot as _bot
+                        try:
+                            await cq.message.edit_text(self.t(user_id, "status_loading_trends"), reply_markup=None)
+                            status_message = cq.message
+                        except Exception:
+                            status_message = await self.send_status_message(
+                                user_id,
+                                self.t(user_id, "status_loading_trends"),
+                            )
                         items = await get_trending_all_top3_async()
                         if not items:
-
-                            sample = get_trending_sample()
-                            if sample:
-                                await self.replace_status_message(
-                                    status_message,
-                                    self.t(user_id, "trending_header") + "\n\n" + "\n\n".join(sample),
-                                    fallback_target=user_id,
-                                )
-                            else:
-                                await self.replace_status_message(
-                                    status_message,
-                                    self.t(user_id, "trending_unavailable"),
-                                    fallback_target=user_id,
-                                )
+                            await self.replace_status_message(
+                                status_message,
+                                self.t(user_id, "trending_unavailable"),
+                                fallback_target=user_id,
+                                reply_markup=_bot.trending_menu_kb(user_id),
+                            )
                             return
                         header = self.t(user_id, "trending_header")
                         await self.replace_status_message(
                             status_message,
                             header + "\n\n" + _bot.format_trending_items(user_id, items),
                             fallback_target=user_id,
+                            reply_markup=_bot.trending_results_kb(user_id, items),
+                            parse_mode="HTML",
                         )
                         return
 
@@ -123,32 +130,35 @@ class CallbackHandler(BaseHandler):
 
                     if len(parts) >= 3 and parts[1] == "cat":
                         cat_key = parts[2]
-                        from scraper import get_trending_by_category_top3_async, get_trending_sample
+                        from scraper import get_trending_by_category_top3_async
                         import bot as _bot
-                        status_message = await self.send_status_message(
-                            user_id,
-                            self.t(user_id, "status_loading_trends"),
-                        )
+                        try:
+                            await cq.message.edit_text(self.t(user_id, "status_loading_trends"), reply_markup=None)
+                            status_message = cq.message
+                        except Exception:
+                            status_message = await self.send_status_message(
+                                user_id,
+                                self.t(user_id, "status_loading_trends"),
+                            )
                         items = await get_trending_by_category_top3_async(cat_key)
                         if not items:
-                            sample = get_trending_sample()
-                            if sample:
-                                await self.replace_status_message(
-                                    status_message,
-                                    self.t(user_id, "trending_header") + "\n\n" + "\n\n".join(sample),
-                                    fallback_target=user_id,
-                                )
-                                return
                             await self.replace_status_message(
                                 status_message,
                                 self.t(user_id, "trending_no_results"),
                                 fallback_target=user_id,
+                                reply_markup=_bot.trending_categories_kb(user_id),
                             )
                             return
                         await self.replace_status_message(
                             status_message,
                             self.t(user_id, "trending_header") + "\n\n" + _bot.format_trending_items(user_id, items),
                             fallback_target=user_id,
+                            reply_markup=_bot.trending_results_kb(
+                                user_id,
+                                items,
+                                refresh_callback=f"trend:cat:{cat_key}",
+                            ),
+                            parse_mode="HTML",
                         )
                         return
 
@@ -838,11 +848,28 @@ class CallbackHandler(BaseHandler):
                 await admin_cleanup_cancel(cq.message, user_id, token)
                 return True
 
-            if data == "admin_users_refresh":
+            if data.startswith("admin_users_refresh"):
                 await cq.answer(self.t(user_id, "loading"))
                 from handlers.admin_handler import admin_users_list_interactive
 
-                await admin_users_list_interactive(cq.message)
+                offset = 0
+                if ":" in data:
+                    try:
+                        offset = int(data.split(":", 1)[1])
+                    except ValueError:
+                        offset = 0
+                await admin_users_list_interactive(cq.message, offset=offset)
+                return True
+
+            if data.startswith("admin_users_page:"):
+                await cq.answer(self.t(user_id, "loading"))
+                from handlers.admin_handler import admin_users_list_interactive
+
+                try:
+                    offset = int(data.split(":", 1)[1])
+                except ValueError:
+                    offset = 0
+                await admin_users_list_interactive(cq.message, offset=offset)
                 return True
 
             if data == "admin_main_menu":
@@ -863,7 +890,7 @@ class CallbackHandler(BaseHandler):
                 await cq.answer(self.t(user_id, "loading"))
                 from handlers.admin_handler import admin_users_list_interactive
 
-                await admin_users_list_interactive(cq.message)
+                await admin_users_list_interactive(cq.message, offset=0)
                 return True
 
             if data == "admin_check_blocked":

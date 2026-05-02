@@ -129,5 +129,56 @@ async def test_admin_users_refresh_shows_total_and_displayed_count(temp_db_path)
 
     text = msg.edit_text.await_args.args[0]
     assert "Всего в базе:</b> 2" in text
-    assert "Загружено:</b> 2 последних пользователей" in text
-    assert "короткий срез активных и неактивных" in text
+    assert "Страница:</b> 1/1" in text
+    assert "Показано:</b> 1-2 из 2" in text
+
+
+@pytest.mark.asyncio
+async def test_admin_users_refresh_paginates_all_users(temp_db_path):
+    from handlers.admin_handler import admin_users_list_interactive
+
+    for index in range(12):
+        database.save_user_profile(
+            SimpleNamespace(
+                id=10000 + index,
+                username=f"user{index}",
+                first_name=f"User{index}",
+                last_name=None,
+            )
+        )
+
+    first_page = MagicMock()
+    first_page.chat.id = 975282591
+    first_page.from_user.id = 975282591
+    first_page.edit_text = AsyncMock()
+
+    await admin_users_list_interactive(first_page, offset=0)
+
+    first_text = first_page.edit_text.await_args.args[0]
+    first_markup = first_page.edit_text.await_args.kwargs["reply_markup"]
+    first_callbacks = [
+        button.callback_data
+        for row in first_markup.inline_keyboard
+        for button in row
+    ]
+    assert "Страница:</b> 1/2" in first_text
+    assert "Показано:</b> 1-10 из 12" in first_text
+    assert "admin_users_page:10" in first_callbacks
+
+    second_page = MagicMock()
+    second_page.chat.id = 975282591
+    second_page.from_user.id = 975282591
+    second_page.edit_text = AsyncMock()
+
+    await admin_users_list_interactive(second_page, offset=10)
+
+    second_text = second_page.edit_text.await_args.args[0]
+    second_markup = second_page.edit_text.await_args.kwargs["reply_markup"]
+    second_callbacks = [
+        button.callback_data
+        for row in second_markup.inline_keyboard
+        for button in row
+    ]
+    assert "Страница:</b> 2/2" in second_text
+    assert "Показано:</b> 11-12 из 12" in second_text
+    assert "admin_users_page:0" in second_callbacks

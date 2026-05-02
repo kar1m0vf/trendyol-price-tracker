@@ -546,24 +546,62 @@ def trending_categories_kb(user_id: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text=t(user_id, "trending_cat_shoes"), callback_data="trend:cat:shoes"),
             InlineKeyboardButton(text=t(user_id, "trending_cat_home"), callback_data="trend:cat:home"),
         ],
+        [
+            InlineKeyboardButton(text=t(user_id, "trending_btn_back"), callback_data="trend:menu"),
+        ],
     ])
 
 def format_trending_items(user_id: int, items: List[Tuple[str, Optional[float], str]]) -> str:
     lines = []
-    for title, price, url in items[:3]:
-        title = (title or "").strip()
-        if len(title) > 120:
-            title = title[:117] + "..."
-        price_str = f"{price} TL" if price is not None else t(user_id, "unknown_price")
-        lines.append(f"• {title}\n{price_str}\n{url}")
+    for index, (title, price, url) in enumerate(items[:3], start=1):
+        safe_title = html.escape(_short_title(title, url, limit=96), quote=False)
+        price_str = html.escape(_format_price_for_user(user_id, price), quote=False)
+        lines.append(
+            f"{index}. <b>{safe_title}</b>\n"
+            f"   {t(user_id, 'trending_price_label')}: {price_str}"
+        )
     return "\n\n".join(lines)
+
+def trending_results_kb(
+    user_id: int,
+    items: List[Tuple[str, Optional[float], str]],
+    *,
+    refresh_callback: str = "trend:all",
+) -> InlineKeyboardMarkup:
+    rows = []
+    for index, (title, _price, url) in enumerate(items[:3], start=1):
+        safe_url = (url or "").strip()
+        if not safe_url.startswith("http"):
+            continue
+        label = _short_title(title, safe_url, limit=44)
+        rows.append([
+            InlineKeyboardButton(text=f"{index}. {label}", url=safe_url)
+        ])
+
+    rows.extend([
+        [
+            InlineKeyboardButton(text=t(user_id, "trending_btn_refresh"), callback_data=refresh_callback),
+            InlineKeyboardButton(text=t(user_id, "trending_btn_search"), callback_data="trend:search"),
+        ],
+        [
+            InlineKeyboardButton(text=t(user_id, "trending_btn_category"), callback_data="trend:catmenu"),
+        ],
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
 
 async def send_trending_list(user_id: int, items: List[Tuple[str, Optional[float], str]]):
     if not items:
         await bot.send_message(user_id, t(user_id, "trending_unavailable"))
         return
     header = t(user_id, "trending_header")
-    await bot.send_message(user_id, header + "\n\n" + format_trending_items(user_id, items))
+    await bot.send_message(
+        user_id,
+        header + "\n\n" + format_trending_items(user_id, items),
+        reply_markup=trending_results_kb(user_id, items),
+        parse_mode="HTML",
+    )
+
 
 def get_main_kb(user_id: int) -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardMarkup(
@@ -1300,7 +1338,7 @@ async def cmd_report(message: types.Message):
     if len(parts) < 2:
 
         report_state[user_id] = {"step": "waiting_text"}
-        await message.answer(t(user_id, "report_prompt"))
+        await message.answer(t(user_id, "report_prompt"), parse_mode="HTML")
         return
 
 
@@ -2430,6 +2468,8 @@ async def trending_search_text(message: types.Message):
             status_message,
             t(user_id, "trending_header") + "\n\n" + format_trending_items(user_id, items),
             fallback_target=message,
+            reply_markup=trending_results_kb(user_id, items),
+            parse_mode="HTML",
         )
     except Exception as e:
         logger.exception("trending search error: %s", e)

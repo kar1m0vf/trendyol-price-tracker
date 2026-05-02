@@ -27,6 +27,9 @@ ASYNC_TRENDYOL_LIMITER = AsyncRateLimiter(max_requests=30, time_window=60)
                                                                    
 SEARCH_CACHE = {}
 CACHE_EXPIRY = 3600         
+TRENDING_CACHE_TTL = 600
+TRENDING_STALE_TTL = 6 * 3600
+TRENDING_CACHE: Dict[str, Tuple[List[Tuple[str, Optional[float], str]], float]] = {}
 
 
 def _get_cache_key(query: str, source: str) -> str:
@@ -49,11 +52,36 @@ def _get_cached_result(cache_key: str):
 def _set_cached_result(cache_key: str, data):
     """Сохраняет результат в кэш."""
     SEARCH_CACHE[cache_key] = (data, time.time())
-                              
+
     if len(SEARCH_CACHE) > 100:
-                                      
+
         oldest_key = min(SEARCH_CACHE.keys(), key=lambda k: SEARCH_CACHE[k][1])
         del SEARCH_CACHE[oldest_key]
+
+
+def _get_trending_cached_result(cache_key: str, *, allow_stale: bool = False) -> Optional[List[Tuple[str, Optional[float], str]]]:
+    cached = TRENDING_CACHE.get(cache_key)
+    if not cached:
+        return None
+
+    cached_data, timestamp = cached
+    age = time.time() - timestamp
+    max_age = TRENDING_STALE_TTL if allow_stale else TRENDING_CACHE_TTL
+    if age <= max_age:
+        return list(cached_data)
+
+    if age > TRENDING_STALE_TTL:
+        TRENDING_CACHE.pop(cache_key, None)
+    return None
+
+
+def _set_trending_cached_result(cache_key: str, data: List[Tuple[str, Optional[float], str]]) -> None:
+    if not data:
+        return
+    TRENDING_CACHE[cache_key] = (list(data), time.time())
+    if len(TRENDING_CACHE) > 50:
+        oldest_key = min(TRENDING_CACHE.keys(), key=lambda key: TRENDING_CACHE[key][1])
+        del TRENDING_CACHE[oldest_key]
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -1977,6 +2005,29 @@ def _fetch_first_working_listing(urls: List[str], limit: int = 3) -> List[Tuple[
     return []
 
 
+def _get_trending_listing(cache_key: str, urls: List[str], limit: int = 3) -> List[Tuple[str, Optional[float], str]]:
+    cached = _get_trending_cached_result(cache_key)
+    if cached is not None:
+        return cached[:limit]
+
+    result = _fetch_first_working_listing(urls, limit=limit)
+    if result:
+        _set_trending_cached_result(cache_key, result)
+        return result[:limit]
+
+    stale = _get_trending_cached_result(cache_key, allow_stale=True)
+    if stale is not None:
+        logger.info("Using stale trending cache for %s", cache_key)
+        return stale[:limit]
+
+    return []
+
+
+def _trendyol_search_item(title: str, query: str) -> Tuple[str, Optional[float], str]:
+    q = quote_plus((query or "").strip())
+    return (title, None, f"https://www.trendyol.com/sr?q={q}")
+
+
 def get_trending_all_top3() -> List[Tuple[str, Optional[float], str]]:
     """
     Пытаемся получить топ-3 по всему сайту (самые продаваемые).
@@ -1995,15 +2046,15 @@ def get_trending_all_top3() -> List[Tuple[str, Optional[float], str]]:
         "https://www.trendyol.com/sr?q=telefon",
     ]
 
-    result = _fetch_first_working_listing(candidates, limit=3)
+    result = _get_trending_listing("all", candidates, limit=3)
 
                                                                             
     if not result:
-        logger.warning("Trendyol API blocked, returning demo data")
+        logger.warning("Trendyol listings unavailable, returning search shortcuts")
         return [
-            ("iPhone 15 Pro Max", 45000.0, "https://www.trendyol.com/apple/iphone-15-pro-max-p-123456"),
-            ("Samsung Galaxy S24 Ultra", 35000.0, "https://www.trendyol.com/samsung/galaxy-s24-ultra-p-789012"),
-            ("Nike Air Max", 2500.0, "https://www.trendyol.com/nike/air-max-p-345678"),
+            _trendyol_search_item("Trendyol search: iPhone", "iphone"),
+            _trendyol_search_item("Trendyol search: Samsung", "samsung"),
+            _trendyol_search_item("Trendyol search: shoes", "ayakkabi"),
         ]
 
     return result
@@ -2025,30 +2076,12 @@ def get_trending_by_search_top3(query: str) -> List[Tuple[str, Optional[float], 
         f"https://www.trendyol.com/sr?q={q}&sort=mostSold",
     ]
 
-    result = _fetch_first_working_listing(candidates, limit=3)
+    result = _get_trending_listing(f"search:{q}", candidates, limit=3)
 
                                                                           
     if not result:
-        logger.warning(f"Trendyol search blocked for query '{query}', returning demo data")
-        demo_products = {
-            "iphone": [("iPhone 15 Pro", 45000.0, "https://www.trendyol.com/apple/iphone-15-pro-p-123456")],
-            "samsung": [("Samsung Galaxy S24", 35000.0, "https://www.trendyol.com/samsung/galaxy-s24-p-789012")],
-            "nike": [("Nike Air Max 90", 2500.0, "https://www.trendyol.com/nike/air-max-90-p-345678")],
-            "adidas": [("Adidas Ultraboost", 3200.0, "https://www.trendyol.com/adidas/ultraboost-p-901234")],
-        }
-
-                                    
-        query_lower = query.lower()
-        for key, products in demo_products.items():
-            if key in query_lower:
-                return products[:3]
-
-                                                                         
-        return [
-            (f"Популярный товар по запросу '{query}'", None, f"https://www.trendyol.com/search?q={q}"),
-            ("iPhone 15", 45000.0, "https://www.trendyol.com/apple/iphone-15-p-123456"),
-            ("Samsung Galaxy", 35000.0, "https://www.trendyol.com/samsung/galaxy-p-789012"),
-        ]
+        logger.warning("Trendyol search unavailable for query %r, returning search shortcut", query)
+        return [_trendyol_search_item(f"Trendyol search: {query.strip()}", query)]
 
     return result
 
@@ -2056,7 +2089,7 @@ def get_trending_by_search_top3(query: str) -> List[Tuple[str, Optional[float], 
 CATEGORY_QUERY_MAP = {
     "electronics": "elektronik",
     "clothing": "giyim",
-    "shoes": "ayakkabı",
+    "shoes": "ayakkabi",
     "home": "ev",
 }
 
@@ -2072,40 +2105,12 @@ def get_trending_by_category_top3(category_key: str) -> List[Tuple[str, Optional
 
                                     
     candidates = [f"https://www.trendyol.com/sr?q={quote_plus(q)}"]
-    result = _fetch_first_working_listing(candidates, limit=3)
+    result = _get_trending_listing(f"category:{key}:{quote_plus(q)}", candidates, limit=3)
 
                                                            
     if not result:
-        logger.warning(f"Trendyol category search blocked for '{key}', returning demo data")
-
-        category_demo = {
-            "electronics": [
-                ("iPhone 15 Pro", 45000.0, "https://www.trendyol.com/apple/iphone-15-pro-p-123456"),
-                ("MacBook Air", 35000.0, "https://www.trendyol.com/apple/macbook-air-p-789012"),
-                ("Samsung TV", 15000.0, "https://www.trendyol.com/samsung/tv-p-345678"),
-            ],
-            "clothing": [
-                ("Nike T-Shirt", 250.0, "https://www.trendyol.com/nike/t-shirt-p-123456"),
-                ("Adidas Jacket", 450.0, "https://www.trendyol.com/adidas/jacket-p-789012"),
-                ("Levi's Jeans", 350.0, "https://www.trendyol.com/levis/jeans-p-345678"),
-            ],
-            "shoes": [
-                ("Nike Air Max", 1200.0, "https://www.trendyol.com/nike/air-max-p-123456"),
-                ("Adidas Ultraboost", 1400.0, "https://www.trendyol.com/adidas/ultraboost-p-789012"),
-                ("Puma Sneakers", 800.0, "https://www.trendyol.com/puma/sneakers-p-345678"),
-            ],
-            "home": [
-                ("Ikea Chair", 450.0, "https://www.trendyol.com/ikea/chair-p-123456"),
-                ("Samsung Fridge", 8500.0, "https://www.trendyol.com/samsung/fridge-p-789012"),
-                ("Philips Lamp", 150.0, "https://www.trendyol.com/philips/lamp-p-345678"),
-            ],
-        }
-
-        return category_demo.get(key, [
-            (f"Популярный товар из категории '{key}'", None, f"https://www.trendyol.com/sr?q={quote_plus(q)}"),
-            ("Пример товара 1", 1000.0, "https://www.trendyol.com/example-1-p-123456"),
-            ("Пример товара 2", 2000.0, "https://www.trendyol.com/example-2-p-789012"),
-        ])
+        logger.warning("Trendyol category search unavailable for %r, returning search shortcut", key)
+        return [_trendyol_search_item(f"Trendyol category: {key or q}", q)]
 
     return result
 

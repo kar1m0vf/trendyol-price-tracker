@@ -6,6 +6,17 @@ import pytest
 ADMIN_ID = 975282591
 
 
+def test_get_runtime_bot_uses_running_main_module(monkeypatch):
+    import sys
+
+    from handlers import admin_handler
+
+    runtime_bot = object()
+    monkeypatch.setattr(sys.modules["__main__"], "bot", runtime_bot, raising=False)
+
+    assert admin_handler._get_runtime_bot() is runtime_bot
+
+
 def _message(text: str):
     msg = MagicMock()
     msg.from_user.id = ADMIN_ID
@@ -138,3 +149,117 @@ async def test_admin_cleanup_confirm_creates_backup_then_deletes():
     create_backup.assert_awaited_once()
     execute_cleanup.assert_called_once()
     assert token not in admin_handler._PENDING_CLEANUPS
+
+
+@pytest.mark.asyncio
+async def test_admin_users_page_callback_passes_offset():
+    from handlers.callback_handler import CallbackHandler
+
+    cq = MagicMock()
+    cq.answer = AsyncMock()
+    cq.message = MagicMock()
+    handler = CallbackHandler()
+
+    with patch("handlers.admin_handler.admin_users_list_interactive", new_callable=AsyncMock) as users_page:
+        handled = await handler._handle_admin_callback(cq, "admin_users_page:20", ADMIN_ID)
+
+    assert handled is True
+    users_page.assert_awaited_once_with(cq.message, offset=20)
+
+
+@pytest.mark.asyncio
+async def test_admin_main_menu_greets_admin_by_name():
+    from handlers import admin_handler
+
+    msg = _message("/admin")
+    msg.from_user.username = "karim"
+    msg.from_user.first_name = "Karim"
+    msg.from_user.last_name = "Admin"
+
+    await admin_handler.admin_main_menu(msg)
+
+    text = msg.answer.await_args.args[0]
+    assert "Karim Admin (@karim)" in text
+    assert f"<code>{ADMIN_ID}</code>" in text
+
+
+@pytest.mark.asyncio
+async def test_user_report_confirmation_uses_html_parse_mode():
+    from handlers import admin_handler
+
+    class FakeCursor:
+        def execute(self, *_args, **_kwargs):
+            return None
+
+        def fetchall(self):
+            return []
+
+        def fetchone(self):
+            return None
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    msg = _message("report text")
+    msg.from_user.id = 12345
+    msg.from_user.username = "user"
+    msg.from_user.first_name = "User"
+    msg.from_user.last_name = None
+    runtime_bot = MagicMock()
+    runtime_bot.send_message = AsyncMock()
+
+    with patch("database.get_connection", return_value=FakeConnection()):
+        with patch.object(admin_handler, "get_user_subscriptions", return_value=[]):
+            with patch.object(admin_handler, "_get_runtime_bot", return_value=runtime_bot):
+                await admin_handler.submit_user_report(12345, "Something is wrong", msg)
+
+    runtime_bot.send_message.assert_awaited_once()
+    assert runtime_bot.send_message.await_args.kwargs["parse_mode"] == "HTML"
+    msg.answer.assert_awaited()
+    assert msg.answer.await_args.kwargs["parse_mode"] == "HTML"
+
+
+@pytest.mark.asyncio
+async def test_user_report_failure_does_not_confirm_sent():
+    from handlers import admin_handler
+    from localization import t
+
+    class FakeCursor:
+        def execute(self, *_args, **_kwargs):
+            return None
+
+        def fetchall(self):
+            return []
+
+        def fetchone(self):
+            return None
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    msg = _message("report text")
+    msg.from_user.id = 12345
+    runtime_bot = MagicMock()
+    runtime_bot.send_message = AsyncMock(side_effect=RuntimeError("telegram unavailable"))
+
+    with patch("database.get_connection", return_value=FakeConnection()):
+        with patch.object(admin_handler, "get_user_subscriptions", return_value=[]):
+            with patch.object(admin_handler, "_get_runtime_bot", return_value=runtime_bot):
+                await admin_handler.submit_user_report(12345, "Something is wrong", msg)
+
+    runtime_bot.send_message.assert_awaited_once()
+    msg.answer.assert_awaited_once_with(t(12345, "report_delivery_failed"))

@@ -9,6 +9,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from database import add_user_if_not_exists, save_user_profile, set_user_language
 from logging_utils import action_event, actor_label
 from localization import LOCALES, update_language_cache
+from user_texts import format_start_text
 from .base import BaseHandler
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ class BasicHandler(BaseHandler):
         from keyboards import get_main_kb
 
         await message.answer(
-            self.t(user_id, "start_text"),
+            format_start_text(user_id, message.from_user, self.t),
             reply_markup=get_main_kb(user_id),
             parse_mode="Markdown",
         )
@@ -85,7 +86,7 @@ class BasicHandler(BaseHandler):
 
                     await self.bot.send_message(
                         user_id,
-                        self.t(user_id, "start_text"),
+                        format_start_text(user_id, message.from_user, self.t),
                         reply_markup=get_main_kb(user_id),
                         parse_mode="Markdown",
                     )
