@@ -6,7 +6,7 @@ from aiogram.filters import Command
 
 from .base import BaseHandler
 from database import (
-    get_user_subscriptions, get_subscription, remove_subscription,
+    get_user_subscriptions, remove_subscription,
     add_user_if_not_exists, add_subscription, update_last_price,
     update_subscription_meta
 )
@@ -28,16 +28,18 @@ class SubscriptionHandler(BaseHandler):
 
     async def handle_unsubscribe_command(self, message: types.Message):
         """Handle /unsubscribe command."""
+        from bot import resolve_user_subscription_ref
+
         parts = (message.text or "").split()
         if len(parts) < 2 or not parts[1].isdigit():
             await message.answer(self.t(message.from_user.id, "provide_subscription_id"))
             return
 
-        sid = int(parts[1])
-        sub = get_subscription(sid)
-        if not sub or sub[1] != message.from_user.id:
+        sub, _public_number = resolve_user_subscription_ref(message.from_user.id, parts[1])
+        if not sub:
             await message.answer(self.t(message.from_user.id, "no_subs"))
             return
+        sid = sub[0]
 
         try:
             remove_subscription(sid)

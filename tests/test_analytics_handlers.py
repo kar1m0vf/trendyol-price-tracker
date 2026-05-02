@@ -78,12 +78,12 @@ async def test_stats_command_with_valid_data():
 
     try:
                                  
-        with patch('handlers.analytics_handler.get_subscription') as mock_get_sub,\
+        with patch('bot.resolve_user_subscription_ref') as mock_resolve_ref,\
              patch('handlers.analytics_handler.get_price_stats') as mock_get_stats:
 
                          
             mock_sub = (1, 12345, "https://test.com", "hourly", 1000.0, "Test Product", None, None, None, None, None, None, None)
-            mock_get_sub.return_value = mock_sub
+            mock_resolve_ref.return_value = (mock_sub, 1)
             mock_get_stats.return_value = {
                 'count': 5,
                 'current': 950.0,
@@ -111,7 +111,7 @@ async def test_stats_command_with_valid_data():
             assert call_args is not None, "должен быть текст ответа"
 
             text = call_args[0][0]
-            assert "ID: 1" in text, "должен содержать ID подписки"
+            assert "№ 1" in text, "должен содержать номер подписки"
             assert "950.00 TL" in text, "должен содержать текущую цену"
             assert "900.00 TL" in text, "должен содержать минимальную цену"
             assert "1000.00 TL" in text, "должен содержать максимальную цену"
@@ -208,9 +208,9 @@ async def test_all_list_command_with_data():
             assert call_args is not None, "должен быть текст ответа"
 
             text = call_args[0][0]
-            assert "ID" in text, "должен содержать заголовок с ID"
-            assert "1" in text, "должен содержать ID первой подписки"
-            assert "2" in text, "должен содержать ID второй подписки"
+            assert "№" in text, "должен содержать заголовок с номером"
+            assert "  1 |" in text, "должен содержать номер первой подписки"
+            assert "  2 |" in text, "должен содержать номер второй подписки"
             assert "⏰" in text, "должен содержать режимы уведомлений"
 
         print("✅ /all_list с данными работает корректно")
@@ -228,13 +228,15 @@ async def test_top_drops_command_with_data():
 
     try:
                                  
-        with patch('handlers.analytics_handler.get_top_price_drops') as mock_get_drops:
+        with patch('handlers.analytics_handler.get_top_price_drops') as mock_get_drops,\
+             patch('bot.get_user_subscription_number') as mock_get_public_number:
                               
             mock_drops = [
                 (1, "https://test1.com", "Product 1", 950.0, 1000.0, -5.0),
                 (2, "https://test2.com", "Product 2", 1800.0, 2000.0, -10.0),
             ]
             mock_get_drops.return_value = mock_drops
+            mock_get_public_number.side_effect = lambda user_id, sub_id: sub_id
 
             from handlers import AnalyticsHandler
             handler = AnalyticsHandler()
@@ -254,7 +256,7 @@ async def test_top_drops_command_with_data():
             text = call_args[0][0]
             assert "🔴" in text or "🟢" in text, "должен содержать индикаторы изменения цены"
             assert "-5.0%" in text, "должен содержать процент падения"
-            assert "ID:1" in text, "должен содержать ID подписки"
+            assert "№ 1" in text, "должен содержать номер подписки"
 
         print("✅ /top_drops с данными работает корректно")
         return True

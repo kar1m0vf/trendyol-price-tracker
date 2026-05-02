@@ -40,6 +40,11 @@ class CallbackHandler(BaseHandler):
                 await cq.message.edit_text(self.t(user_id, "help_full"))
                 return
 
+            if data == "subs:list":
+                await cq.answer()
+                await self._show_subscriptions_overview(cq, user_id)
+                return
+
 
             if data.startswith("lang:"):
                 await cq.answer()
@@ -282,7 +287,7 @@ class CallbackHandler(BaseHandler):
 
 
             if data.startswith("edit_sub:"):
-                await cq.answer()
+                await cq.answer(self.t(user_id, "loading"))
                 try:
                     from bot import format_subscription_card
 
@@ -306,14 +311,23 @@ class CallbackHandler(BaseHandler):
                         + format_subscription_card(user_id, sub)
                     )
 
-
-                    await self.bot.send_message(
-                        user_id,
-                        edit_text,
-                        reply_markup=subscription_controls_kb_for_user(user_id, sub_id),
-                        parse_mode="HTML",
-                        disable_web_page_preview=True,
-                    )
+                    detail_keyboard = self._subscription_detail_keyboard(user_id, sub_id)
+                    try:
+                        await cq.message.edit_text(
+                            edit_text,
+                            reply_markup=detail_keyboard,
+                            parse_mode="HTML",
+                            disable_web_page_preview=True,
+                        )
+                    except Exception as e:
+                        logger.warning("Failed to edit subscription list message: %s", e)
+                        await self.bot.send_message(
+                            user_id,
+                            edit_text,
+                            reply_markup=detail_keyboard,
+                            parse_mode="HTML",
+                            disable_web_page_preview=True,
+                        )
 
                 except ValueError:
                     await cq.answer(self.t(user_id, "error_invalid_id"), show_alert=True)
@@ -401,6 +415,33 @@ class CallbackHandler(BaseHandler):
                     return ts_val
         return str(ts_val)
 
+    def _subscription_detail_keyboard(self, user_id: int, sub_id: int) -> InlineKeyboardMarkup:
+        controls = subscription_controls_kb_for_user(user_id, sub_id)
+        rows = [list(row) for row in controls.inline_keyboard]
+        rows.append([
+            InlineKeyboardButton(
+                text=f"⬅️ {self.t(user_id, 'btn_back')}",
+                callback_data="subs:list",
+            )
+        ])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    async def _show_subscriptions_overview(self, cq: CallbackQuery, user_id: int) -> None:
+        from bot import build_subscriptions_overview
+
+        subs = get_user_subscriptions(user_id)
+        if not subs:
+            await cq.message.edit_text(self.t(user_id, "no_subs"))
+            return
+
+        overview_text, overview_keyboard = build_subscriptions_overview(user_id, subs)
+        await cq.message.edit_text(
+            overview_text,
+            reply_markup=overview_keyboard,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+
     async def _handle_alert_edit(self, cq: CallbackQuery, user_id: int, sub_id: int):
         await cq.answer()
         try:
@@ -478,7 +519,7 @@ class CallbackHandler(BaseHandler):
             lines = [self.t(user_id, "alerts_header")]
             keyboard = []
 
-            for sub in subs:
+            for index, sub in enumerate(subs, start=1):
                 sub_id = sub[0]
                 url = sub[2]
                 title = self._short_title(sub[5], url, limit=80)
@@ -490,7 +531,7 @@ class CallbackHandler(BaseHandler):
                 )
                 keyboard.append([
                     InlineKeyboardButton(
-                        text=f"⚙️ {self.t(user_id, 'btn_edit')} ID {sub_id}",
+                        text=f"⚙️ {self.t(user_id, 'btn_edit')} № {index}",
                         callback_data=f"alert_edit:{sub_id}",
                     )
                 ])

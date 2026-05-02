@@ -1,17 +1,14 @@
 """
 Handlers for analytics and statistics commands.
 """
-from typing import List, Tuple
 from aiogram import types
 from aiogram.filters import Command
 
 from .base import BaseHandler
 from database import (
-    get_price_stats, get_user_subscriptions, get_subscription,
-    get_top_price_drops, export_user_subscriptions
+    get_price_stats, get_user_subscriptions,
+    get_top_price_drops
 )
-from datetime import datetime
-import os
 
 
 class AnalyticsHandler(BaseHandler):
@@ -19,23 +16,21 @@ class AnalyticsHandler(BaseHandler):
 
     async def handle_stats_command(self, message: types.Message):
         """Handle /stats command - show price statistics for a subscription."""
+        from bot import resolve_user_subscription_ref
+
         try:
             args = message.text.split()
             if len(args) < 2:
                 await message.answer(self.t(message.from_user.id, "cmd_stats_usage"))
                 return
 
-            sub_id = int(args[1])
-            sub = get_subscription(sub_id)
+            sub, public_number = resolve_user_subscription_ref(message.from_user.id, args[1])
 
             if not sub:
                 await message.answer(self.t(message.from_user.id, "no_subs_found_id"))
                 return
-
-                             
-            if sub[1] != message.from_user.id:
-                await message.answer(self.t(message.from_user.id, "error_not_your_sub"))
-                return
+            sub_id = sub[0]
+            label = f"№ {public_number}" if public_number is not None else f"ID {sub_id}"
 
             stats = get_price_stats(sub_id)
 
@@ -53,7 +48,7 @@ class AnalyticsHandler(BaseHandler):
             header = self.t(message.from_user.id, "stats_header")
             text = f"""{header}
 
-🏷️ ID: {sub_id}
+🏷️ {label}
 🔗 {sub[2][:50]}...
 
 💰 {self.t(message.from_user.id, 'current_price')}: {curr} TL
@@ -83,11 +78,11 @@ class AnalyticsHandler(BaseHandler):
 
                              
             header = self.t(message.from_user.id, "cmd_all_list_header") + "\n\n"
-            header += f"`ID  | {self.t(message.from_user.id, 'mode'):8} | {self.t(message.from_user.id, 'price'):6} | {self.t(message.from_user.id, 'status')}`\n"
+            header += f"`№   | {self.t(message.from_user.id, 'mode'):8} | {self.t(message.from_user.id, 'price'):6} | {self.t(message.from_user.id, 'status')}`\n"
             header += "`" + "—" * 38 + "`\n"
 
             rows = []
-            for sub in subs:
+            for index, sub in enumerate(subs, start=1):
                 try:
                     (sub_id, user_id, url, mode, last_price, product_title, product_image,
                      min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert) = sub
@@ -100,7 +95,7 @@ class AnalyticsHandler(BaseHandler):
                 price_str = f"{last_price:.0f}" if last_price else "—"
                 alert_status = "🎯" if price_alert else " "
 
-                row = f"`{sub_id:3d} | {mode_short} {mode:8s} | {price_str:6s} | {alert_status}`"
+                row = f"`{index:3d} | {mode_short} {mode:8s} | {price_str:6s} | {alert_status}`"
                 rows.append(row)
 
             text = header + "\n".join(rows)
@@ -123,13 +118,17 @@ class AnalyticsHandler(BaseHandler):
 
             text = self.t(message.from_user.id, "cmd_top_drops_header") + "\n\n"
 
+            from bot import get_user_subscription_number
+
             for i, (sub_id, url, title, curr_price, min_price, drop_pct) in enumerate(drops, 1):
                 title_short = (title or self.t(message.from_user.id, "product"))[:30]
                 icon = "🔴" if drop_pct < 0 else "🟢"
                 curr_str = f"{curr_price:.0f}" if curr_price else "—"
                 min_str = f"{min_price:.0f}" if min_price else "—"
 
-                text += f"{i}. {icon} *{drop_pct:+.1f}%* | ID:{sub_id}\n"
+                number = get_user_subscription_number(message.from_user.id, sub_id)
+                label = f"№ {number}" if number is not None else f"ID {sub_id}"
+                text += f"{i}. {icon} *{drop_pct:+.1f}%* | {label}\n"
                 text += f"   {title_short}\n"
                 text += f"   {self.t(message.from_user.id, 'current_price')}: {curr_str} TL | {self.t(message.from_user.id, 'min_price_label')}: {min_str} TL\n\n"
 

@@ -643,6 +643,49 @@ def _subscription_fields(sub: Tuple[Any, ...]) -> Dict[str, Any]:
     }
 
 
+def get_user_subscription_number(user_id: int, sub_id: int) -> Optional[int]:
+    """Return the 1-based number shown to this user for a subscription."""
+    try:
+        for index, sub in enumerate(get_user_subscriptions(user_id), start=1):
+            if sub and sub[0] == sub_id:
+                return index
+    except Exception:
+        logger.debug("Failed to resolve public subscription number", exc_info=True)
+    return None
+
+
+def _subscription_public_label(user_id: int, sub_id: int) -> str:
+    number = get_user_subscription_number(user_id, sub_id)
+    return f"№ {number}" if number is not None else f"ID {sub_id}"
+
+
+def resolve_user_subscription_ref(user_id: int, ref: str) -> Tuple[Optional[Tuple[Any, ...]], Optional[int]]:
+    """Resolve a user-facing subscription number, with DB ID fallback.
+
+    Users see numbers from their own list (1, 2, 3...). Callback data still uses
+    the internal DB ID, and old command usages with real IDs continue to work
+    when the number is outside the visible list range.
+    """
+    if not ref or not str(ref).isdigit():
+        return None, None
+
+    number = int(ref)
+    try:
+        subs = get_user_subscriptions(user_id)
+    except Exception:
+        logger.debug("Failed to load user subscriptions for ref resolution", exc_info=True)
+        subs = []
+
+    if 1 <= number <= len(subs):
+        return subs[number - 1], number
+
+    sub = get_subscription(number)
+    if sub and len(sub) >= 2 and sub[1] == user_id:
+        return sub, get_user_subscription_number(user_id, sub[0])
+
+    return None, None
+
+
 def _short_title(title: Optional[str], url: str, limit: int = 90) -> str:
     raw = (title or "").strip() or url
     raw = re.sub(r"\s+", " ", raw)
@@ -687,12 +730,13 @@ def format_subscription_added_card(
     else:
         hint_key = "subscription_added_hint_hourly" if mode == "hourly" else "subscription_added_hint_discount"
     hint = html.escape(t(user_id, hint_key))
+    public_label = html.escape(_subscription_public_label(user_id, sub_id))
 
     return "\n".join([
         f"<b>{html.escape(t(user_id, 'subscription_added_header'))}</b>",
         "",
         f"<b>{title_text}</b>",
-        f"<code>ID {sub_id}</code>",
+        f"<code>{public_label}</code>",
         f"💰 {html.escape(t(user_id, 'current_price'))}: <b>{price_text}</b>",
         f"🔔 {html.escape(t(user_id, 'mode'))}: {mode_text}",
         f"ℹ️ {hint}",
@@ -705,6 +749,7 @@ def format_subscription_card(user_id: int, sub: Tuple[Any, ...]) -> str:
     data = _subscription_fields(sub)
     sub_id = data["sub_id"]
     url = data["url"] or ""
+    public_label = html.escape(_subscription_public_label(user_id, sub_id))
     title_text = html.escape(_short_title(data["product_title"], url))
     price_text = html.escape(_format_price_for_user(user_id, data["last_price"]))
     mode_text = html.escape(_mode_text_for_user(user_id, data["mode"]))
@@ -721,7 +766,7 @@ def format_subscription_card(user_id: int, sub: Tuple[Any, ...]) -> str:
     )
 
     lines = [
-        f"{status_icon} <b>{html.escape(status_text)}</b> | <code>ID {sub_id}</code>",
+        f"{status_icon} <b>{html.escape(status_text)}</b> | <code>{public_label}</code>",
         f"📦 <b>{title_text}</b>",
         f"💰 {html.escape(t(user_id, 'current_price'))}: <b>{price_text}</b>",
         f"🔔 {html.escape(t(user_id, 'mode'))}: {mode_text}",
@@ -774,7 +819,7 @@ def build_subscriptions_overview(
         status_icon = "✅" if data["last_price"] is not None else "⏳"
 
         line = (
-            f"{index}. {status_icon} <code>ID {sub_id}</code> "
+            f"{status_icon} <code>№ {index}</code> "
             f"<b>{title_html}</b>\n"
             f"   💰 {price_text} · 🔔 {mode_text}"
         )
@@ -789,7 +834,7 @@ def build_subscriptions_overview(
         button_title = _short_title(data["product_title"], url, limit=36)
         button_rows.append([
             InlineKeyboardButton(
-                text=f"ID {sub_id} · {button_title}",
+                text=f"№ {index} · {button_title}",
                 callback_data=f"edit_sub:{sub_id}",
             )
         ])
@@ -1045,11 +1090,11 @@ async def cmd_history(message: types.Message):
 
 
     if arg.isdigit():
-        sid = int(arg)
-        sub = get_subscription(sid)
-        if not sub or sub[1] != message.from_user.id:
+        sub, _public_number = resolve_user_subscription_ref(message.from_user.id, arg)
+        if not sub:
             await message.answer(t(message.from_user.id, "no_subs"))
             return
+        sid = sub[0]
 
         if len(sub) >= 13:
             url = sub[2]
@@ -1177,11 +1222,11 @@ async def cmd_unsubscribe_old(message: types.Message):
     if len(parts) < 2 or not parts[1].isdigit():
         await message.answer(t(message.from_user.id, "provide_subscription_id"))
         return
-    sid = int(parts[1])
-    sub = get_subscription(sid)
-    if not sub or sub[1] != message.from_user.id:
+    sub, _public_number = resolve_user_subscription_ref(message.from_user.id, parts[1])
+    if not sub:
         await message.answer(t(message.from_user.id, "no_subs"))
         return
+    sid = sub[0]
     try:
         remove_subscription(sid)
         await message.answer(t(message.from_user.id, "sub_removed"))
@@ -1197,14 +1242,14 @@ async def cmd_setmode(message: types.Message):
     if len(parts) < 3 or not parts[1].isdigit():
         await message.answer(t(message.from_user.id, "cmd_setmode_usage"))
         return
-    sid = int(parts[1])
+    sub, _public_number = resolve_user_subscription_ref(message.from_user.id, parts[1])
+    if not sub:
+        await message.answer(t(message.from_user.id, "no_subs_found_id"))
+        return
+    sid = sub[0]
     mode = parts[2].lower()
     if mode not in {"hourly", "discount"}:
         await message.answer(t(message.from_user.id, "provide_mode_options"))
-        return
-    sub = get_subscription(sid)
-    if not sub:
-        await message.answer(t(message.from_user.id, "no_subs_found_id"))
         return
     try:
 
@@ -1243,7 +1288,11 @@ async def cmd_price_alert(message: types.Message):
         await message.answer(t(user_id, "price_alert_id_must_be_number"))
         return
 
-    sid = int(parts[1])
+    sub, _public_number = resolve_user_subscription_ref(user_id, parts[1])
+    if not sub:
+        await message.answer(t(user_id, "price_alert_sub_not_found"))
+        return
+    sid = sub[0]
 
     try:
         target_price = float(parts[2])
@@ -1253,16 +1302,6 @@ async def cmd_price_alert(message: types.Message):
 
     if target_price < 0:
         await message.answer(t(user_id, "price_alert_price_negative"))
-        return
-
-    sub = get_subscription(sid)
-    if not sub:
-        await message.answer(t(user_id, "price_alert_sub_not_found"))
-        return
-
-
-    if len(sub) >= 2 and sub[1] != user_id:
-        await message.answer(t(user_id, "price_alert_not_your_sub"))
         return
 
     try:
@@ -1322,11 +1361,11 @@ async def cmd_settings(message: types.Message):
 
         elif subcmd == "price":
             if len(parts) >= 4 and parts[2].isdigit():
-                sub_id = int(parts[2])
-                sub = get_subscription(sub_id)
-                if not sub or sub[1] != message.from_user.id:
+                sub, _public_number = resolve_user_subscription_ref(message.from_user.id, parts[2])
+                if not sub:
                     await message.answer(t(message.from_user.id, "no_subs"))
                     return
+                sub_id = sub[0]
 
                 update_args = {}
                 kv = _parse_kv_floats(message.text or "")
@@ -1346,16 +1385,15 @@ async def cmd_settings(message: types.Message):
 
         elif subcmd == "interval":
             if len(parts) == 4 and parts[2].isdigit() and parts[3].isdigit():
-                sub_id = int(parts[2])
+                sub, _public_number = resolve_user_subscription_ref(message.from_user.id, parts[2])
+                if not sub:
+                    await message.answer(t(message.from_user.id, "no_subs"))
+                    return
+                sub_id = sub[0]
                 minutes = int(parts[3])
 
                 if minutes < 15:
                     await message.answer(t(message.from_user.id, "interval_too_short"))
-                    return
-
-                sub = get_subscription(sub_id)
-                if not sub or sub[1] != message.from_user.id:
-                    await message.answer(t(message.from_user.id, "no_subs"))
                     return
 
                 update_subscription_settings(sub_id, notify_interval=minutes)
@@ -1411,17 +1449,13 @@ async def cmd_stats_old(message: types.Message):
             await message.answer(t(message.from_user.id, "cmd_stats_usage"))
             return
 
-        sub_id = int(args[1])
-        sub = get_subscription(sub_id)
+        sub, public_number = resolve_user_subscription_ref(message.from_user.id, args[1])
 
         if not sub:
             await message.answer(t(message.from_user.id, "no_subs_found_id"))
             return
-
-
-        if sub[1] != message.from_user.id:
-            await message.answer(t(message.from_user.id, "error_not_your_sub"))
-            return
+        sub_id = sub[0]
+        label = f"№ {public_number}" if public_number is not None else f"ID {sub_id}"
 
         stats = get_price_stats(sub_id)
 
@@ -1439,7 +1473,7 @@ async def cmd_stats_old(message: types.Message):
         header = t(message.from_user.id, "stats_header")
         text = f"""{header}
 
-🏷️ ID: {sub_id}
+🏷️ {label}
 🔗 {sub[2][:50]}...
 
 💰 {t(message.from_user.id, 'current_price')}: {curr} TL
@@ -1471,11 +1505,11 @@ async def cmd_all_list_old(message: types.Message):
 
 
         header = t(message.from_user.id, "cmd_all_list_header") + "\n\n"
-        header += "`ID  | " + t(message.from_user.id, "mode") + "      | " + t(message.from_user.id, "price") + "    | " + t(message.from_user.id, "status") + "`\n"
+        header += "`№   | " + t(message.from_user.id, "mode") + "      | " + t(message.from_user.id, "price") + "    | " + t(message.from_user.id, "status") + "`\n"
         header += "`" + "—" * 38 + "`\n"
 
         rows = []
-        for sub in subs:
+        for index, sub in enumerate(subs, start=1):
             try:
                 (sub_id, user_id, url, mode, last_price, product_title, product_image,
                  min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert) = sub
@@ -1488,7 +1522,7 @@ async def cmd_all_list_old(message: types.Message):
             price_str = f"{last_price:.0f}" if last_price else "—"
             alert_status = "🎯" if price_alert else " "
 
-            row = f"`{sub_id:3d} | {mode_short} {mode:8s} | {price_str:6s} | {alert_status}`"
+            row = f"`{index:3d} | {mode_short} {mode:8s} | {price_str:6s} | {alert_status}`"
             rows.append(row)
 
         text = header + "\n".join(rows)
@@ -1521,7 +1555,9 @@ async def cmd_top_drops_old(message: types.Message):
             curr_str = f"{curr_price:.0f}" if curr_price else "—"
             min_str = f"{min_price:.0f}" if min_price else "—"
 
-            text += f"{i}. {icon} *{drop_pct:+.1f}%* | ID:{sub_id}\n"
+            number = get_user_subscription_number(message.from_user.id, sub_id)
+            label = f"№ {number}" if number is not None else f"ID {sub_id}"
+            text += f"{i}. {icon} *{drop_pct:+.1f}%* | {label}\n"
             text += f"   {title_short}\n"
             text += f"   {t(message.from_user.id, 'current_price')}: {curr_str} TL | {t(message.from_user.id, 'min_price_label')}: {min_str} TL\n\n"
 
@@ -1596,7 +1632,11 @@ async def cmd_history_export(message: types.Message):
             await message.answer(t(message.from_user.id, "history_export_usage"))
             return
 
-        sub_id = int(parts[1])
+        sub, _public_number = resolve_user_subscription_ref(message.from_user.id, parts[1])
+        if not sub:
+            await message.answer(t(message.from_user.id, "no_subs"))
+            return
+        sub_id = sub[0]
         fmt = "csv"
         days = None
 
@@ -1605,16 +1645,6 @@ async def cmd_history_export(message: types.Message):
                 fmt = p.lower()
             elif p.isdigit():
                 days = int(p)
-
-        sub = get_subscription(sub_id)
-        if not sub:
-            await message.answer(t(message.from_user.id, "no_subs"))
-            return
-        if len(sub) >= 2 and sub[1] != message.from_user.id:
-            await message.answer(t(message.from_user.id, "error_not_your_sub"))
-            return
-
-
 
         if days is not None:
             rows = get_local_price_history(sub_id, days=min(days, 365))
@@ -1679,19 +1709,14 @@ async def cmd_history_plot(message: types.Message):
             await message.answer(t(message.from_user.id, "history_plot_usage"))
             return
 
-        sub_id = int(parts[1])
-        days = None
-        if len(parts) > 2 and parts[2].isdigit():
-            days = int(parts[2])
-
-        sub = get_subscription(sub_id)
+        sub, _public_number = resolve_user_subscription_ref(message.from_user.id, parts[1])
         if not sub:
             await message.answer(t(message.from_user.id, "no_subs"))
             return
-        if len(sub) >= 2 and sub[1] != message.from_user.id:
-            await message.answer(t(message.from_user.id, "error_not_your_sub"))
-            return
-
+        sub_id = sub[0]
+        days = None
+        if len(parts) > 2 and parts[2].isdigit():
+            days = int(parts[2])
 
         if days is not None:
             rows = get_local_price_history(sub_id, days=min(days, 180))
@@ -1751,16 +1776,12 @@ async def cmd_compare(message: types.Message):
         if len(args) == 2 and args[1].isdigit():
             from scraper import get_similar_products_comparison
 
-            sub_id = int(args[1])
-            sub = get_subscription(sub_id)
+            sub, _public_number = resolve_user_subscription_ref(user_id, args[1])
 
             if not sub:
                 await message.answer(t(user_id, "no_subs_found_id"))
                 return
-
-            if sub[1] != user_id:
-                await message.answer(t(user_id, "error_not_your_sub"))
-                return
+            sub_id = sub[0]
 
             status_message = await _send_progress_message(
                 message,
@@ -1790,7 +1811,7 @@ async def cmd_compare(message: types.Message):
         await message.answer(
             f"📊 <b>{t(user_id, 'cmd_compare_usage')}</b>\n\n"
             "Примеры:\n"
-            "<code>/compare 123</code>\n"
+            "<code>/compare 1</code>\n"
             "<code>/compare https://trendyol.com/product1 https://trendyol.com/product2</code>",
             parse_mode="HTML"
         )
@@ -1916,7 +1937,7 @@ async def handle_url_old(message: types.Message):
 
 
         subs = get_user_subscriptions(user_id)
-        for sub in subs:
+        for index, sub in enumerate(subs, start=1):
             try:
                 (sid, _sub_user_id, u, mode, last_price, product_title, product_image,
                  min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert) = sub
@@ -2891,7 +2912,7 @@ async def cmd_alerts(message: types.Message):
 
         keyboard = []
 
-        for sub in subs:
+        for index, sub in enumerate(subs, start=1):
             try:
                 (sub_id, _, url, mode, last_price, product_title, product_image,
                  min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert, tags) = sub
@@ -2909,7 +2930,7 @@ async def cmd_alerts(message: types.Message):
 
             keyboard.append([
                 InlineKeyboardButton(
-                    text=f"⚙️ {t(user_id, 'btn_edit')} ID {sub_id}",
+                    text=f"⚙️ {t(user_id, 'btn_edit')} № {index}",
                     callback_data=f"alert_edit:{sub_id}"
                 )
             ])
