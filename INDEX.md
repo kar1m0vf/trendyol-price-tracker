@@ -1,14 +1,14 @@
 # Project Documentation Index
 
-This repository is source-available for portfolio review. It is not a public self-hosting package.
+This repository contains the source code and documentation for the Trendyol Price Tracker Bot. It is not a public self-hosting package.
 
-## Primary Review Path
+## Main Documentation
 
 | Document | Audience | Purpose |
 | --- | --- | --- |
-| [README.md](README.md) | Recruiters, engineers, reviewers | Product overview, capabilities, ownership policy |
-| [User Guide](docs/guides/USER_GUIDE.md) | Product reviewers | Telegram user experience and workflows |
-| [Architecture](docs/ARCHITECTURE.md) | Engineers | Runtime, modules, data model, scheduler, callbacks |
+| [README.md](README.md) | General | Product overview, capabilities, ownership policy |
+| [User Guide](docs/guides/USER_GUIDE.md) | Product | Telegram user experience and workflows |
+| [Architecture](docs/ARCHITECTURE.md) | Engineering | Runtime, modules, data model, scheduler, callbacks |
 
 ## Diagnostics
 

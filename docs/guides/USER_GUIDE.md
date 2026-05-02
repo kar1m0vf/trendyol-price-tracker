@@ -1,55 +1,55 @@
 # User Guide
 
-Этот документ описывает бота глазами обычного пользователя Telegram. Здесь нет инструкции по установке кода: бот задуман как сервис, которым пользуются в чате.
+This guide describes the bot from the Telegram user's point of view. It does not explain how to install or self-host the code; the bot is intended to be used as a service inside Telegram.
 
-## Коротко
+## Summary
 
-Бот следит за товарами Trendyol. Пользователь отправляет ссылку на товар, бот сохраняет товар в личный список, проверяет цену в фоне и присылает уведомления, когда цена изменилась или стала подходящей.
+The bot tracks Trendyol products. A user sends a product link, the bot saves it to a personal watchlist, checks the price in the background, stores price history, and sends notifications when the price changes or matches a configured alert rule.
 
-## Первый запуск
+## First Interaction
 
-1. Пользователь открывает бота в Telegram.
-2. Отправляет `/start`.
-3. Выбирает язык, если нужно.
-4. Отправляет ссылку на товар Trendyol.
+1. The user opens the bot in Telegram.
+2. The user sends `/start`.
+3. The user chooses a language if needed.
+4. The user sends a Trendyol product URL.
 
-После добавления товара бот показывает карточку:
+After a product is added, the bot shows a product card with:
 
-- название товара;
-- текущую цену;
-- режим уведомлений;
-- следующую проверку;
-- кнопки истории, сравнения, целевой цены, режима и удаления.
+- product title;
+- current price;
+- notification mode;
+- next expected check;
+- controls for price history, comparison, target price, mode changes, and unsubscribe.
 
-## Личный список товаров
+## Personal Watchlist
 
-Команда:
+Command:
 
 ```text
 /mysubs
 ```
 
-Бот отправляет один компактный список товаров, а не спамит отдельными сообщениями. Каждый товар получает номер внутри списка пользователя:
+The bot sends one compact watchlist message instead of separate messages for every product. Each product gets a user-facing number within that user's list:
 
 ```text
-№ 1  Робот-пылесос ...
-№ 2  Крем для лица ...
-№ 3  Кроссовки ...
+No. 1  Robot vacuum ...
+No. 2  Face moisturizer ...
+No. 3  Sneakers ...
 ```
 
-Под сообщением находятся кнопки:
+The same message includes buttons:
 
 ```text
-№ 1 · Робот-пылесос
-№ 2 · Крем для лица
-№ 3 · Кроссовки
+No. 1 · Robot vacuum
+No. 2 · Face moisturizer
+No. 3 · Sneakers
 ```
 
-Нажатие на кнопку открывает карточку нужного товара в том же сообщении. Внутренний ID базы данных пользователю не показывается.
+Tapping a product button opens the selected product card in the same message. Internal database IDs are not shown to regular users.
 
-## Номера в командах
+## Product Numbers In Commands
 
-Все команды для конкретного товара используют номер из `/mysubs`:
+Commands that target a specific product use the number from `/mysubs`:
 
 ```text
 /history 1
@@ -59,21 +59,21 @@
 /unsubscribe 1
 ```
 
-Если в списке товар стоит под `№ 1`, пользователь вводит `1`. Это привычнее, чем видеть внутренние ID вроде `120`.
+If a product is displayed as `No. 1`, the user enters `1`. This is easier than exposing internal database IDs such as `120`.
 
-## Режимы уведомлений
+## Notification Modes
 
-У товара есть режим отслеживания:
+Each tracked product can use different notification rules:
 
-| Режим | Что делает |
+| Mode | Behavior |
 | --- | --- |
-| `discount` | Уведомляет, когда цена стала ниже предыдущей |
-| `hourly` | Присылает регулярное обновление по интервалу |
-| целевая цена | Уведомляет один раз, когда цена стала не выше заданной |
-| min/max | Уведомляет, если цена вышла за заданный диапазон |
-| percent | Уведомляет, если цена изменилась на заданный процент |
+| `discount` | Notify when the current price is lower than the previous saved price |
+| `hourly` | Send regular updates according to the configured interval |
+| Target price | Notify once when the price becomes equal to or lower than the target |
+| Min/max range | Notify when the price leaves the configured range |
+| Percent threshold | Notify when the price changes by the configured percentage |
 
-Примеры:
+Examples:
 
 ```text
 /setmode 1 discount
@@ -83,27 +83,27 @@
 /settings interval 1 60
 ```
 
-## Тихие часы
+## Quiet Hours
 
-Пользователь может настроить время, когда бот не должен присылать уведомления:
+The user can configure hours when the bot should not send notifications:
 
 ```text
 /settings quiet 23 7
 ```
 
-Это означает: не беспокоить с 23:00 до 07:00.
+This means the bot should stay quiet from 23:00 to 07:00.
 
-## История цен
+## Price History
 
-Команда:
+Command:
 
 ```text
 /history 1
 ```
 
-Бот показывает историю цены товара. История берется из локальной базы, а если локальных данных мало, бот может использовать внешнюю историю, где она доступна.
+The bot shows price history for the selected product. Local history is used first. If local data is limited, the bot can use external history helpers where available.
 
-Дополнительные команды:
+Additional history commands:
 
 ```text
 /history_export 1 30 csv
@@ -111,9 +111,9 @@
 /history_plot 1 30
 ```
 
-## Статистика и падения цены
+## Statistics And Price Drops
 
-Команды:
+Commands:
 
 ```text
 /stats 1
@@ -121,93 +121,93 @@
 /top_drops
 ```
 
-`/stats` показывает текущую, минимальную, максимальную и среднюю цену, тренд и количество точек истории.
+`/stats` shows current, minimum, maximum, and average price, trend, data range, and number of collected price points.
 
-`/top_drops` показывает товары пользователя с самым заметным падением цены.
+`/top_drops` shows products with the most visible price drops in the user's own watchlist.
 
-## Сравнение цен
+## Price Comparison
 
-Есть два сценария:
+There are two comparison flows:
 
 ```text
 /compare 1
 ```
 
-Сравнить сохраненный товар с доступной историей и текущей ценой.
+Compare a saved product using current price and available history.
 
 ```text
 /compare https://www.trendyol.com/... https://www.trendyol.com/...
 ```
 
-Сравнить две прямые ссылки.
+Compare two direct product URLs.
 
-## Тренды
+## Trends
 
-Тренды доступны через кнопку главного меню или через соответствующий раздел callback-меню.
+Trends are available through the main menu button and inline trend menus.
 
-Сценарии:
+Supported flows:
 
-- общий топ;
-- топ по категории;
-- поиск по тексту.
+- overall top products;
+- category trends;
+- text search.
 
-Если внешний источник временно недоступен, бот старается показать fallback-ответ, а не оставлять пользователя без реакции.
+If an external source is temporarily unavailable, the bot tries to return a fallback response instead of leaving the user without feedback.
 
-## Рекомендации
+## Recommendations
 
-Команда:
+Command:
 
 ```text
 /recommend
 ```
 
-Бот анализирует пользовательские товары и подбирает рекомендации. Источник рекомендаций:
+The bot analyzes the user's tracked products and generates recommendations. Recommendations can come from:
 
-- товары, похожие на интересы пользователя;
-- админский каталог рекомендуемых товаров;
-- приоритеты, категории, бренды и кастомный текст, настроенные админом.
+- products similar to the user's interests;
+- an admin-managed recommendation catalog;
+- priorities, categories, brands, and custom recommendation copy configured by the owner.
 
-## Экспорт
+## Export
 
-Команда:
+Commands:
 
 ```text
 /export csv
 /export json
 ```
 
-Экспортирует подписки пользователя. Файлы создаются в runtime-папке `backups/` и отправляются пользователю.
+The bot exports the user's subscriptions. Export files are created as runtime artifacts and sent to the user.
 
-## Обратная связь
+## User Reports
 
-Команда:
+Command:
 
 ```text
 /report
 ```
 
-После команды пользователь пишет сообщение, а бот отправляет обращение администраторам.
+After this command, the user can write a message. The bot forwards the report to admins.
 
-## Языки
+## Language
 
-Команда:
+Command:
 
 ```text
 /language
 ```
 
-Поддерживаются:
+Supported languages:
 
-- русский;
-- английский;
-- азербайджанский;
-- турецкий.
+- Russian;
+- English;
+- Azerbaijani;
+- Turkish.
 
-## Что считается хорошим UX в этом боте
+## UX Principles
 
-- Один список товаров одним сообщением, без потока отдельных карточек.
-- Кнопки открывают нужный товар сразу.
-- Пользователь видит человеческие номера товаров, а не ID базы.
-- Долгие действия сопровождаются понятными сообщениями: "проверяю", "ищу", "готово", "не получилось".
-- Ошибки формулируются как пользовательские ситуации, а не как технический traceback.
+- A watchlist is shown as one compact message, not as a stream of separate product cards.
+- Product buttons open the requested product immediately.
+- Users see friendly product numbers, not database IDs.
+- Long-running actions provide clear feedback such as checking, searching, completed, or failed.
+- Errors are phrased as user-facing situations instead of technical tracebacks.
 

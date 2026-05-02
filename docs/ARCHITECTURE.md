@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes the system design behind the bot for portfolio and engineering review. It is not a deployment license and does not grant permission to operate a copy of the service.
+This document describes the system design behind the bot. It is not a deployment license and does not grant permission to operate a copy of the service.
 
 ## System Purpose
 
@@ -181,4 +181,3 @@ The main remaining architectural debt is that `bot.py` still contains too much m
 - scraper fallback strategies into adapters.
 
 This is not blocking the current bot, but it is the correct direction for long-term maintainability.
-

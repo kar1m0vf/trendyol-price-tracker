@@ -1,10 +1,10 @@
 Copyright (c) 2026, FAINI Tech by Kamil Kerimov.
 All rights reserved.
 
-This repository is source-available for portfolio review only.
+This repository is source-available for inspection only.
 
-Permission is granted to view the source code and documentation for evaluation,
-recruiting, educational review, or security review of this specific repository.
+Permission is granted to view the source code and documentation in this
+specific repository.
 
 No permission is granted to copy, redistribute, sublicense, sell, rent, host,
 deploy, rebrand, operate, or create a competing or derivative public service
@@ -18,4 +18,3 @@ production configuration are not licensed or distributed with this repository.
 THE SOFTWARE AND DOCUMENTATION ARE PROVIDED FOR REVIEW "AS IS", WITHOUT WARRANTY
 OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
 MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
-

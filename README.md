@@ -1,102 +1,167 @@
 # Trendyol Price Tracker Bot
 
-Portfolio/source-available repository for a production-oriented Telegram bot that tracks Trendyol prices, manages user subscriptions, stores price history, sends notifications, and exposes admin tooling.
+A Telegram service for tracking Trendyol product prices, managing personal watchlists, storing price history, and sending practical price-change notifications.
 
-This repository is published to demonstrate the system design, implementation quality, and product thinking behind the bot. It is not an open-source starter template and it is not offered as a ready-made bot for third-party deployment.
+The project is built as a real service rather than a one-off script: it has Telegram workflows, persistent user state, background jobs, admin controls, localization, diagnostics, and tests. The source is visible, but the bot is not distributed as a reusable package or a ready-made third-party deployment.
 
-## Access And Usage Policy
+## Problem
 
-The source code is visible for review purposes only.
+Trendyol prices change often, and manually checking product pages is repetitive. A useful price tracker needs to do more than fetch a number once:
 
-- You may read the code and documentation to evaluate the project.
-- You may not copy, redistribute, sell, host, rebrand, or deploy this bot or a derivative service without explicit written permission from the repository owner.
-- Runtime data, bot tokens, user data, logs, backups, and production configuration are not part of this repository and must never be published.
-- The live bot/service, if offered publicly, is intended to be used through Telegram, not by cloning this repository.
+- remember each user's products;
+- avoid noisy notifications;
+- keep price history;
+- support different alert strategies;
+- survive external parsing failures;
+- give the owner tools to monitor and manage the service.
 
-See [LICENSE](LICENSE).
+## Solution
 
-## Product Overview
+The bot turns a Telegram chat into a product tracking interface. A user sends a Trendyol link, the bot extracts product data, saves the subscription, checks prices in the background, and notifies the user when a configured condition is met.
 
-The bot solves a practical user problem: tracking prices on Trendyol without manually checking product pages. A user sends a product link, the bot saves it, checks prices in the background, keeps history, and sends human-friendly notifications when the price changes or reaches a configured target.
+The core experience is designed around Telegram-native controls:
 
-The project is built as a service, not a script:
+1. User sends `/start`.
+2. User sends a Trendyol product URL.
+3. Bot creates a tracked product card with price, mode, and controls.
+4. User opens `/mysubs` and gets one compact watchlist message.
+5. Product buttons open the selected product in-place.
+6. User can view history, compare prices, set a target price, change mode, or unsubscribe.
+7. Background jobs group notifications so users do not receive message spam.
 
-- Telegram UX with reply keyboards and inline controls.
-- Per-user product lists with friendly numbering like `№ 1`, `№ 2`, `№ 3`.
-- Background price checks with scheduler locking and batch processing.
-- SQLite persistence with migrations, indexes, history tables, and backup support.
-- Price alerts, discount mode, hourly mode, min/max thresholds, percent thresholds, custom intervals, and quiet hours.
-- Price history, statistics, CSV/JSON exports, and chart generation.
-- Trendyol trends, category/search flows, and product comparison.
-- Personalized recommendations plus admin-managed recommendation catalog.
-- Admin panel for stats, users, broadcasts, reports, cleanup, backups, and recommendation management.
-- Localization for RU, EN, AZ, and TR.
-- Diagnostics and tests for deployment confidence.
+Read the full product flow in [User Guide](docs/guides/USER_GUIDE.md).
 
-## User Experience
+## Product Capabilities
 
-The intended user experience happens inside Telegram:
+### Tracking And Alerts
 
-1. User opens the bot and sends `/start`.
-2. User sends a Trendyol product link.
-3. Bot extracts the product, price, image, and default tracking mode.
-4. User opens "My products" and gets one compact list, not a stream of spam messages.
-5. Tapping `№ 1`, `№ 2`, etc. opens the selected product card in-place.
-6. User configures history, comparison, target price, mode, or unsubscribe from inline buttons.
-7. Background jobs check prices and send grouped notifications when conditions are met.
+- Add products from Trendyol URLs.
+- Track each user's own watchlist.
+- Show user-facing product numbers like `No. 1`, `No. 2`, `No. 3` instead of internal database IDs.
+- Support discount-only mode, hourly mode, target price alerts, min/max thresholds, percent-change alerts, custom notification intervals, and quiet hours.
+- Group multiple price updates into one notification when needed.
 
-Read more in [User Guide](docs/guides/USER_GUIDE.md).
+### Price Intelligence
 
-## Core Commands
+- Store local price history in SQLite.
+- Show price history and statistics.
+- Generate price charts.
+- Export subscriptions and price history as CSV/JSON.
+- Compare saved products or two direct product links.
+- Use local history first and external history helpers where available.
+
+### Discovery
+
+- Show Trendyol trends.
+- Support trend categories and search.
+- Generate recommendations from user interests and an admin-managed recommendation catalog.
+
+### Administration
+
+- Admin dashboard through Telegram commands and inline controls.
+- User overview and system statistics.
+- Broadcasts.
+- User report handling.
+- Manual cleanup.
+- Manual and scheduled database backups.
+- Recommendation catalog management.
+- Runtime health check.
+
+### Localization
+
+- RU, EN, AZ, and TR locale files.
+- Locale consistency check through `check_locales.py`.
+
+## Technical Highlights
+
+| Area | Implementation |
+| --- | --- |
+| Telegram runtime | aiogram 3 router/dispatcher stack with package-based handlers |
+| UX state | Inline callbacks, reply keyboards, in-place product cards, user-facing numbering |
+| Persistence | SQLite schema, migrations, indexes, price history, recommendations, custom texts |
+| Scheduler | APScheduler jobs for price checks and daily backups |
+| Concurrency | Scheduler lock, task batching, network fetch semaphore, grouped notifications |
+| Notifications | Safe send helpers, image fallback, grouped updates, chart delivery |
+| Scraping | Trendyol product extraction, trends, category/search flows, history helpers |
+| Admin tools | Stats, users, broadcasts, reports, cleanup, backups, recommendations |
+| Quality | pytest suite, readiness check, deploy smoke check, locale key validation |
+| Security posture | `.env` configuration, ignored runtime data, token validation, no production data in repo |
+
+Detailed system notes are in [Architecture](docs/ARCHITECTURE.md).
+
+## Command Surface
 
 | Command | Purpose |
 | --- | --- |
 | `/start` | First launch and main menu |
 | `/help` | User help |
-| `/mysubs` | User's tracked products |
-| `/history 1` | Price history for product `№ 1` |
+| `/mysubs` | Personal tracked products |
+| `/history 1` | Price history for product `No. 1` |
 | `/stats 1` | Price statistics |
-| `/compare 1` | Compare saved product price |
+| `/compare 1` | Compare a saved product |
 | `/compare <url1> <url2>` | Compare two product URLs |
-| `/price_alert 1 2500` | Notify when product `№ 1` reaches 2500 TL or lower |
-| `/settings` | Quiet hours, intervals, thresholds |
+| `/price_alert 1 2500` | Notify when product `No. 1` reaches 2500 TL or lower |
+| `/settings` | Quiet hours, intervals, and thresholds |
 | `/alerts` | Manage target prices |
 | `/recommend` | Recommendations |
 | `/export` | Export user subscriptions |
-| `/health` | Admin health-check |
+| `/health` | Admin health check |
 | `/admin` | Admin panel |
 
-Product numbers are user-facing list positions from `/mysubs`. Internal database IDs are intentionally hidden from regular users.
+Product numbers come from `/mysubs`. Internal database IDs are intentionally hidden from regular users.
 
-## System Architecture
+## Architecture Snapshot
 
-The main runtime still starts from `bot.py`, while the application logic is split across handler packages and supporting services:
+```text
+Telegram user
+    |
+    v
+aiogram Dispatcher / Router
+    |
+    +--> handlers/basic.py
+    +--> handlers/subscription_handler.py
+    +--> handlers/analytics_handler.py
+    +--> handlers/callback_handler.py
+    +--> handlers/admin_handler.py
+    |
+    v
+bot.py runtime helpers
+    |
+    +--> database.py
+    +--> scraper.py
+    +--> services/notification_service.py
+    +--> localization.py / locales/
+    |
+    v
+SQLite + Telegram API + Trendyol
+```
 
-- `bot.py` - runtime factory, polling entry point, scheduler jobs, common helpers, remaining legacy commands.
-- `handlers/` - aiogram handlers for basic commands, subscriptions, analytics, callbacks, and admin flows.
-- `database.py` - SQLite schema, migrations, subscriptions, price history, recommendations, custom texts, backups.
-- `scraper.py` - Trendyol product data, price extraction, trends, search/category flows, external history helpers.
-- `services/notification_service.py` - safe notifications and chart delivery.
-- `locales/` - RU/EN/AZ/TR translations.
-- `tools/diagnostics/` - readiness and deployment smoke checks.
-- `tests/` - pytest coverage for handlers, callbacks, database logic, localization, scraper helpers, and notification behavior.
+Key paths:
 
-Detailed architecture: [Architecture](docs/ARCHITECTURE.md).
+- `bot.py` - runtime factory, polling entry point, scheduler jobs, common helpers.
+- `handlers/` - aiogram handlers for user, analytics, callback, and admin flows.
+- `database.py` - SQLite schema, migrations, subscriptions, price history, recommendations, backups.
+- `scraper.py` - Trendyol data extraction and trend/history helpers.
+- `services/notification_service.py` - notifications and charts.
+- `locales/` - translation files.
+- `tools/diagnostics/` - readiness and deploy smoke checks.
+- `tests/` - behavioral and unit tests.
 
-## Repository Documentation
+## Data And Security
 
-- [User Guide](docs/guides/USER_GUIDE.md) - product behavior from a Telegram user's perspective.
-- [Architecture](docs/ARCHITECTURE.md) - modules, data model, scheduler, callbacks, and technical debt.
-- [Docs Index](INDEX.md) - documentation map.
+- `.env` is private and ignored by git.
+- `BOT_TOKEN` must only live in environment variables or `.env`.
+- `trendyol_bot.db`, `logs/`, `backups/`, user exports, and production configuration are runtime artifacts and are not part of the public source.
+- If a Telegram bot token is ever exposed, it must be revoked and regenerated through `@BotFather`.
 
-## Quality Signals
+## Verification
 
 The project includes checks for:
 
-- localization consistency;
 - runtime readiness;
-- deploy smoke validation;
-- handler registration;
+- locale consistency;
+- deploy smoke conditions;
+- command coverage;
 - callback behavior;
 - subscription list UX;
 - database functions;
@@ -105,9 +170,18 @@ The project includes checks for:
 
 Recent local verification: `118 passed, 3 skipped`.
 
-## Security Notes
+## Documentation
 
-- `.env` is private and must not be committed.
-- `BOT_TOKEN` must only live in environment variables or `.env`.
-- `trendyol_bot.db`, `logs/`, and `backups/` are runtime artifacts and are excluded from public sharing.
-- If a Telegram bot token is ever exposed, it must be revoked and regenerated through `@BotFather`.
+- [User Guide](docs/guides/USER_GUIDE.md) - user-facing Telegram workflows.
+- [Architecture](docs/ARCHITECTURE.md) - runtime, modules, data model, scheduler, callbacks, and technical debt.
+- [Docs Index](INDEX.md) - documentation map.
+
+## Usage Rights
+
+The source code is visible, but usage rights are restricted.
+
+- You may read the code and documentation.
+- You may not copy, redistribute, sell, host, rebrand, or deploy this bot or a derivative service without explicit written permission from the repository owner.
+- Runtime data, bot tokens, user data, logs, backups, and production configuration are not part of this repository and must never be published.
+
+See [LICENSE](LICENSE).
