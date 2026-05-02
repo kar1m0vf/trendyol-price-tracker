@@ -6,7 +6,8 @@ from aiogram import types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from database import add_user_if_not_exists, set_user_language
+from database import add_user_if_not_exists, save_user_profile, set_user_language
+from logging_utils import action_event, actor_label
 from localization import LOCALES, update_language_cache
 from .base import BaseHandler
 
@@ -20,6 +21,8 @@ class BasicHandler(BaseHandler):
         """Handle /start command."""
         user_id = message.from_user.id
         add_user_if_not_exists(user_id)
+        save_user_profile(message.from_user)
+        action_event("USER", "opened /start", user=actor_label(message.from_user))
 
         try:
             lang_code = (message.from_user.language_code or "").split("-")[0].lower()
@@ -72,6 +75,7 @@ class BasicHandler(BaseHandler):
             if code in {"ru", "en", "az", "tr"}:
                 set_user_language(user_id, code)
                 update_language_cache(user_id, code)
+                action_event("USER", "changed language", user=actor_label(message.from_user), language=code)
                 try:
                     await message.answer(self.t(user_id, "lang_changed"))
                 except Exception as exc:

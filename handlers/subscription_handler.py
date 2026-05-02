@@ -8,9 +8,10 @@ from .base import BaseHandler
 from database import (
     get_user_subscriptions, remove_subscription,
     add_user_if_not_exists, add_subscription, update_last_price,
-    update_subscription_meta
+    update_subscription_meta, save_user_profile
 )
 from config import DEFAULT_NOTIFY_MODE
+from logging_utils import action_event, actor_label, short_value
 from scraper import get_product_info_async
 from keyboards import subscription_controls_kb_for_user
 import logging
@@ -24,6 +25,7 @@ class SubscriptionHandler(BaseHandler):
 
     async def handle_mysubs_command(self, message: types.Message):
         """Handle /mysubs command."""
+        action_event("USER", "requested subscriptions", user=actor_label(message.from_user))
         await self._show_user_subscriptions(message)
 
     async def handle_unsubscribe_command(self, message: types.Message):
@@ -43,6 +45,7 @@ class SubscriptionHandler(BaseHandler):
 
         try:
             remove_subscription(sid)
+            action_event("USER", "removed subscription", user=actor_label(message.from_user), sub_id=sid)
             await message.answer(self.t(message.from_user.id, "sub_removed"))
         except Exception:
             await message.answer(self.t(message.from_user.id, "error_generic"))
@@ -73,8 +76,9 @@ class SubscriptionHandler(BaseHandler):
                 return
 
             add_user_if_not_exists(user_id)
+            save_user_profile(message.from_user)
+            action_event("USER", "started adding product", user=actor_label(message.from_user))
 
-                                  
             subs = get_user_subscriptions(user_id)
             for sub in subs:
                 try:
@@ -86,6 +90,7 @@ class SubscriptionHandler(BaseHandler):
                      min_price, max_price, notify_percent, notify_interval, last_notify_time) = sub[:12]
 
                 if normalize_url(u).lower() == url_lower:
+                    action_event("USER", "tried duplicate subscription", user=actor_label(message.from_user), sub_id=sid)
                     await message.answer(self.t(user_id, "already_subscribed"))
                     return
 
@@ -96,6 +101,7 @@ class SubscriptionHandler(BaseHandler):
 
 
             sub_id = add_subscription(user_id, url, DEFAULT_NOTIFY_MODE)
+            action_event("USER", "subscription created", user=actor_label(message.from_user), sub_id=sub_id)
 
                               
             try:
@@ -114,6 +120,14 @@ class SubscriptionHandler(BaseHandler):
             if price is not None:
                 try:
                     update_last_price(sub_id, price)
+                    action_event(
+                        "USER",
+                        "product price loaded",
+                        user=actor_label(message.from_user),
+                        sub_id=sub_id,
+                        price=f"{price:.0f} TL",
+                        title=short_value(title or "unknown"),
+                    )
                     await send_subscription_added_message(
                         message,
                         user_id,
@@ -131,6 +145,13 @@ class SubscriptionHandler(BaseHandler):
                         reply_markup=subscription_controls_kb_for_user(user_id, sub_id),
                     )
             else:
+                action_event(
+                    "USER",
+                    "product added without price",
+                    user=actor_label(message.from_user),
+                    sub_id=sub_id,
+                    title=short_value(title or "unknown"),
+                )
                 await send_subscription_added_message(
                     message,
                     user_id,

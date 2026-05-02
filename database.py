@@ -180,8 +180,13 @@ def init_db(run_maintenance: bool = True):
             user_missing = {
                 'notify_quiet_hours_start': "ALTER TABLE users ADD COLUMN notify_quiet_hours_start INTEGER DEFAULT 23",
                 'notify_quiet_hours_end': "ALTER TABLE users ADD COLUMN notify_quiet_hours_end INTEGER DEFAULT 7",
-                                                                   
                 'created_at': f"ALTER TABLE users ADD COLUMN created_at INTEGER DEFAULT {now_ts}",
+                'username': "ALTER TABLE users ADD COLUMN username TEXT",
+                'first_name': "ALTER TABLE users ADD COLUMN first_name TEXT",
+                'last_name': "ALTER TABLE users ADD COLUMN last_name TEXT",
+                'telegram_language_code': "ALTER TABLE users ADD COLUMN telegram_language_code TEXT",
+                'is_premium': "ALTER TABLE users ADD COLUMN is_premium INTEGER DEFAULT 0",
+                'last_seen_at': f"ALTER TABLE users ADD COLUMN last_seen_at INTEGER DEFAULT {now_ts}",
             }
             for col_name, alter_sql in user_missing.items():
                 if col_name not in user_columns:
@@ -221,7 +226,13 @@ def init_db(run_maintenance: bool = True):
             language TEXT DEFAULT 'ru',
             notify_quiet_hours_start INTEGER DEFAULT 23,
             notify_quiet_hours_end INTEGER DEFAULT 7,
-            created_at INTEGER DEFAULT (strftime('%s', 'now'))
+            created_at INTEGER DEFAULT (strftime('%s', 'now')),
+            username TEXT,
+            first_name TEXT,
+            last_name TEXT,
+            telegram_language_code TEXT,
+            is_premium INTEGER DEFAULT 0,
+            last_seen_at INTEGER DEFAULT (strftime('%s', 'now'))
         )
         """)
         
@@ -368,6 +379,63 @@ def add_user_if_not_exists(user_id: int, language: str = "ru") -> None:
     with DatabaseConnection() as conn:
         cur = conn.cursor()
         cur.execute("INSERT OR IGNORE INTO users (user_id, language) VALUES (?, ?)", (user_id, language))
+
+def save_user_profile(user: Any) -> None:
+    """Persist Telegram profile fields from an aiogram user-like object."""
+    if user is None:
+        return
+
+    user_id = getattr(user, "id", None)
+    if not user_id:
+        return
+
+    now_ts = int(time.time())
+    username = getattr(user, "username", None)
+    first_name = getattr(user, "first_name", None)
+    last_name = getattr(user, "last_name", None)
+    telegram_language_code = getattr(user, "language_code", None)
+    is_premium = 1 if getattr(user, "is_premium", False) else 0
+
+    with DatabaseConnection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO users (user_id, language, created_at, last_seen_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (int(user_id), "ru", now_ts, now_ts),
+        )
+        cur.execute(
+            """
+            UPDATE users
+            SET username = ?,
+                first_name = ?,
+                last_name = ?,
+                telegram_language_code = ?,
+                is_premium = ?,
+                last_seen_at = ?
+            WHERE user_id = ?
+            """,
+            (
+                username,
+                first_name,
+                last_name,
+                telegram_language_code,
+                is_premium,
+                now_ts,
+                int(user_id),
+            ),
+        )
+
+def get_user_profile(user_id: int) -> Optional[Dict[str, Any]]:
+    with DatabaseConnection() as conn:
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
+        finally:
+            conn.row_factory = None
+
+    return dict(row) if row else None
 
 def set_user_language(user_id: int, language: str) -> None:
     with DatabaseConnection() as conn:

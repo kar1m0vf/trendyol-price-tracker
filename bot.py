@@ -23,6 +23,7 @@ from aiogram.types import (
 from config import BOT_TOKEN, _check_bot_token, USE_NEW_HANDLERS, DATABASE_PATH
 from utils import get_next_notification_time
 import aiogram
+from logging_utils import action_event, configure_logging, short_value
 from database import (
     init_db,
     add_user_if_not_exists,
@@ -106,7 +107,7 @@ from handlers.admin_handler import (
 
 
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+configure_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -2475,6 +2476,7 @@ async def send_grouped_notifications(grouped_notifications: Dict[int, List[Notif
                         parse_mode=parse_mode,
                         reply_markup=reply_markup,
                     )
+                    action_event("NOTIFY", "sent price notification", user=user_id, count=1)
                 else:
                     grouped_text = (
                         f"🔔 <b>{html.escape(t(user_id, 'notifications_group_title'))}</b> "
@@ -2497,6 +2499,7 @@ async def send_grouped_notifications(grouped_notifications: Dict[int, List[Notif
                         parse_mode="HTML",
                         reply_markup=_grouped_notifications_keyboard(user_id),
                     )
+                    action_event("NOTIFY", "sent grouped price notifications", user=user_id, count=len(notifications))
 
             except Exception as e:
                 logger.exception("Error sending grouped notifications to user %s: %s", user_id, e)
@@ -2506,6 +2509,7 @@ async def _check_all_impl(trigger: str = "scheduler") -> Dict[str, Any]:
     logger.info("Scheduler job: checking subscriptions (trigger=%s)", trigger)
     total = get_subscriptions_count()
     logger.info("Found %d subscriptions to check", total)
+    action_event("JOB", "price check started", trigger=trigger, subscriptions=total)
 
     task_batch_size = _get_env_int(
         "CHECK_ALL_TASK_BATCH_SIZE",
@@ -2684,6 +2688,16 @@ async def _check_all_impl(trigger: str = "scheduler") -> Dict[str, Any]:
                     }
 
                 if notification_needed and notification_details:
+                    action_event(
+                        "PRICE",
+                        "notification queued",
+                        user=user_id,
+                        sub_id=sub_id,
+                        reason=notification_details.get("reason"),
+                        old_price=last_price,
+                        new_price=price,
+                        title=short_value(title or product_title or "unknown", 60),
+                    )
 
                     if user_id not in grouped_notifications:
                         grouped_notifications[user_id] = []
@@ -2773,6 +2787,7 @@ async def check_all(trigger: str = "scheduler") -> Dict[str, Any]:
     """Run price checks with a concurrency guard to prevent overlapping runs."""
     if check_all_lock.locked():
         logger.warning("check_all skipped: already running (trigger=%s)", trigger)
+        action_event("JOB", "price check skipped", trigger=trigger, reason="already_running")
         return {"status": "skipped", "trigger": trigger, "reason": "already_running"}
 
     async with check_all_lock:
@@ -2780,6 +2795,15 @@ async def check_all(trigger: str = "scheduler") -> Dict[str, Any]:
         try:
             result = await _check_all_impl(trigger=trigger)
             result["duration_sec"] = round(time.time() - started_at, 2)
+            action_event(
+                "JOB",
+                "price check finished",
+                trigger=trigger,
+                total=result.get("total"),
+                processed=result.get("processed"),
+                alerted=result.get("alerted"),
+                duration=f"{result['duration_sec']}s",
+            )
             return result
         except Exception as e:
             logger.exception("check_all failed (trigger=%s): %s", trigger, e)
@@ -2846,6 +2870,13 @@ async def start_scheduler_async(delay: float = 1.0):
                 DB_BACKUP_HOUR,
                 DB_BACKUP_MINUTE,
                 DB_BACKUP_KEEP_FILES,
+            )
+            action_event(
+                "START",
+                "scheduler started",
+                check_interval_min=CHECK_ALL_INTERVAL_MINUTES,
+                backup_time=f"{DB_BACKUP_HOUR:02d}:{DB_BACKUP_MINUTE:02d}",
+                keep_backups=DB_BACKUP_KEEP_FILES,
             )
         except Exception:
             logger.exception("Failed to start scheduler or add job")
@@ -3498,7 +3529,8 @@ async def set_commands_menu():
         await _get_runtime_bot().set_my_commands(commands)
         logger.info("✅ Bot commands menu has been set successfully")
     except Exception as e:
-        logger.error(f"❌ Failed to set bot commands menu: {e}")
+        logger.warning("Failed to set bot commands menu: %s", e)
+        action_event("WARN", "Telegram commands menu update failed", reason=short_value(e, 120))
 
 
 async def shutdown_runtime() -> None:
@@ -3541,6 +3573,7 @@ async def main():
     await start_scheduler_async(delay=0.0)
 
     logger.info("Bot polling started")
+    action_event("START", "bot polling started")
     try:
         await dispatcher.start_polling(runtime_bot)
     finally:

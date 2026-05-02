@@ -17,6 +17,7 @@ from database import (
     remove_recommended_product
 )
 from keyboards import subscription_controls_kb_for_user, get_main_kb
+from logging_utils import action_event, actor_label
 from localization import update_language_cache
 import sqlite3
 import logging
@@ -31,7 +32,7 @@ class CallbackHandler(BaseHandler):
         """Handle main callback queries."""
         data = cq.data or ""
         user_id = cq.from_user.id
-        logger.info(f"Callback received: data='{data}', user={user_id}")
+        logger.debug("Callback received: data=%r user=%s", data, user_id)
 
         try:
 
@@ -42,6 +43,7 @@ class CallbackHandler(BaseHandler):
 
             if data == "subs:list":
                 await cq.answer()
+                action_event("USER", "opened subscriptions from button", user=actor_label(cq.from_user))
                 await self._show_subscriptions_overview(cq, user_id)
                 return
 
@@ -51,6 +53,7 @@ class CallbackHandler(BaseHandler):
                 lang = data.split(":", 1)[1]
                 set_user_language(user_id, lang)
                 update_language_cache(user_id, lang)
+                action_event("USER", "changed language", user=actor_label(cq.from_user), language=lang)
                 try:
                     await self.bot.send_message(
                         user_id,
@@ -216,6 +219,7 @@ class CallbackHandler(BaseHandler):
                     sub = get_subscription(sub_id)
                     if sub and sub[1] == user_id:
                         remove_subscription(sub_id)
+                        action_event("USER", "removed subscription from button", user=actor_label(cq.from_user), sub_id=sub_id)
                         await cq.message.edit_text(self.t(user_id, "sub_removed"))
                     else:
                         await cq.answer(self.t(user_id, "error_not_your_sub"), show_alert=True)
@@ -236,6 +240,7 @@ class CallbackHandler(BaseHandler):
                     ans = data.split(":", 1)[1]
                     if ans == "yes":
                         remove_subscriptions_by_user(user_id)
+                        action_event("USER", "removed all subscriptions", user=actor_label(cq.from_user))
                         await cq.message.edit_text(self.t(user_id, "unsubscribed_all"))
                     else:
                         await cq.message.edit_text(self.t(user_id, "action_cancelled"))
@@ -265,6 +270,13 @@ class CallbackHandler(BaseHandler):
 
                         try:
                             update_mode(sub_id, mode)
+                            action_event(
+                                "USER",
+                                "changed subscription mode",
+                                user=actor_label(cq.from_user),
+                                sub_id=sub_id,
+                                mode=mode,
+                            )
                         except Exception as e:
                             logger.exception("Update mode error for sub %s: %s", sub_id, e)
                             await cq.answer(self.t(user_id, "error_generic"), show_alert=True)
@@ -794,6 +806,38 @@ class CallbackHandler(BaseHandler):
             return True
 
         try:
+            if data.startswith("admin_broadcast_confirm:"):
+                await cq.answer(self.t(user_id, "loading"))
+                from handlers.admin_handler import admin_broadcast_confirm
+
+                token = data.split(":", 1)[1]
+                await admin_broadcast_confirm(cq.message, user_id, token)
+                return True
+
+            if data.startswith("admin_broadcast_cancel:"):
+                await cq.answer()
+                from handlers.admin_handler import admin_broadcast_cancel
+
+                token = data.split(":", 1)[1]
+                await admin_broadcast_cancel(cq.message, user_id, token)
+                return True
+
+            if data.startswith("admin_cleanup_confirm:"):
+                await cq.answer(self.t(user_id, "loading"))
+                from handlers.admin_handler import admin_cleanup_confirm
+
+                token = data.split(":", 1)[1]
+                await admin_cleanup_confirm(cq.message, user_id, token)
+                return True
+
+            if data.startswith("admin_cleanup_cancel:"):
+                await cq.answer()
+                from handlers.admin_handler import admin_cleanup_cancel
+
+                token = data.split(":", 1)[1]
+                await admin_cleanup_cancel(cq.message, user_id, token)
+                return True
+
             if data == "admin_users_refresh":
                 await cq.answer(self.t(user_id, "loading"))
                 from handlers.admin_handler import admin_users_list_interactive

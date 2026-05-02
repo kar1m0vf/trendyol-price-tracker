@@ -49,6 +49,13 @@ class AntiSpamMiddleware(BaseMiddleware):
         user_id = event.from_user.id if event.from_user else None
         if not user_id:
             return await handler(event, data)
+
+        try:
+            from database import save_user_profile
+
+            save_user_profile(event.from_user)
+        except Exception as exc:
+            logger.debug("Could not persist Telegram user profile for %s: %s", user_id, exc)
             
         if isinstance(event, CallbackQuery):
             limiter = self.callback_limiter

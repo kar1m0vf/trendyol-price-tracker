@@ -3,11 +3,13 @@ import asyncio
 import html
 import logging
 import os
+import secrets
+import shlex
 import sqlite3
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from aiogram import types
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
@@ -23,6 +25,7 @@ from database import (
     get_user_subscriptions,
     set_bot_text,
 )
+from logging_utils import action_event, actor_label, short_value
 from localization import t
 
 from .base import BaseHandler
@@ -49,12 +52,160 @@ def _get_env_int(name: str, default: int, *, min_value: Optional[int] = None, ma
 
 
 DB_BACKUP_KEEP_FILES = _get_env_int("DB_BACKUP_KEEP_FILES", 7, min_value=1, max_value=365)
+ADMIN_ACTION_TTL_SECONDS = _get_env_int("ADMIN_ACTION_TTL_SECONDS", 30 * 60, min_value=60, max_value=24 * 3600)
+
+_PENDING_BROADCASTS: Dict[str, Dict[str, Any]] = {}
+_PENDING_CLEANUPS: Dict[str, Dict[str, Any]] = {}
 
 
 def _get_runtime_bot():
     from bot import bot as runtime_bot
 
     return runtime_bot
+
+
+def _safe_html(value: Any) -> str:
+    return html.escape("" if value is None else str(value), quote=False)
+
+
+def _user_display_name(
+    user_id: int,
+    username: Optional[str] = None,
+    first_name: Optional[str] = None,
+    last_name: Optional[str] = None,
+) -> str:
+    full_name = " ".join(part for part in [first_name, last_name] if part).strip()
+    if full_name and username:
+        return f"{full_name} (@{username})"
+    if username:
+        return f"@{username}"
+    if full_name:
+        return full_name
+    return f"ID {user_id}"
+
+
+def _user_display_html(
+    user_id: int,
+    username: Optional[str] = None,
+    first_name: Optional[str] = None,
+    last_name: Optional[str] = None,
+) -> str:
+    return _safe_html(_user_display_name(user_id, username, first_name, last_name))
+
+
+def _user_profile_block(
+    *,
+    first_name: Optional[str],
+    last_name: Optional[str],
+    username: Optional[str],
+    telegram_language_code: Optional[str],
+    is_premium: Optional[int],
+    last_seen_at: Optional[int],
+    source_label: str,
+) -> str:
+    full_name = " ".join(part for part in [first_name, last_name] if part).strip() or "Не указано"
+    username_text = f"@{username}" if username else "Не установлен"
+    lang_text = telegram_language_code or "Неизвестно"
+    premium_text = "Да" if is_premium else "Нет"
+    last_seen_text = "Неизвестно"
+    if last_seen_at:
+        try:
+            last_seen_text = datetime.fromtimestamp(int(last_seen_at)).strftime("%d.%m.%Y %H:%M")
+        except Exception:
+            last_seen_text = "Неизвестно"
+
+    return (
+        f"\n👨‍💼 <b>Имя:</b> {_safe_html(full_name)}"
+        f"\n📱 <b>Username:</b> {_safe_html(username_text)}"
+        f"\n🌐 <b>Язык Telegram:</b> {_safe_html(lang_text)}"
+        f"\n⭐ <b>Premium:</b> {_safe_html(premium_text)}"
+        f"\n🕒 <b>Последняя активность:</b> {_safe_html(last_seen_text)}"
+        f"\n💾 <b>Источник профиля:</b> {_safe_html(source_label)}"
+    )
+
+
+def _profile_select_exprs(column_names: List[str]) -> str:
+    expressions = []
+    for column_name, alias in [
+        ("username", "username"),
+        ("first_name", "first_name"),
+        ("last_name", "last_name"),
+        ("telegram_language_code", "telegram_language_code"),
+        ("is_premium", "is_premium"),
+        ("last_seen_at", "last_seen_at"),
+    ]:
+        if column_name in column_names:
+            expressions.append(f"u.{column_name} AS {alias}")
+        else:
+            expressions.append(f"NULL AS {alias}")
+    return ", ".join(expressions)
+
+
+def _is_message_not_modified_error(exc: Exception) -> bool:
+    return "message is not modified" in str(exc).lower()
+
+
+def _new_admin_action_token() -> str:
+    return secrets.token_urlsafe(8)
+
+
+def _purge_expired_actions(store: Dict[str, Dict[str, Any]]) -> None:
+    expires_before = time.time() - ADMIN_ACTION_TTL_SECONDS
+    for token, payload in list(store.items()):
+        if float(payload.get("created_at", 0)) < expires_before:
+            store.pop(token, None)
+
+
+def _store_admin_action(store: Dict[str, Dict[str, Any]], admin_user_id: int, payload: Dict[str, Any]) -> str:
+    _purge_expired_actions(store)
+    token = _new_admin_action_token()
+    store[token] = {
+        **payload,
+        "admin_user_id": admin_user_id,
+        "created_at": time.time(),
+    }
+    return token
+
+
+def _pop_admin_action(
+    store: Dict[str, Dict[str, Any]],
+    token: str,
+    admin_user_id: int,
+) -> Optional[Dict[str, Any]]:
+    _purge_expired_actions(store)
+    payload = store.get(token)
+    if not payload or payload.get("admin_user_id") != admin_user_id:
+        return None
+    return store.pop(token, None)
+
+
+async def _edit_or_answer(message: types.Message, text: str, **kwargs):
+    try:
+        if hasattr(message, "edit_text"):
+            return await message.edit_text(text, **kwargs)
+    except Exception:
+        logger.debug("Failed to edit admin message, falling back to answer", exc_info=True)
+    return await message.answer(text, **kwargs)
+
+
+def _confirm_keyboard(confirm_data: str, cancel_data: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Подтвердить", callback_data=confirm_data),
+            InlineKeyboardButton(text="🚫 Отмена", callback_data=cancel_data),
+        ],
+        [InlineKeyboardButton(text="🏠 Админ-панель", callback_data="admin_main_menu")],
+    ])
+
+
+def _extract_admin_command(message_text: Optional[str]) -> Tuple[str, str]:
+    raw_text = (message_text or "").strip()
+    parts = raw_text.split(maxsplit=2)
+    if len(parts) < 2:
+        return "", ""
+    command = parts[1].lower()
+    tail = parts[2].strip() if len(parts) > 2 else ""
+    return command, tail
 
 def is_admin(user_id: int) -> bool:
     """Check if user is admin"""
@@ -84,6 +235,7 @@ async def admin_main_menu(message: types.Message):
     if not is_admin(user_id):
         await message.answer(t(user_id, "admin_access_denied"))
         return
+    action_event("ADMIN", "opened admin panel", admin=user_id)
 
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -116,27 +268,26 @@ async def admin_main_menu(message: types.Message):
 async def cmd_admin(message: types.Message):
     """Admin commands handler"""
     user_id = message.from_user.id
-    logger.info(f"cmd_admin called by user_id={user_id}, message='{message.text}'")
     if not is_admin(user_id):
         logger.warning(f"Access denied for user_id={user_id} in cmd_admin")
         await message.answer(t(user_id, "admin_access_denied"))
         return
 
-    args = message.text.split()
-    if len(args) < 2:
+    command, tail = _extract_admin_command(message.text)
+    logger.debug("cmd_admin called by user_id=%s command=%r", user_id, command or "menu")
+    action_event("ADMIN", "command received", admin=actor_label(message.from_user), command=command or "menu")
+    if not command:
 
         await admin_main_menu(message)
         return
 
-    command = args[1].lower()
-
     if command == "stats":
         await admin_stats(message)
     elif command == "broadcast":
-        if len(args) < 3:
-            await message.answer("❌ Укажите сообщение: /admin broadcast &lt;сообщение&gt;")
+        if not tail:
+            await message.answer("❌ Укажите сообщение: <code>/admin broadcast текст</code>", parse_mode="HTML")
             return
-        await admin_broadcast(message, " ".join(args[2:]))
+        await admin_broadcast(message, tail)
     elif command == "users":
         await admin_users(message)
     elif command == "cleanup":
@@ -146,6 +297,18 @@ async def cmd_admin(message: types.Message):
     elif command == "respond":
         await admin_respond(message)
     elif command == "recommend":
+        try:
+            args = shlex.split(message.text or "")
+        except ValueError as e:
+            if tail.lower().startswith("text"):
+                args = ["/admin", "recommend", "text"]
+            else:
+                await message.answer(
+                    f"❌ Не удалось разобрать команду: {_safe_html(e)}\n"
+                    "Проверьте кавычки в названии или ссылке.",
+                    parse_mode="HTML",
+                )
+                return
         await admin_recommend(message, args[2:] if len(args) > 2 else [])
     elif command == "blocked":
         await admin_check_blocked(message)
@@ -186,49 +349,136 @@ async def admin_stats(message: types.Message):
         logger.exception("Error in admin_stats: %s", e)
         await message.answer(f"❌ Ошибка при получении статистики: {e}")
 
-async def admin_broadcast(message: types.Message, text: str):
-    """Broadcast message to all users"""
-    try:
-        import sqlite3
-
-        conn = sqlite3.connect(DATABASE_PATH)
+def _get_broadcast_recipients() -> List[int]:
+    with sqlite3.connect(DATABASE_PATH) as conn:
         cursor = conn.cursor()
-
-        cursor.execute("SELECT user_id FROM users")
-        users = cursor.fetchall()
-        conn.close()
-
-        sent_count = 0
-        failed_count = 0
-
-        status_msg = await message.answer("📤 Начинаю рассылку...")
-
-        for (user_id,) in users:
-            try:
-                await _get_runtime_bot().send_message(user_id, f"📢 <b>ОБЪЯВЛЕНИЕ</b>\n\n{text}", parse_mode="HTML")
-                sent_count += 1
+        cursor.execute("SELECT user_id FROM users ORDER BY user_id")
+        return [int(row[0]) for row in cursor.fetchall()]
 
 
-                if sent_count % 10 == 0:
-                    await status_msg.edit_text(f"📤 Отправлено: {sent_count}/{len(users)}")
+async def _send_admin_broadcast(message: types.Message, text: str) -> Dict[str, int]:
+    users = _get_broadcast_recipients()
+    sent_count = 0
+    failed_count = 0
+
+    status_msg = await _edit_or_answer(
+        message,
+        f"📤 <b>Рассылка запущена</b>\n\nПолучателей: {len(users)}\nОтправлено: 0",
+        parse_mode="HTML",
+        reply_markup=None,
+    )
+
+    broadcast_text = f"📢 <b>Объявление</b>\n\n{_safe_html(text)}"
+
+    for recipient_id in users:
+        try:
+            await _get_runtime_bot().send_message(recipient_id, broadcast_text, parse_mode="HTML")
+            sent_count += 1
+
+            if sent_count % 10 == 0:
+                await status_msg.edit_text(
+                    f"📤 <b>Рассылка идет</b>\n\n"
+                    f"Отправлено: {sent_count}/{len(users)}\n"
+                    f"Не доставлено: {failed_count}",
+                    parse_mode="HTML",
+                )
+
+            await asyncio.sleep(0.1)
+
+        except (TelegramForbiddenError, TelegramBadRequest) as e:
+            logger.warning("Broadcast delivery failed to %s: %s", recipient_id, e)
+            failed_count += 1
+        except Exception as e:
+            logger.warning("Unexpected broadcast error for %s: %s", recipient_id, e)
+            failed_count += 1
+
+    await status_msg.edit_text(
+        f"✅ <b>Рассылка завершена</b>\n\n"
+        f"📤 Отправлено: {sent_count}\n"
+        f"❌ Не доставлено: {failed_count}",
+        parse_mode="HTML",
+    )
+    return {"sent": sent_count, "failed": failed_count, "total": len(users)}
 
 
-                await asyncio.sleep(0.1)
+async def admin_broadcast(message: types.Message, text: str):
+    """Prepare broadcast preview and require explicit confirmation."""
+    try:
+        admin_user_id = _get_request_user_id(message)
+        if not is_admin(admin_user_id):
+            await message.answer(t(admin_user_id, "admin_access_denied"))
+            return
 
-            except Exception as e:
-                logger.warning(f"Failed to send broadcast to {user_id}: {e}")
-                failed_count += 1
+        text = (text or "").strip()
+        if not text:
+            await message.answer("❌ Укажите сообщение: <code>/admin broadcast текст</code>", parse_mode="HTML")
+            return
 
-        await status_msg.edit_text(
-            f"✅ <b>Рассылка завершена!</b>\n\n"
-            f"📤 Отправлено: {sent_count}\n"
-            f"❌ Не доставлено: {failed_count}",
-            parse_mode="HTML"
+        recipients_count = len(_get_broadcast_recipients())
+        token = _store_admin_action(
+            _PENDING_BROADCASTS,
+            admin_user_id,
+            {"text": text, "recipients_count": recipients_count},
+        )
+        action_event(
+            "ADMIN",
+            "prepared broadcast",
+            admin=admin_user_id,
+            recipients=recipients_count,
+            text=short_value(text, 60),
+        )
+
+        await message.answer(
+            "📢 <b>Предпросмотр рассылки</b>\n\n"
+            f"Получателей: <b>{recipients_count}</b>\n\n"
+            "Так пользователи увидят сообщение:\n\n"
+            f"📢 <b>Объявление</b>\n\n{_safe_html(text)}\n\n"
+            "Отправить всем пользователям?",
+            reply_markup=_confirm_keyboard(
+                f"admin_broadcast_confirm:{token}",
+                f"admin_broadcast_cancel:{token}",
+            ),
+            parse_mode="HTML",
         )
 
     except Exception as e:
         logger.exception("Error in admin_broadcast: %s", e)
-        await message.answer(f"❌ Ошибка при рассылке: {e}")
+        await message.answer(f"❌ Ошибка при подготовке рассылки: {_safe_html(e)}", parse_mode="HTML")
+
+
+async def admin_broadcast_confirm(message: types.Message, admin_user_id: int, token: str) -> None:
+    payload = _pop_admin_action(_PENDING_BROADCASTS, token, admin_user_id)
+    if not payload:
+        await _edit_or_answer(
+            message,
+            "⚠️ Черновик рассылки устарел или уже был обработан.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🏠 Админ-панель", callback_data="admin_main_menu")]
+            ]),
+        )
+        return
+
+    action_event(
+        "ADMIN",
+        "confirmed broadcast",
+        admin=admin_user_id,
+        recipients=payload.get("recipients_count"),
+        text=short_value(payload.get("text"), 60),
+    )
+    await _send_admin_broadcast(message, str(payload.get("text") or ""))
+
+
+async def admin_broadcast_cancel(message: types.Message, admin_user_id: int, token: str) -> None:
+    _pop_admin_action(_PENDING_BROADCASTS, token, admin_user_id)
+    action_event("ADMIN", "cancelled broadcast", admin=admin_user_id)
+    await _edit_or_answer(
+        message,
+        "🚫 Рассылка отменена.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🏠 Админ-панель", callback_data="admin_main_menu")]
+        ]),
+    )
+
 
 async def admin_users(message: types.Message):
     """Show list of active users or detailed info about specific user"""
@@ -244,9 +494,11 @@ async def admin_users(message: types.Message):
 
         if target_user_id:
 
+            action_event("ADMIN", "requested user details", admin=actor_label(message.from_user), target_user=target_user_id)
             await admin_user_details(message, target_user_id)
         else:
 
+            action_event("ADMIN", "requested users list", admin=actor_label(message.from_user))
             await admin_users_list(message)
 
     except Exception as e:
@@ -267,27 +519,25 @@ async def admin_users_list(message: types.Message):
             cursor.execute("PRAGMA table_info(users)")
             columns = cursor.fetchall()
             column_names = [col[1] for col in columns]
+            cursor.execute("SELECT COUNT(*) FROM users")
+            total_users = int(cursor.fetchone()[0])
 
-            if 'created_at' in column_names:
-
-                query = """
-                    SELECT u.user_id, u.language, u.created_at, COUNT(s.id) as subs_count
-                    FROM users u
-                    LEFT JOIN subscriptions s ON u.user_id = s.user_id
-                    GROUP BY u.user_id, u.language, u.created_at
-                    ORDER BY u.created_at DESC
-                    LIMIT 50
-                """
-            else:
-
-                query = """
-                    SELECT u.user_id, u.language, COUNT(s.id) as subs_count
-                    FROM users u
-                    LEFT JOIN subscriptions s ON u.user_id = s.user_id
-                    GROUP BY u.user_id, u.language
-                    ORDER BY u.user_id DESC
-                    LIMIT 50
-                """
+            created_expr = "u.created_at" if "created_at" in column_names else "0"
+            profile_exprs = _profile_select_exprs(column_names)
+            order_expr = "u.created_at DESC" if "created_at" in column_names else "u.user_id DESC"
+            query = f"""
+                SELECT
+                    u.user_id,
+                    u.language,
+                    {created_expr} AS created_at,
+                    {profile_exprs},
+                    COUNT(s.id) as subs_count
+                FROM users u
+                LEFT JOIN subscriptions s ON u.user_id = s.user_id
+                GROUP BY u.user_id
+                ORDER BY {order_expr}
+                LIMIT 50
+            """
 
             cursor.execute(query)
             users = cursor.fetchall()
@@ -301,24 +551,36 @@ async def admin_users_list(message: types.Message):
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[])
         users_text = f"👥 <b>{t(admin_user_id, 'admin_users_title')}</b>\n\n"
+        users_text += f"📊 <b>Всего в базе:</b> {total_users}\n"
+        users_text += f"📋 <b>Показано:</b> {len(users)} последних пользователей\n\n"
 
         for user_data in users:
-            if len(user_data) == 4:
-
-                user_id, language, created_at, subs_count = user_data
-                created_str = datetime.fromtimestamp(created_at).strftime('%d.%m.%Y %H:%M')
-                user_line = f"🆔 <code>{user_id}</code> | 🌐 {language.upper()} | 📦 {subs_count} | 📅 {created_str}"
-            else:
-
-                user_id, language, subs_count = user_data
-                user_line = f"🆔 <code>{user_id}</code> | 🌐 {language.upper()} | 📦 {subs_count}"
+            (
+                user_id,
+                language,
+                created_at,
+                username,
+                first_name,
+                last_name,
+                _telegram_language_code,
+                _is_premium,
+                last_seen_at,
+                subs_count,
+            ) = user_data
+            display_name = _user_display_html(user_id, username, first_name, last_name)
+            created_str = datetime.fromtimestamp(created_at).strftime('%d.%m.%Y %H:%M') if created_at else "-"
+            last_seen_str = datetime.fromtimestamp(last_seen_at).strftime('%d.%m.%Y %H:%M') if last_seen_at else "-"
+            user_line = (
+                f"👤 <b>{display_name}</b> | <code>{user_id}</code>\n"
+                f"   🌐 {language.upper()} | 📦 {subs_count} | 📅 {created_str} | 🕒 {last_seen_str}"
+            )
 
             users_text += user_line + "\n"
 
 
             keyboard.inline_keyboard.append([
                 InlineKeyboardButton(
-                    text=f"📋 {t(admin_user_id, 'admin_user_details_btn')} (ID: {user_id})",
+                    text=f"📋 {_user_display_name(user_id, username, first_name, last_name)[:40]}",
                     callback_data=f"user_details:{user_id}"
                 )
             ])
@@ -345,27 +607,25 @@ async def admin_users_list_interactive(message: types.Message):
             cursor.execute("PRAGMA table_info(users)")
             columns = cursor.fetchall()
             column_names = [col[1] for col in columns]
+            cursor.execute("SELECT COUNT(*) FROM users")
+            total_users = int(cursor.fetchone()[0])
 
-            if 'created_at' in column_names:
-
-                query = """
-                    SELECT u.user_id, u.language, u.created_at, COUNT(s.id) as subs_count
-                    FROM users u
-                    LEFT JOIN subscriptions s ON u.user_id = s.user_id
-                    GROUP BY u.user_id, u.language, u.created_at
-                    ORDER BY u.created_at DESC
-                    LIMIT 50
-                """
-            else:
-
-                query = """
-                    SELECT u.user_id, u.language, COUNT(s.id) as subs_count
-                    FROM users u
-                    LEFT JOIN subscriptions s ON u.user_id = s.user_id
-                    GROUP BY u.user_id, u.language
-                    ORDER BY u.user_id DESC
-                    LIMIT 50
-                """
+            created_expr = "u.created_at" if "created_at" in column_names else "0"
+            profile_exprs = _profile_select_exprs(column_names)
+            order_expr = "u.created_at DESC" if "created_at" in column_names else "u.user_id DESC"
+            query = f"""
+                SELECT
+                    u.user_id,
+                    u.language,
+                    {created_expr} AS created_at,
+                    {profile_exprs},
+                    COUNT(s.id) as subs_count
+                FROM users u
+                LEFT JOIN subscriptions s ON u.user_id = s.user_id
+                GROUP BY u.user_id
+                ORDER BY {order_expr}
+                LIMIT 50
+            """
 
             cursor.execute(query)
             users = cursor.fetchall()
@@ -379,25 +639,28 @@ async def admin_users_list_interactive(message: types.Message):
 
 
         users_text = "👥 <b>Управление пользователями</b>\n\n"
-        users_text += f"📊 <b>Всего пользователей:</b> {len(users)}\n\n"
+        users_text += f"📊 <b>Всего в базе:</b> {total_users}\n"
+        users_text += f"📋 <b>Загружено:</b> {len(users)} последних пользователей\n"
+        users_text += "🔎 <b>Ниже:</b> короткий срез активных и неактивных\n\n"
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[])
 
 
-        active_users = [u for u in users if (u[3] if len(u) == 4 else u[2]) > 0]
-        inactive_users = [u for u in users if (u[3] if len(u) == 4 else u[2]) == 0]
+        active_users = [u for u in users if u[9] > 0]
+        inactive_users = [u for u in users if u[9] == 0]
 
-        def _safe_user_button(user_id_raw, subs_count, inactive: bool = False):
+        def _safe_user_button(user_id_raw, subs_count, username=None, first_name=None, last_name=None, inactive: bool = False):
             try:
                 user_id_int = int(user_id_raw)
                 if user_id_int <= 0:
                     return None
             except Exception:
                 return None
+            display_name = _user_display_name(user_id_int, username, first_name, last_name)
             if inactive:
-                text = f"👤 {user_id_int} (неактивен)"
+                text = f"👤 {display_name} (неактивен)"
             else:
-                text = f"👤 {user_id_int} ({subs_count} подписок)"
+                text = f"👤 {display_name} ({subs_count} подписок)"
                 if subs_count > 5:
                     text += " ⭐"
 
@@ -411,31 +674,54 @@ async def admin_users_list_interactive(message: types.Message):
         if active_users:
             users_text += "🟢 <b>Активные пользователи:</b>\n"
             for user_data in active_users[:15]:
-                if len(user_data) == 4:
-                    user_id, language, created_at, subs_count = user_data
-                    created_str = datetime.fromtimestamp(created_at).strftime('%d.%m.%Y')
-                    users_text += f"  👤 <code>{user_id}</code> | 🌐 {language.upper()} | 📦 {subs_count} | 📅 {created_str}\n"
-                else:
-                    user_id, language, subs_count = user_data
-                    users_text += f"  👤 <code>{user_id}</code> | 🌐 {language.upper()} | 📦 {subs_count}\n"
+                (
+                    user_id,
+                    language,
+                    created_at,
+                    username,
+                    first_name,
+                    last_name,
+                    _telegram_language_code,
+                    _is_premium,
+                    last_seen_at,
+                    subs_count,
+                ) = user_data
+                created_str = datetime.fromtimestamp(created_at).strftime('%d.%m.%Y') if created_at else "-"
+                last_seen_str = datetime.fromtimestamp(last_seen_at).strftime('%d.%m.%Y') if last_seen_at else "-"
+                users_text += (
+                    f"  👤 <b>{_user_display_html(user_id, username, first_name, last_name)}</b> "
+                    f"| <code>{user_id}</code> | 🌐 {language.upper()} | 📦 {subs_count} "
+                    f"| 📅 {created_str} | 🕒 {last_seen_str}\n"
+                )
 
 
-                button = _safe_user_button(user_id, subs_count, inactive=False)
+                button = _safe_user_button(user_id, subs_count, username, first_name, last_name, inactive=False)
                 if button:
                     keyboard.inline_keyboard.append([button])
 
         if inactive_users and len(keyboard.inline_keyboard) < 10:
             users_text += "\n🟡 <b>Неактивные пользователи:</b>\n"
             for user_data in inactive_users[:5]:
-                if len(user_data) == 4:
-                    user_id, language, created_at, subs_count = user_data
-                    created_str = datetime.fromtimestamp(created_at).strftime('%d.%m.%Y')
-                    users_text += f"  👤 <code>{user_id}</code> | 🌐 {language.upper()} | 📅 {created_str}\n"
-                else:
-                    user_id, language, subs_count = user_data
-                    users_text += f"  👤 <code>{user_id}</code> | 🌐 {language.upper()}\n"
+                (
+                    user_id,
+                    language,
+                    created_at,
+                    username,
+                    first_name,
+                    last_name,
+                    _telegram_language_code,
+                    _is_premium,
+                    last_seen_at,
+                    subs_count,
+                ) = user_data
+                created_str = datetime.fromtimestamp(created_at).strftime('%d.%m.%Y') if created_at else "-"
+                last_seen_str = datetime.fromtimestamp(last_seen_at).strftime('%d.%m.%Y') if last_seen_at else "-"
+                users_text += (
+                    f"  👤 <b>{_user_display_html(user_id, username, first_name, last_name)}</b> "
+                    f"| <code>{user_id}</code> | 🌐 {language.upper()} | 📅 {created_str} | 🕒 {last_seen_str}\n"
+                )
 
-                button = _safe_user_button(user_id, subs_count, inactive=True)
+                button = _safe_user_button(user_id, subs_count, username, first_name, last_name, inactive=True)
                 if button:
                     keyboard.inline_keyboard.append([button])
 
@@ -455,19 +741,32 @@ async def admin_users_list_interactive(message: types.Message):
         try:
             await message.edit_text(users_text, reply_markup=keyboard, parse_mode="HTML")
         except Exception as e:
+            if _is_message_not_modified_error(e):
+                logger.debug("Admin users refresh skipped: message is already up to date")
+                return
 
 
             if "BUTTON_USER_INVALID" in str(e):
                 from aiogram.types import InlineKeyboardMarkup
                 fallback_text = users_text + "\n\n💡 Для деталей: /admin users <id>"
                 fallback_kb = InlineKeyboardMarkup(inline_keyboard=control_rows)
-                await message.edit_text(fallback_text, reply_markup=fallback_kb, parse_mode="HTML")
+                try:
+                    await message.edit_text(fallback_text, reply_markup=fallback_kb, parse_mode="HTML")
+                except Exception as fallback_e:
+                    if _is_message_not_modified_error(fallback_e):
+                        logger.debug("Admin users fallback refresh skipped: message is already up to date")
+                        return
+                    raise
                 return
             raise
 
     except Exception as e:
         logger.exception("Error in admin_users_list_callback: %s", e)
-        await message.edit_text(f"❌ {t(admin_user_id, 'error_generic')}: {e}")
+        try:
+            await message.edit_text(f"❌ {t(admin_user_id, 'error_generic')}: {e}")
+        except Exception as edit_error:
+            if not _is_message_not_modified_error(edit_error):
+                raise
 
     except Exception as e:
         logger.exception("Error in admin_users_list_interactive: %s", e)
@@ -488,18 +787,32 @@ async def admin_user_details(message: types.Message, target_user_id: int):
             has_created_at = 'created_at' in column_names
 
 
+            profile_exprs = _profile_select_exprs(column_names)
+
             if has_created_at:
                 cursor.execute("""
-                    SELECT user_id, language, notify_quiet_hours_start, notify_quiet_hours_end, created_at
+                    SELECT
+                        user_id,
+                        language,
+                        notify_quiet_hours_start,
+                        notify_quiet_hours_end,
+                        created_at,
+                        {profile_exprs}
                     FROM users
                     WHERE user_id = ?
-                """, (target_user_id,))
+                """.format(profile_exprs=profile_exprs.replace("u.", "")), (target_user_id,))
             else:
                 cursor.execute("""
-                    SELECT user_id, language, notify_quiet_hours_start, notify_quiet_hours_end, 0 as created_at
+                    SELECT
+                        user_id,
+                        language,
+                        notify_quiet_hours_start,
+                        notify_quiet_hours_end,
+                        0 as created_at,
+                        {profile_exprs}
                     FROM users
                     WHERE user_id = ?
-                """, (target_user_id,))
+                """.format(profile_exprs=profile_exprs.replace("u.", "")), (target_user_id,))
 
             user_data = cursor.fetchone()
 
@@ -507,7 +820,19 @@ async def admin_user_details(message: types.Message, target_user_id: int):
                 await message.answer(f"❌ {t(message.from_user.id, 'admin_user_not_found')}")
                 return
 
-            user_id, language, quiet_start, quiet_end, created_at = user_data
+            (
+                user_id,
+                language,
+                quiet_start,
+                quiet_end,
+                created_at,
+                username,
+                first_name,
+                last_name,
+                telegram_language_code,
+                is_premium,
+                last_seen_at,
+            ) = user_data
 
 
             subscriptions = get_user_subscriptions(user_id)
@@ -526,6 +851,15 @@ async def admin_user_details(message: types.Message, target_user_id: int):
             if quiet_start is not None and quiet_end is not None:
                 user_text += f"🔔 <b>{t(message.from_user.id, 'admin_user_quiet_hours')}:</b> {quiet_start:02d}:00 - {quiet_end:02d}:00\n"
 
+            user_text += _user_profile_block(
+                first_name=first_name,
+                last_name=last_name,
+                username=username,
+                telegram_language_code=telegram_language_code,
+                is_premium=is_premium,
+                last_seen_at=last_seen_at,
+                source_label="сохранено в базе",
+            )
             user_text += "\n"
 
 
@@ -543,6 +877,7 @@ async def admin_user_details(message: types.Message, target_user_id: int):
                         tags = None
 
                     title = product_title if product_title else url[:50] + "..." if len(url) > 50 else url
+                    title = _safe_html(title)
                     status = "✅" if last_price else "⚠️"
                     price_str = f"{last_price:.0f} TL" if last_price else t(message.from_user.id, "unknown_price")
 
@@ -601,18 +936,32 @@ async def admin_user_details_callback(message: types.Message, target_user_id: in
             has_created_at = 'created_at' in column_names
 
 
+            profile_exprs = _profile_select_exprs(column_names)
+
             if has_created_at:
                 cursor.execute("""
-                    SELECT user_id, language, notify_quiet_hours_start, notify_quiet_hours_end, created_at
+                    SELECT
+                        user_id,
+                        language,
+                        notify_quiet_hours_start,
+                        notify_quiet_hours_end,
+                        created_at,
+                        {profile_exprs}
                     FROM users
                     WHERE user_id = ?
-                """, (target_user_id,))
+                """.format(profile_exprs=profile_exprs.replace("u.", "")), (target_user_id,))
             else:
                 cursor.execute("""
-                    SELECT user_id, language, notify_quiet_hours_start, notify_quiet_hours_end, 0 as created_at
+                    SELECT
+                        user_id,
+                        language,
+                        notify_quiet_hours_start,
+                        notify_quiet_hours_end,
+                        0 as created_at,
+                        {profile_exprs}
                     FROM users
                     WHERE user_id = ?
-                """, (target_user_id,))
+                """.format(profile_exprs=profile_exprs.replace("u.", "")), (target_user_id,))
 
             user_data = cursor.fetchone()
 
@@ -620,14 +969,37 @@ async def admin_user_details_callback(message: types.Message, target_user_id: in
                 await message.edit_text(f"❌ {t(admin_user_id, 'admin_user_not_found')}")
                 return
 
-            user_id, language, quiet_start, quiet_end, created_at = user_data
+            (
+                user_id,
+                language,
+                quiet_start,
+                quiet_end,
+                created_at,
+                username,
+                first_name,
+                last_name,
+                telegram_language_code,
+                is_premium,
+                last_seen_at,
+            ) = user_data
 
 
-            telegram_user_info = ""
+            telegram_user_info = _user_profile_block(
+                first_name=first_name,
+                last_name=last_name,
+                username=username,
+                telegram_language_code=telegram_language_code,
+                is_premium=is_premium,
+                last_seen_at=last_seen_at,
+                source_label="сохранено в базе",
+            )
             try:
 
                 chat_member = await _get_runtime_bot().get_chat_member(chat_id=target_user_id, user_id=target_user_id)
                 telegram_user = chat_member.user
+                from database import save_user_profile
+
+                save_user_profile(telegram_user)
 
 
                 full_name = ""
@@ -645,16 +1017,21 @@ async def admin_user_details_callback(message: types.Message, target_user_id: in
 
 
                 telegram_lang = getattr(telegram_user, 'language_code', 'Неизвестно')
+                full_name = _safe_html(full_name)
+                username = _safe_html(username)
+                premium_status = _safe_html(premium_status)
+                telegram_lang = _safe_html(telegram_lang)
 
                 telegram_user_info = f"""
 👨‍💼 <b>Имя:</b> {full_name}
 📱 <b>Username:</b> {username}
 🌐 <b>Язык Telegram:</b> {telegram_lang}
-⭐ <b>Премиум:</b> {premium_status}"""
+⭐ <b>Премиум:</b> {premium_status}
+💾 <b>Источник профиля:</b> Telegram API"""
 
             except Exception as e:
                 logger.warning(f"Could not get Telegram user info for {target_user_id}: {e}")
-                telegram_user_info = "\n⚠️ <b>Информация из Telegram недоступна</b> (пользователь мог заблокировать бота)"
+                telegram_user_info += "\n⚠️ <b>Telegram API сейчас не отдал профиль, показаны сохранённые данные.</b>"
 
 
             subscriptions = get_user_subscriptions(user_id)
@@ -691,6 +1068,7 @@ async def admin_user_details_callback(message: types.Message, target_user_id: in
                         price_alert = None
 
                     title = product_title if product_title else url.split('/')[-1][:30] + "..."
+                    title = _safe_html(title)
                     price_str = f"{last_price:.0f} TL" if last_price is not None else t(admin_user_id, "unknown_price")
                     status = "✅" if last_price is not None else "❌"
 
@@ -751,49 +1129,160 @@ async def admin_user_details_callback(message: types.Message, target_user_id: in
         logger.exception("Error in admin_user_details_callback: %s", e)
         await message.edit_text(f"❌ {t(admin_user_id, 'error_generic')}: {e}")
 
-async def admin_cleanup(message: types.Message):
-    """Clean up old/inactive data"""
-    try:
-        import sqlite3
+def _collect_cleanup_preview() -> Dict[str, int]:
+    now = int(time.time())
+    price_history_cutoff = now - 30 * 24 * 3600
+    inactive_user_cutoff = now - 90 * 24 * 3600
 
-        conn = sqlite3.connect(DATABASE_PATH)
+    with sqlite3.connect(DATABASE_PATH) as conn:
         cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM price_history WHERE ts < ?", (price_history_cutoff,))
+        old_price_points = int(cursor.fetchone()[0])
+
+        cursor.execute("""
+            SELECT COUNT(*)
+            FROM users
+            WHERE user_id NOT IN (SELECT DISTINCT user_id FROM subscriptions)
+            AND created_at < ?
+        """, (inactive_user_cutoff,))
+        inactive_users = int(cursor.fetchone()[0])
+
+    return {
+        "price_history_cutoff": price_history_cutoff,
+        "inactive_user_cutoff": inactive_user_cutoff,
+        "old_price_points": old_price_points,
+        "inactive_users": inactive_users,
+    }
 
 
-        cursor.execute("SELECT COUNT(*) FROM price_history WHERE ts < ?", (int(time.time()) - 30*24*3600,))
-        old_price_points = cursor.fetchone()[0]
-
-        cursor.execute("SELECT COUNT(*) FROM users WHERE user_id NOT IN (SELECT DISTINCT user_id FROM subscriptions)")
-        inactive_users = cursor.fetchone()[0]
-
-
-        cursor.execute("DELETE FROM price_history WHERE ts < ?", (int(time.time()) - 30*24*3600,))
-
+def _execute_cleanup(preview: Dict[str, int]) -> Dict[str, int]:
+    with sqlite3.connect(DATABASE_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM price_history WHERE ts < ?",
+            (int(preview["price_history_cutoff"]),),
+        )
+        deleted_price_points = cursor.rowcount
 
         cursor.execute("""
             DELETE FROM users
             WHERE user_id NOT IN (SELECT DISTINCT user_id FROM subscriptions)
             AND created_at < ?
-        """, (int(time.time()) - 90*24*3600,))
+        """, (int(preview["inactive_user_cutoff"]),))
+        deleted_users = cursor.rowcount
 
+        cursor.execute("PRAGMA optimize")
         conn.commit()
-        conn.close()
 
-        cleanup_text = f"""
-🧹 <b>ОЧИСТКА ЗАВЕРШЕНА</b>
+    return {
+        "deleted_price_points": max(0, deleted_price_points),
+        "deleted_users": max(0, deleted_users),
+    }
 
-🗂️ <b>Удалено:</b>
-• Старых точек цены (>30 дней): {old_price_points}
-• Неактивных пользователей (>90 дней): {inactive_users}
 
-💾 <b>База данных оптимизирована</b>
-"""
+async def admin_cleanup(message: types.Message):
+    """Prepare cleanup preview and require explicit confirmation."""
+    try:
+        admin_user_id = _get_request_user_id(message)
+        if not is_admin(admin_user_id):
+            await message.answer(t(admin_user_id, "admin_access_denied"))
+            return
 
-        await message.answer(cleanup_text, parse_mode="HTML")
+        preview = _collect_cleanup_preview()
+        token = _store_admin_action(_PENDING_CLEANUPS, admin_user_id, preview)
+        action_event(
+            "ADMIN",
+            "prepared cleanup",
+            admin=admin_user_id,
+            old_price_points=preview["old_price_points"],
+            inactive_users=preview["inactive_users"],
+        )
 
+        await message.answer(
+            "🧹 <b>Предпросмотр очистки</b>\n\n"
+            "Будет создан бэкап базы, и только после этого я удалю:\n"
+            f"• старые точки истории цен старше 30 дней: <b>{preview['old_price_points']}</b>\n"
+            f"• пользователей без подписок старше 90 дней: <b>{preview['inactive_users']}</b>\n\n"
+            "Подтвердить очистку?",
+            reply_markup=_confirm_keyboard(
+                f"admin_cleanup_confirm:{token}",
+                f"admin_cleanup_cancel:{token}",
+            ),
+            parse_mode="HTML",
+        )
     except Exception as e:
-        logger.exception("Error in admin_cleanup: %s", e)
-        await message.answer(f"❌ Ошибка при очистке: {e}")
+        logger.exception("Error preparing admin cleanup: %s", e)
+        await message.answer(f"❌ Ошибка при подготовке очистки: {_safe_html(e)}", parse_mode="HTML")
+
+
+async def admin_cleanup_confirm(message: types.Message, admin_user_id: int, token: str) -> None:
+    preview = _pop_admin_action(_PENDING_CLEANUPS, token, admin_user_id)
+    if not preview:
+        await _edit_or_answer(
+            message,
+            "⚠️ Запрос на очистку устарел или уже был обработан.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🏠 Админ-панель", callback_data="admin_main_menu")]
+            ]),
+        )
+        return
+
+    try:
+        action_event(
+            "ADMIN",
+            "confirmed cleanup",
+            admin=admin_user_id,
+            old_price_points=preview["old_price_points"],
+            inactive_users=preview["inactive_users"],
+        )
+        await _edit_or_answer(
+            message,
+            "💾 <b>Создаю бэкап перед очисткой...</b>",
+            parse_mode="HTML",
+            reply_markup=None,
+        )
+        backup = await _create_database_backup(trigger="cleanup")
+        deleted = _execute_cleanup(preview)
+        action_event(
+            "ADMIN",
+            "cleanup finished",
+            admin=admin_user_id,
+            deleted_price_points=deleted["deleted_price_points"],
+            deleted_users=deleted["deleted_users"],
+        )
+
+        await _edit_or_answer(
+            message,
+            "✅ <b>Очистка завершена</b>\n\n"
+            f"💾 Бэкап: <code>{_safe_html(backup['path'])}</code>\n"
+            f"📊 Размер бэкапа: {backup['size_mb']:.1f} MB\n\n"
+            "Удалено:\n"
+            f"• старых точек истории цен: <b>{deleted['deleted_price_points']}</b>\n"
+            f"• неактивных пользователей: <b>{deleted['deleted_users']}</b>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🏠 Админ-панель", callback_data="admin_main_menu")]
+            ]),
+        )
+    except Exception as e:
+        logger.exception("Error executing admin cleanup: %s", e)
+        await _edit_or_answer(
+            message,
+            f"❌ Очистка не выполнена: {_safe_html(e)}",
+            parse_mode="HTML",
+        )
+
+
+async def admin_cleanup_cancel(message: types.Message, admin_user_id: int, token: str) -> None:
+    _pop_admin_action(_PENDING_CLEANUPS, token, admin_user_id)
+    action_event("ADMIN", "cancelled cleanup", admin=admin_user_id)
+    await _edit_or_answer(
+        message,
+        "🚫 Очистка отменена. Данные не менялись.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🏠 Админ-панель", callback_data="admin_main_menu")]
+        ]),
+    )
 
 
 def _prune_old_backups(backups_dir: Path, keep_last: int) -> int:
@@ -830,6 +1319,7 @@ async def _create_database_backup(trigger: str) -> Dict[str, Any]:
         size_mb,
         retained,
     )
+    action_event("BACKUP", "database backup created", trigger=trigger, size_mb=f"{size_mb:.1f}", retained=retained)
     return {"path": str(backup_path), "size_mb": size_mb, "retained": retained}
 
 
@@ -907,6 +1397,12 @@ async def submit_user_report(user_id: int, report_text: str, message: types.Mess
                 import time
                 created_date = time.strftime('%Y-%m-%d %H:%M', time.localtime(user_created))
 
+            full_name = _safe_html(full_name)
+            username = _safe_html(username)
+            telegram_lang = _safe_html(telegram_lang)
+            premium_status = _safe_html(premium_status)
+            created_date = _safe_html(created_date)
+
             user_info = f"""
 👨‍💼 <b>Имя:</b> {full_name}
 📱 <b>Username:</b> {username}
@@ -915,6 +1411,7 @@ async def submit_user_report(user_id: int, report_text: str, message: types.Mess
 📅 <b>Регистрация:</b> {created_date}"""
 
 
+        safe_report_text = _safe_html(report_text)
         admin_report = f"""
 📋 <b>НОВЫЙ РЕПОРТ ОТ ПОЛЬЗОВАТЕЛЯ</b>
 
@@ -923,7 +1420,7 @@ async def submit_user_report(user_id: int, report_text: str, message: types.Mess
 📊 <b>Подписок:</b> {subs_count}{user_info}
 
 💬 <b>Сообщение:</b>
-{report_text}
+{safe_report_text}
 
 <i>Используйте /admin respond {user_id} [текст ответа] для ответа</i>
 """
@@ -935,6 +1432,7 @@ async def submit_user_report(user_id: int, report_text: str, message: types.Mess
             except Exception as e:
                 logger.warning(f"Failed to send report to admin {admin_id}: {e}")
 
+        action_event("USER", "sent report to admins", user=user_id, admins=len(ADMIN_IDS), chars=len(report_text or ""))
 
         if message:
             await message.answer(t(user_id, "report_sent"))
@@ -954,37 +1452,45 @@ async def admin_respond(message: types.Message):
             await message.answer("❌ У вас нет прав администратора")
             return
 
-        parts = message.text.split(maxsplit=2)
-        if len(parts) < 3:
-            await message.answer("❌ Использование: /admin respond <user_id> <текст ответа>")
+        parts = (message.text or "").split(maxsplit=3)
+        if len(parts) < 4:
+            await message.answer("❌ Использование: <code>/admin respond user_id текст ответа</code>", parse_mode="HTML")
             return
 
-        target_user_id = int(parts[1])
-        response_text = parts[2]
+        target_user_id = int(parts[2])
+        response_text = parts[3].strip()
+        if not response_text:
+            await message.answer("❌ Текст ответа не может быть пустым.")
+            return
 
 
         try:
-            response_message = f"""
-💬 <b>ОТВЕТ АДМИНИСТРАТОРА</b>
-
-{response_text}
-
-<i>Если у вас есть дополнительные вопросы, используйте /report</i>
-"""
+            response_message = (
+                "💬 <b>Ответ администратора</b>\n\n"
+                f"{_safe_html(response_text)}\n\n"
+                "<i>Если у вас есть дополнительные вопросы, используйте /report.</i>"
+            )
             await _get_runtime_bot().send_message(target_user_id, response_message, parse_mode="HTML")
+            action_event(
+                "ADMIN",
+                "responded to user report",
+                admin=actor_label(message.from_user),
+                target_user=target_user_id,
+                chars=len(response_text),
+            )
 
 
-            await message.answer(f"✅ Ответ отправлен пользователю {target_user_id}")
+            await message.answer(f"✅ Ответ отправлен пользователю <code>{target_user_id}</code>", parse_mode="HTML")
 
         except Exception as e:
             logger.warning(f"Failed to send response to user {target_user_id}: {e}")
-            await message.answer(f"❌ Не удалось отправить ответ пользователю {target_user_id}")
+            await message.answer(f"❌ Не удалось отправить ответ пользователю <code>{target_user_id}</code>", parse_mode="HTML")
 
     except ValueError:
         await message.answer("❌ Неверный формат user_id")
     except Exception as e:
         logger.exception("Error in admin_respond: %s", e)
-        await message.answer(f"❌ Ошибка: {e}")
+        await message.answer(f"❌ Ошибка: {_safe_html(e)}", parse_mode="HTML")
 
 async def admin_recommend(message: types.Message, args: List[str]):
     """Управление рекомендуемыми продуктами для рекламы"""
@@ -1053,6 +1559,9 @@ async def admin_recommend(message: types.Message, args: List[str]):
             category = args[4] if len(args) > 4 else ""
             brand = args[5] if len(args) > 5 else ""
             reason = " ".join(args[6:]) if len(args) > 6 else "Рекомендуемый товар"
+            if not url.lower().startswith(("http://", "https://")):
+                await message.answer("❌ Ссылка должна начинаться с http:// или https://")
+                return
 
             if add_recommended_product(title, url, price, category, brand, reason):
 
@@ -1061,10 +1570,10 @@ async def admin_recommend(message: types.Message, args: List[str]):
                 ])
                 await message.answer(
                     f"✅ <b>Продукт успешно добавлен!</b>\n\n"
-                    f"📦 <b>{title}</b>\n"
-                    f"💰 {price or 'Цена не указана'}\n"
-                    f"🎯 {category or 'Категория не указана'}\n"
-                    f"🏷️ {brand or 'Бренд не указан'}",
+                    f"📦 <b>{_safe_html(title)}</b>\n"
+                    f"💰 {_safe_html(price or 'Цена не указана')}\n"
+                    f"🎯 {_safe_html(category or 'Категория не указана')}\n"
+                    f"🏷️ {_safe_html(brand or 'Бренд не указан')}",
                     reply_markup=keyboard,
                     parse_mode="HTML"
                 )
@@ -1195,8 +1704,11 @@ async def _admin_recommend_list(message: types.Message):
 
     for i, product in enumerate(products[:10], 1):
         priority_stars = "⭐" * min(product.get('priority', 0), 3)
-        response += f"{i}. {priority_stars} <b>{product['title'][:30]}</b>\n"
-        response += f"   💰 {product['price'] or '—'} | 🎯 {product['category'] or '—'}\n"
+        safe_title = _safe_html(str(product.get('title') or '')[:30])
+        safe_price = _safe_html(product.get('price') or '—')
+        safe_category = _safe_html(product.get('category') or '—')
+        response += f"{i}. {priority_stars} <b>{safe_title}</b>\n"
+        response += f"   💰 {safe_price} | 🎯 {safe_category}\n"
 
 
         keyboard_buttons.append([
