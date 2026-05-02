@@ -144,7 +144,7 @@ Key paths:
 - `scraper.py` - Trendyol data extraction and trend/history helpers.
 - `services/notification_service.py` - notifications and charts.
 - `locales/` - translation files.
-- `tools/diagnostics/` - readiness and deploy smoke checks.
+- `tools/diagnostics/deploy_smoke_check.py` - deploy smoke validation.
 - `tests/` - behavioral and unit tests.
 
 ## Data And Security

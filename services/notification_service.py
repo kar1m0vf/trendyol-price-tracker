@@ -4,7 +4,7 @@ Service for handling notifications and alerts.
 import asyncio
 import logging
 import os
-from typing import Optional, List, Tuple, Union
+from typing import Optional, List, Tuple, Union, Any
 from datetime import datetime
 
 from aiogram import Bot
@@ -31,6 +31,7 @@ class NotificationService:
         image: Optional[str] = None,
         timeout_seconds: float = 10.0,
         parse_mode: Optional[str] = None,
+        reply_markup: Optional[Any] = None,
     ) -> bool:
         """
         Безопасно отправляет уведомление с таймаутом.
@@ -54,6 +55,7 @@ class NotificationService:
                             photo=image,
                             caption=text,
                             parse_mode=parse_mode,
+                            reply_markup=reply_markup,
                         ),
                         timeout=timeout_seconds
                     )
@@ -68,6 +70,7 @@ class NotificationService:
                                 user_id,
                                 text,
                                 parse_mode=parse_mode,
+                                reply_markup=reply_markup,
                             ),
                             timeout=timeout_seconds
                         )
@@ -81,6 +84,7 @@ class NotificationService:
                         user_id,
                         text,
                         parse_mode=parse_mode,
+                        reply_markup=reply_markup,
                     ),
                     timeout=timeout_seconds
                 )

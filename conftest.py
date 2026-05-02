@@ -15,7 +15,7 @@ ARTIFACTS_DIR.mkdir(exist_ok=True)
 if str(ROOT) not in sys.path:
 	sys.path.insert(0, str(ROOT))
 
-os.environ.setdefault("BOT_TOKEN", "1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi")
+os.environ.setdefault("BOT_TOKEN", "123456:TEST_TOKEN_FOR_LOCAL_TESTS_ONLY")
 os.environ.setdefault("ADMIN_IDS", "975282591")
 os.environ.setdefault("DATABASE_PATH", str(ARTIFACTS_DIR / "pytest_trendyol_bot.db"))
 

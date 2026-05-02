@@ -70,3 +70,11 @@ artifacts/
 # Private owner docs
 docs/guides/OPERATIONS.md
 docs/private/
+
+# Local owner launch/debug helpers
+start_bot.bat
+start_bot.ps1
+checklist.sh
+tools/*.html
+tools/private/
+tools/debug/

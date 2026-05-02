@@ -3,7 +3,7 @@ import json
 import logging
 import sqlite3
 import html
-from typing import Optional, List, Tuple, Dict, Any
+from typing import Optional, List, Tuple, Dict, Any, Union
 from datetime import datetime, timedelta
 import io
 import re
@@ -298,6 +298,7 @@ async def send_notification_with_timeout(
     image: Optional[str] = None,
     timeout: float = 10.0,
     parse_mode: Optional[str] = None,
+    reply_markup: Optional[InlineKeyboardMarkup] = None,
 ) -> bool:
     """
     Send notification with timeout and proper error handling.
@@ -319,6 +320,7 @@ async def send_notification_with_timeout(
             image=image,
             timeout_seconds=timeout,
             parse_mode=parse_mode,
+            reply_markup=reply_markup,
         )
     except Exception:
         logger.exception("notification_service.send_notification_safe failed")
@@ -712,6 +714,238 @@ def _mode_text_for_user(user_id: int, mode: Optional[str]) -> str:
 def _product_link_html(user_id: int, url: str) -> str:
     safe_url = html.escape(url or "", quote=True)
     return f'<a href="{safe_url}">{html.escape(t(user_id, "subscription_card_open"))}</a>'
+
+
+NotificationItem = Union[Tuple[str, Optional[str]], Dict[str, Any]]
+
+_PRICE_NOTIFICATION_TITLE_KEYS = {
+    "hourly": "notification_title_hourly",
+    "discount_drop": "notification_title_discount_drop",
+    "percent_drop": "notification_title_percent_drop",
+    "percent_increase": "notification_title_percent_increase",
+    "below_min": "notification_title_below_min",
+    "above_max": "notification_title_above_max",
+    "target_hit": "notification_title_target_hit",
+}
+
+_PRICE_NOTIFICATION_ICONS = {
+    "hourly": "🔔",
+    "discount_drop": "📉",
+    "percent_drop": "📉",
+    "percent_increase": "📈",
+    "below_min": "📊",
+    "above_max": "📊",
+    "target_hit": "🎯",
+}
+
+
+def _notification_title_for_reason(user_id: int, reason: str) -> str:
+    key = _PRICE_NOTIFICATION_TITLE_KEYS.get(reason, "notification_title_hourly")
+    return t(user_id, key)
+
+
+def _notification_icon_for_reason(reason: str) -> str:
+    return _PRICE_NOTIFICATION_ICONS.get(reason, "🔔")
+
+
+def _format_notification_percent(percent: Optional[float]) -> Optional[str]:
+    if percent is None:
+        return None
+    try:
+        value = float(percent)
+    except (TypeError, ValueError):
+        return None
+    if abs(value) < 0.05:
+        value = 0.0
+    sign = "+" if value > 0 else ""
+    return f"{sign}{value:.1f}%"
+
+
+def _price_notification_keyboard(user_id: int, sub_id: int, url: str) -> InlineKeyboardMarkup:
+    rows = []
+    if url:
+        rows.append([
+            InlineKeyboardButton(text=t(user_id, "btn_view_product"), url=url)
+        ])
+    rows.append([
+        InlineKeyboardButton(text=t(user_id, "btn_history"), callback_data=f"history:{sub_id}"),
+        InlineKeyboardButton(text=t(user_id, "btn_edit"), callback_data=f"edit_sub:{sub_id}"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _grouped_notifications_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=t(user_id, "btn_subs"), callback_data="subs:list")
+    ]])
+
+
+def format_price_notification(
+    user_id: int,
+    *,
+    reason: str,
+    sub_id: int,
+    url: str,
+    title: Optional[str],
+    current_price: float,
+    old_price: Optional[float] = None,
+    percent: Optional[float] = None,
+    target_price: Optional[float] = None,
+    min_price: Optional[float] = None,
+    max_price: Optional[float] = None,
+) -> str:
+    title_text = html.escape(_short_title(title, url, limit=110))
+    public_label = html.escape(_subscription_public_label(user_id, sub_id))
+    current_price_text = html.escape(_format_price_for_user(user_id, current_price))
+    icon = _notification_icon_for_reason(reason)
+    reason_title = html.escape(_notification_title_for_reason(user_id, reason))
+
+    lines = [
+        f"{icon} <b>{reason_title}</b>",
+        "",
+        f"<code>{public_label}</code> <b>{title_text}</b>",
+        f"💰 {html.escape(t(user_id, 'current_price'))}: <b>{current_price_text}</b>",
+    ]
+
+    if old_price is not None:
+        old_price_text = html.escape(_format_price_for_user(user_id, old_price))
+        lines.append(
+            f"↩️ {html.escape(t(user_id, 'notification_previous_price'))}: <s>{old_price_text}</s>"
+        )
+
+    percent_text = _format_notification_percent(percent)
+    if percent_text is not None:
+        lines.append(
+            f"📊 {html.escape(t(user_id, 'notification_change'))}: "
+            f"<b>{html.escape(percent_text)}</b>"
+        )
+
+    if target_price is not None:
+        target_text = html.escape(_format_price_for_user(user_id, target_price))
+        lines.append(
+            f"🎯 {html.escape(t(user_id, 'notification_target_price'))}: <b>{target_text}</b>"
+        )
+    if min_price is not None:
+        min_text = html.escape(_format_price_for_user(user_id, min_price))
+        lines.append(
+            f"⬇️ {html.escape(t(user_id, 'min_price_label'))}: <b>{min_text}</b>"
+        )
+    if max_price is not None:
+        max_text = html.escape(_format_price_for_user(user_id, max_price))
+        lines.append(
+            f"⬆️ {html.escape(t(user_id, 'max_price_label'))}: <b>{max_text}</b>"
+        )
+
+    lines.extend(["", html.escape(t(user_id, "notification_open_hint"))])
+    return "\n".join(lines)
+
+
+def summarize_price_notification(
+    user_id: int,
+    *,
+    reason: str,
+    sub_id: int,
+    url: str,
+    title: Optional[str],
+    current_price: float,
+    old_price: Optional[float] = None,
+    percent: Optional[float] = None,
+    target_price: Optional[float] = None,
+    min_price: Optional[float] = None,
+    max_price: Optional[float] = None,
+) -> str:
+    title_text = html.escape(_short_title(title, url, limit=80))
+    public_label = html.escape(_subscription_public_label(user_id, sub_id))
+    current_price_text = html.escape(_format_price_for_user(user_id, current_price))
+    icon = _notification_icon_for_reason(reason)
+
+    details = [f"{html.escape(t(user_id, 'current_price'))}: <b>{current_price_text}</b>"]
+    if old_price is not None:
+        old_price_text = html.escape(_format_price_for_user(user_id, old_price))
+        details.insert(0, f"<s>{old_price_text}</s> → <b>{current_price_text}</b>")
+    percent_text = _format_notification_percent(percent)
+    if percent_text is not None:
+        details.append(f"{html.escape(t(user_id, 'notification_change'))}: <b>{html.escape(percent_text)}</b>")
+    if target_price is not None:
+        details.append(
+            f"{html.escape(t(user_id, 'notification_target_price'))}: "
+            f"<b>{html.escape(_format_price_for_user(user_id, target_price))}</b>"
+        )
+    if min_price is not None:
+        details.append(
+            f"{html.escape(t(user_id, 'min_price_label'))}: "
+            f"<b>{html.escape(_format_price_for_user(user_id, min_price))}</b>"
+        )
+    if max_price is not None:
+        details.append(
+            f"{html.escape(t(user_id, 'max_price_label'))}: "
+            f"<b>{html.escape(_format_price_for_user(user_id, max_price))}</b>"
+        )
+
+    return f"{icon} <code>{public_label}</code> <b>{title_text}</b>\n   " + " · ".join(details)
+
+
+def build_price_notification_payload(
+    user_id: int,
+    *,
+    reason: str,
+    sub_id: int,
+    url: str,
+    title: Optional[str],
+    image: Optional[str],
+    current_price: float,
+    old_price: Optional[float] = None,
+    percent: Optional[float] = None,
+    target_price: Optional[float] = None,
+    min_price: Optional[float] = None,
+    max_price: Optional[float] = None,
+) -> Dict[str, Any]:
+    common = {
+        "user_id": user_id,
+        "reason": reason,
+        "sub_id": sub_id,
+        "url": url,
+        "title": title,
+        "current_price": current_price,
+        "old_price": old_price,
+        "percent": percent,
+        "target_price": target_price,
+        "min_price": min_price,
+        "max_price": max_price,
+    }
+    return {
+        "text": format_price_notification(**common),
+        "summary_html": summarize_price_notification(**common),
+        "image": image,
+        "reply_markup": _price_notification_keyboard(user_id, sub_id, url),
+        "parse_mode": "HTML",
+    }
+
+
+def _notification_delivery_parts(
+    notification: NotificationItem,
+) -> Tuple[str, Optional[str], Optional[InlineKeyboardMarkup], Optional[str]]:
+    if isinstance(notification, dict):
+        return (
+            str(notification.get("text") or ""),
+            notification.get("image"),
+            notification.get("reply_markup"),
+            notification.get("parse_mode"),
+        )
+
+    text, image = notification
+    return text, image, None, None
+
+
+def _notification_summary_html(notification: NotificationItem) -> str:
+    if isinstance(notification, dict):
+        summary = notification.get("summary_html")
+        if summary:
+            return str(summary)
+        return html.escape(str(notification.get("text") or ""))
+
+    text, _image = notification
+    return html.escape(text)
 
 
 def format_subscription_added_card(
@@ -2225,33 +2459,35 @@ async def cmd_unsubscribe_all(message: types.Message):
 scheduler = AsyncIOScheduler()
 
 
-async def send_grouped_notifications(grouped_notifications: Dict[int, List[Tuple[str, Optional[str]]]]) -> None:
-    """
-    Отправляет групповые уведомления пользователям с защитой от race conditions.
-    grouped_notifications: user_id -> [(notification_text, image_url), ...]
-    """
+async def send_grouped_notifications(grouped_notifications: Dict[int, List[NotificationItem]]) -> None:
+    """Send price notifications grouped by user."""
 
     async with scheduler_lock:
         for user_id, notifications in grouped_notifications.items():
             try:
                 if len(notifications) == 1:
-
-                    text, image = notifications[0]
-
-                    await send_notification_with_timeout(user_id, text, image, timeout=15.0)
+                    text, image, reply_markup, parse_mode = _notification_delivery_parts(notifications[0])
+                    await send_notification_with_timeout(
+                        user_id,
+                        text,
+                        image,
+                        timeout=15.0,
+                        parse_mode=parse_mode,
+                        reply_markup=reply_markup,
+                    )
                 else:
+                    grouped_text = (
+                        f"🔔 <b>{html.escape(t(user_id, 'notifications_group_title'))}</b> "
+                        f"({len(notifications)})\n\n"
+                    )
 
-                    grouped_text = f"🔔 <b>ОБНОВЛЕНИЯ ЦЕН</b> ({len(notifications)})\n\n"
-
-                    for i, (text, image) in enumerate(notifications[:10], 1):
-
-                        clean_text = text.replace("💰 ", "").replace("📉 ", "").replace("📈 ", "")
-                        grouped_text += f"{i}. {clean_text}\n"
+                    for i, notification in enumerate(notifications[:10], 1):
+                        grouped_text += f"{i}. {_notification_summary_html(notification)}\n\n"
 
                     if len(notifications) > 10:
-                        grouped_text += f"\n... и ещё {len(notifications) - 10} обновлений"
-
-
+                        grouped_text += html.escape(
+                            t(user_id, "notifications_more").format(count=len(notifications) - 10)
+                        )
 
                     await send_notification_with_timeout(
                         user_id,
@@ -2259,6 +2495,7 @@ async def send_grouped_notifications(grouped_notifications: Dict[int, List[Tuple
                         image=None,
                         timeout=15.0,
                         parse_mode="HTML",
+                        reply_markup=_grouped_notifications_keyboard(user_id),
                     )
 
             except Exception as e:
@@ -2373,60 +2610,94 @@ async def _check_all_impl(trigger: str = "scheduler") -> Dict[str, Any]:
 
 
                 notification_needed = False
-                notification_text = None
+                notification_details: Optional[Dict[str, Any]] = None
+
+                change_percent = None
+                try:
+                    if float(last_price) != 0:
+                        change_percent = ((float(price) - float(last_price)) / float(last_price)) * 100
+                except (TypeError, ValueError, ZeroDivisionError):
+                    change_percent = None
 
 
                 if price_alert is not None and price <= price_alert:
                     notification_needed = True
-                    notification_text = (
-                        f"🎯 Цена достигла целевого значения!\n"
-                        f"Целевая цена: {price_alert:.0f} TL\n"
-                        f"Текущая цена: {price:.0f} TL\n"
-                        f"🔗 {url}"
-                    )
-
+                    notification_details = {
+                        "reason": "target_hit",
+                        "old_price": last_price if price != last_price else None,
+                        "percent": change_percent,
+                        "target_price": price_alert,
+                    }
                     update_subscription_settings(sub_id, price_alert=None)
 
                 elif mode == "hourly":
                     notification_needed = True
-                    notification_text = t(user_id, "hourly_msg").format(price=price, url=url)
+                    notification_details = {
+                        "reason": "hourly",
+                    }
 
                 elif mode == "discount":
-                    price_changed_percent = ((last_price - price) / last_price) * 100
+                    price_changed_percent = abs(change_percent) if change_percent is not None else 0
 
                     if notify_percent and abs(price_changed_percent) >= notify_percent:
                         notification_needed = True
                         if price < last_price:
-                            notification_text = t(user_id, "discount_percent_decrease_msg").format(
-                                old=last_price, new=price, percent=abs(price_changed_percent), url=url
-                            )
+                            notification_details = {
+                                "reason": "percent_drop",
+                                "old_price": last_price,
+                                "percent": change_percent,
+                            }
                         else:
-                            notification_text = t(user_id, "discount_percent_increase_msg").format(
-                                old=last_price, new=price, percent=price_changed_percent, url=url
-                            )
+                            notification_details = {
+                                "reason": "percent_increase",
+                                "old_price": last_price,
+                                "percent": change_percent,
+                            }
                     elif price < last_price:
                         notification_needed = True
-                        notification_text = t(user_id, "discount_msg").format(
-                            old=last_price, new=price, url=url
-                        )
+                        notification_details = {
+                            "reason": "discount_drop",
+                            "old_price": last_price,
+                            "percent": change_percent,
+                        }
 
 
-                if min_price is not None and price < min_price:
+                if min_price is not None and price < min_price and (
+                    not notification_details or notification_details.get("reason") != "target_hit"
+                ):
                     notification_needed = True
-                    notification_text = t(user_id, "price_below_min_msg").format(
-                        price=price, min_price=min_price, url=url
-                    )
-                elif max_price is not None and price > max_price:
+                    notification_details = {
+                        "reason": "below_min",
+                        "old_price": last_price if price != last_price else None,
+                        "percent": change_percent,
+                        "min_price": min_price,
+                    }
+                elif max_price is not None and price > max_price and (
+                    not notification_details or notification_details.get("reason") != "target_hit"
+                ):
                     notification_needed = True
-                    notification_text = t(user_id, "price_above_max_msg").format(
-                        price=price, max_price=max_price, url=url
-                    )
+                    notification_details = {
+                        "reason": "above_max",
+                        "old_price": last_price if price != last_price else None,
+                        "percent": change_percent,
+                        "max_price": max_price,
+                    }
 
-                if notification_needed and notification_text:
+                if notification_needed and notification_details:
 
                     if user_id not in grouped_notifications:
                         grouped_notifications[user_id] = []
-                    grouped_notifications[user_id].append((notification_text, image))
+                    grouped_notifications[user_id].append(
+                        build_price_notification_payload(
+                            user_id,
+                            sub_id=sub_id,
+                            url=url,
+                            title=title,
+                            image=image,
+                            current_price=price,
+                            **notification_details,
+                        )
+                    )
 
                     alerted_count += 1
                     update_notify_time(sub_id)
