@@ -11,7 +11,7 @@ import os
 import csv
 import time
 import aiohttp
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from aiogram import Bot, Dispatcher, Router, types
 from aiogram.filters import Command
@@ -76,7 +76,7 @@ def _parse_kv_floats(text: Optional[str]) -> Dict[str, float]:
 from database import update_subscription_meta
 from database import add_price_point, get_price_history, get_last_price_point, save_price_point, get_local_price_history
 from database import get_price_stats, get_top_price_drops
-from middleware import AntiSpamMiddleware
+from middleware import ActivityLogMiddleware, AntiSpamMiddleware
 from scraper import (
     get_trending_all_top3_async,
     get_trending_by_search_top3_async,
@@ -236,6 +236,8 @@ def create_app(
         _database_initialized = True
 
     if setup_middleware and not _middleware_configured:
+        dp.message.middleware(ActivityLogMiddleware())
+        dp.callback_query.middleware(ActivityLogMiddleware())
         dp.message.middleware(AntiSpamMiddleware())
         dp.callback_query.middleware(AntiSpamMiddleware())
         _middleware_configured = True
@@ -337,22 +339,96 @@ def convert_to_turkish_url(url: str) -> str:
         return turkish_url
     return url
 
+
+_SUPPORTED_URL_RE = re.compile(
+    r"(?i)\b(?:https?://)?(?:www\.)?(?:trendyol\.com|ty\.gl)/[^\s<>()]+"
+)
+_TRAILING_URL_CHARS = ".,;:!?)\\]}'\""
+
+
+def _trim_url_candidate(value: str) -> str:
+    return (value or "").strip().rstrip(_TRAILING_URL_CHARS)
+
+
+def ensure_url_scheme(url: str) -> str:
+    u = _trim_url_candidate(url)
+    if not u:
+        return ""
+    if re.match(r"(?i)^https?://", u):
+        return u
+    if re.match(r"(?i)^(?:www\.)?(?:trendyol\.com|ty\.gl)(?:/|$)", u):
+        return f"https://{u}"
+    return u
+
+
+def extract_supported_url(text: str) -> str:
+    """Return the first supported Trendyol/ty.gl URL from a user message."""
+    raw = (text or "").strip()
+    match = _SUPPORTED_URL_RE.search(raw)
+    if match:
+        return ensure_url_scheme(match.group(0))
+    return ensure_url_scheme(raw)
+
+
+def is_trendyol_short_url(url: str) -> bool:
+    if not url or not isinstance(url, str):
+        return False
+    try:
+        parsed = urlparse(ensure_url_scheme(url))
+        host = (parsed.hostname or "").lower().rstrip(".")
+        return host in {"ty.gl", "www.ty.gl"} and bool(parsed.path.strip("/"))
+    except (AttributeError, TypeError, UnicodeError):
+        return False
+
+
+def extract_trendyol_product_redirect_url(url: str) -> str:
+    """Extract product URL from Trendyol country-selection redirects."""
+    if not url or not isinstance(url, str):
+        return ""
+
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower().rstrip(".")
+        if host != "trendyol.com" and not host.endswith(".trendyol.com"):
+            return url
+
+        path = (parsed.path or "").lower()
+        if "select-country" not in path:
+            return url
+
+        callback_path = parse_qs(parsed.query, keep_blank_values=True).get("cb", [""])[0]
+        if not callback_path:
+            return url
+
+        if callback_path.startswith(("http://", "https://")):
+            return callback_path
+        if callback_path.startswith("/"):
+            scheme = parsed.scheme or "https"
+            netloc = parsed.netloc or "www.trendyol.com"
+            return f"{scheme}://{netloc}{callback_path}"
+    except Exception:
+        logger.debug("Could not extract Trendyol product redirect URL", exc_info=True)
+
+    return url
+
+
 async def resolve_short_url(url: str) -> str:
     """Resolve Trendyol short URLs (ty.gl) and convert to Turkish version"""
+    url = ensure_url_scheme(extract_supported_url(url))
     original_url = url
-    if "ty.gl/" in url:
+    if is_trendyol_short_url(url):
         try:
 
 
-            import aiohttp
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, allow_redirects=True, timeout=10) as response:
                     final_url = str(response.url)
-                    if "trendyol.com" in final_url:
-                        url = final_url
+                    if "trendyol.com" in final_url.lower():
+                        url = extract_trendyol_product_redirect_url(final_url)
         except Exception as e:
             logger.warning(f"Failed to resolve short URL {original_url}: {e}")
 
+    url = extract_trendyol_product_redirect_url(url)
 
     url = convert_to_turkish_url(url)
     return url
@@ -523,84 +599,18 @@ async def send_history_for_subscription(user_id: int, sub_id: int, url: str):
     await send_history_plot(user_id, url, hist)
 
 
-from typing import List, Tuple, Set
-
-TREND_SEARCH_AWAIT: Set[int] = set()
-
-def trending_menu_kb(user_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text=t(user_id, "trending_btn_all"), callback_data="trend:all"),
-            InlineKeyboardButton(text=t(user_id, "trending_btn_category"), callback_data="trend:catmenu"),
-            InlineKeyboardButton(text=t(user_id, "trending_btn_search"), callback_data="trend:search")
-        ]
-    ])
-
-def trending_categories_kb(user_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text=t(user_id, "trending_cat_electronics"), callback_data="trend:cat:electronics"),
-            InlineKeyboardButton(text=t(user_id, "trending_cat_clothing"), callback_data="trend:cat:clothing"),
-        ],
-        [
-            InlineKeyboardButton(text=t(user_id, "trending_cat_shoes"), callback_data="trend:cat:shoes"),
-            InlineKeyboardButton(text=t(user_id, "trending_cat_home"), callback_data="trend:cat:home"),
-        ],
-        [
-            InlineKeyboardButton(text=t(user_id, "trending_btn_back"), callback_data="trend:menu"),
-        ],
-    ])
-
-def format_trending_items(user_id: int, items: List[Tuple[str, Optional[float], str]]) -> str:
-    lines = []
-    for index, (title, price, url) in enumerate(items[:3], start=1):
-        safe_title = html.escape(_short_title(title, url, limit=96), quote=False)
-        price_str = html.escape(_format_price_for_user(user_id, price), quote=False)
-        lines.append(
-            f"{index}. <b>{safe_title}</b>\n"
-            f"   {t(user_id, 'trending_price_label')}: {price_str}"
-        )
-    return "\n\n".join(lines)
-
-def trending_results_kb(
-    user_id: int,
-    items: List[Tuple[str, Optional[float], str]],
-    *,
-    refresh_callback: str = "trend:all",
-) -> InlineKeyboardMarkup:
-    rows = []
-    for index, (title, _price, url) in enumerate(items[:3], start=1):
-        safe_url = (url or "").strip()
-        if not safe_url.startswith("http"):
-            continue
-        label = _short_title(title, safe_url, limit=44)
-        rows.append([
-            InlineKeyboardButton(text=f"{index}. {label}", url=safe_url)
-        ])
-
-    rows.extend([
-        [
-            InlineKeyboardButton(text=t(user_id, "trending_btn_refresh"), callback_data=refresh_callback),
-            InlineKeyboardButton(text=t(user_id, "trending_btn_search"), callback_data="trend:search"),
-        ],
-        [
-            InlineKeyboardButton(text=t(user_id, "trending_btn_category"), callback_data="trend:catmenu"),
-        ],
-    ])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+from services.trending_service import (
+    TREND_SEARCH_AWAIT,
+    format_trending_items,
+    send_trending_list as _send_trending_list,
+    trending_categories_kb,
+    trending_menu_kb,
+    trending_results_kb,
+)
 
 
 async def send_trending_list(user_id: int, items: List[Tuple[str, Optional[float], str]]):
-    if not items:
-        await bot.send_message(user_id, t(user_id, "trending_unavailable"))
-        return
-    header = t(user_id, "trending_header")
-    await bot.send_message(
-        user_id,
-        header + "\n\n" + format_trending_items(user_id, items),
-        reply_markup=trending_results_kb(user_id, items),
-        parse_mode="HTML",
-    )
+    await _send_trending_list(_get_runtime_bot(), user_id, items)
 
 
 def get_main_kb(user_id: int) -> ReplyKeyboardMarkup:
@@ -739,7 +749,10 @@ def _format_price_for_user(user_id: int, price: Optional[float]) -> str:
     if price is None:
         return t(user_id, "unknown_price")
     try:
-        return f"{float(price):.0f} TL"
+        value = float(price)
+        amount = f"{value:.0f}" if abs(value - round(value)) < 0.005 else f"{value:.2f}".rstrip("0").rstrip(".")
+        currency = getattr(price, "currency", None) or "TL"
+        return f"{amount} {currency}"
     except (TypeError, ValueError):
         return t(user_id, "unknown_price")
 
@@ -748,6 +761,114 @@ def _mode_text_for_user(user_id: int, mode: Optional[str]) -> str:
     if mode == "hourly":
         return t(user_id, "mode_hourly")
     return t(user_id, "mode_discount")
+
+
+def _get_scheduler_next_check_timestamp() -> Optional[int]:
+    try:
+        current_scheduler = globals().get("scheduler")
+        if current_scheduler is None:
+            return None
+
+        job = current_scheduler.get_job(CHECK_ALL_JOB_ID)
+        next_run_time = getattr(job, "next_run_time", None) if job else None
+        if not next_run_time:
+            return None
+
+        return int(next_run_time.timestamp())
+    except Exception:
+        logger.debug("Could not read scheduler next check time", exc_info=True)
+        return None
+
+
+def _check_interval_seconds() -> int:
+    try:
+        minutes = int(globals().get("CHECK_ALL_INTERVAL_MINUTES", 60) or 60)
+    except (TypeError, ValueError):
+        minutes = 60
+    return max(60, minutes * 60)
+
+
+def _next_scheduled_check_at_or_after(target_ts: int) -> Optional[int]:
+    next_check_ts = _get_scheduler_next_check_timestamp()
+    if not next_check_ts:
+        return None
+
+    if next_check_ts >= target_ts:
+        return next_check_ts
+
+    interval_seconds = _check_interval_seconds()
+    delta = target_ts - next_check_ts
+    steps = (delta + interval_seconds - 1) // interval_seconds
+    return next_check_ts + steps * interval_seconds
+
+
+def _is_quiet_hour(hour: int, quiet_start: int, quiet_end: int) -> bool:
+    if quiet_start <= quiet_end:
+        return quiet_start <= hour < quiet_end
+    return hour >= quiet_start or hour < quiet_end
+
+
+def _next_allowed_scheduled_check(user_id: int, target_ts: int) -> Optional[int]:
+    scheduled_ts = _next_scheduled_check_at_or_after(target_ts)
+    if scheduled_ts is None:
+        return None
+
+    try:
+        _lang, quiet_start, quiet_end = get_user_settings(user_id)
+        quiet_start = int(quiet_start)
+        quiet_end = int(quiet_end)
+    except Exception:
+        quiet_start, quiet_end = 23, 7
+
+    interval_seconds = _check_interval_seconds()
+    max_steps = max(1, (7 * 24 * 60 * 60) // interval_seconds + 1)
+    for _ in range(max_steps):
+        if not _is_quiet_hour(datetime.fromtimestamp(scheduled_ts).hour, quiet_start, quiet_end):
+            return scheduled_ts
+        scheduled_ts += interval_seconds
+
+    return scheduled_ts
+
+
+def _format_next_notify_timestamp(ts: int) -> str:
+    dt = datetime.fromtimestamp(ts)
+    if dt.date() == datetime.now().date():
+        return dt.strftime("%H:%M")
+    return dt.strftime("%d.%m %H:%M")
+
+
+def _next_notification_for_subscription_card(user_id: int, data: Dict[str, Any]) -> str:
+    if data["mode"] != "hourly":
+        return get_next_notification_time(
+            data["mode"],
+            data["last_notify_time"],
+            data["notify_interval"],
+            user_id,
+            t,
+        )
+
+    if data["last_price"] is None:
+        return t(user_id, "next_notify_after_first_check")
+
+    now = int(time.time())
+    try:
+        interval_minutes = int(data["notify_interval"] or 60)
+    except (TypeError, ValueError):
+        interval_minutes = 60
+    interval_seconds = max(60, interval_minutes * 60)
+
+    try:
+        last_notify_time = int(data["last_notify_time"]) if data["last_notify_time"] else None
+    except (TypeError, ValueError):
+        last_notify_time = None
+
+    due_ts = last_notify_time + interval_seconds if last_notify_time else now
+    target_ts = max(now, due_ts)
+    next_ts = _next_allowed_scheduled_check(user_id, target_ts) or target_ts
+
+    if next_ts <= now:
+        return t(user_id, "next_notify_next_check")
+    return _format_next_notify_timestamp(next_ts)
 
 
 def _product_link_html(user_id: int, url: str) -> str:
@@ -1028,15 +1149,7 @@ def format_subscription_card(user_id: int, sub: Tuple[Any, ...]) -> str:
     mode_text = html.escape(_mode_text_for_user(user_id, data["mode"]))
     status_text = t(user_id, "status_active") if data["last_price"] is not None else t(user_id, "status_waiting_price")
     status_icon = "✅" if data["last_price"] is not None else "⏳"
-    next_notify = html.escape(
-        get_next_notification_time(
-            data["mode"],
-            data["last_notify_time"],
-            data["notify_interval"],
-            user_id,
-            t,
-        )
-    )
+    next_notify = html.escape(_next_notification_for_subscription_card(user_id, data))
 
     lines = [
         f"{status_icon} <b>{html.escape(status_text)}</b> | <code>{public_label}</code>",
@@ -2187,7 +2300,7 @@ async def handle_url_old(message: types.Message):
     user_id = message.from_user.id
     status_message = None
     try:
-        raw = (message.text or "").strip()
+        raw = extract_supported_url(message.text or "")
 
 
         if not raw or len(raw) < 10:
@@ -2198,7 +2311,11 @@ async def handle_url_old(message: types.Message):
         url = normalize_url(url)
         url_lower = url.lower()
 
-        if "trendyol.com" not in url_lower and "ty.gl/" not in url_lower:
+        if is_trendyol_short_url(url):
+            await message.answer(t(user_id, "short_url_resolve_failed"))
+            return
+
+        if "trendyol.com" not in url_lower:
             await message.answer(t(user_id, "not_trendyol"))
             return
 
@@ -2415,70 +2532,6 @@ async def _filter_recommend(message: types.Message) -> bool:
 async def cmd_recommend_button(message: types.Message):
     """Обработчик кнопки рекомендаций в меню"""
     await cmd_recommend(message)
-
-async def _filter_trending(message: types.Message) -> bool:
-    """Filter for trending button"""
-    if not message.text:
-        return False
-    try:
-        user_id = message.from_user.id if message.from_user else 0
-        return (t(user_id, "btn_trending") == message.text or "тренд" in message.text.lower() or "трен" in message.text.lower())
-    except Exception as e:
-        logger.exception("_filter_trending error: %s", e)
-        return False
-
-@router.message(_filter_trending)
-async def cmd_trending(message: types.Message):
-    await message.answer(t(message.from_user.id, "trending_header"), reply_markup=trending_menu_kb(message.from_user.id))
-
-
-async def _filter_trending_search(message: types.Message) -> bool:
-    """Filter for trending search text input"""
-    if not message.text or message.text.startswith("/"):
-        return False
-    if not message.from_user or message.from_user.id not in TREND_SEARCH_AWAIT:
-        return False
-    return True
-
-@router.message(_filter_trending_search)
-async def trending_search_text(message: types.Message):
-    user_id = message.from_user.id
-    q = (message.text or "").strip()
-    if not q:
-        await message.answer(t(user_id, "trending_enter_query"))
-        return
-
-    if user_id in TREND_SEARCH_AWAIT:
-        TREND_SEARCH_AWAIT.remove(user_id)
-    status_message = None
-    try:
-        status_message = await _send_progress_message(
-            message,
-            t(user_id, "status_loading_trends"),
-        )
-        items = await get_trending_by_search_top3_async(q)
-        if not items:
-            await _replace_progress_message(
-                status_message,
-                t(user_id, "trending_no_results"),
-                fallback_target=message,
-            )
-            return
-        await _replace_progress_message(
-            status_message,
-            t(user_id, "trending_header") + "\n\n" + format_trending_items(user_id, items),
-            fallback_target=message,
-            reply_markup=trending_results_kb(user_id, items),
-            parse_mode="HTML",
-        )
-    except Exception as e:
-        logger.exception("trending search error: %s", e)
-        await _replace_progress_message(
-            status_message,
-            t(user_id, "trending_no_results"),
-            fallback_target=message,
-        )
-
 
 def _filter_unsubscribe(message: types.Message) -> bool:
     if not message.text or not message.from_user:
@@ -3484,6 +3537,7 @@ def _prune_decorated_legacy_handlers() -> None:
         "cmd_onboarding_try",
         "cmd_onboarding_skip",
         "cmd_onboarding_done",
+        "cmd_subscribe_ui",
     }
 
     before_msg = len(router.message.handlers)
@@ -3512,10 +3566,14 @@ def register_application_handlers() -> None:
     logger.info("Using package handler architecture")
     try:
         _prune_decorated_legacy_handlers()
-        from handlers import BasicHandler, SubscriptionHandler, AnalyticsHandler, CallbackHandler, AdminHandler
+        from handlers import BasicHandler, TrendingHandler, SubscriptionHandler, AnalyticsHandler, CallbackHandler, AdminHandler
         basic_handler = BasicHandler()
         basic_handler.register(router)
         logger.info("Basic handlers registered")
+
+        trending_handler = TrendingHandler()
+        trending_handler.register(router)
+        logger.info("Trending handlers registered")
 
         subscription_handler = SubscriptionHandler()
         subscription_handler.register(router)
@@ -3532,6 +3590,9 @@ def register_application_handlers() -> None:
         callback_handler = CallbackHandler()
         callback_handler.register(router)
         logger.info("Callback handlers registered")
+
+        basic_handler.register_fallback(router)
+        logger.info("Fallback text handler registered")
     except Exception as e:
         logger.critical("Failed to register application handlers: %s", e, exc_info=True)
         raise

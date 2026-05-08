@@ -11,9 +11,10 @@ from database import (
     update_subscription_meta, save_user_profile
 )
 from config import DEFAULT_NOTIFY_MODE
+from localization import LOCALES
 from logging_utils import action_event, actor_label, short_value
 from scraper import get_product_info_async
-from keyboards import subscription_controls_kb_for_user
+from keyboards import get_main_kb, subscription_controls_kb_for_user
 import logging
 
 
@@ -50,11 +51,44 @@ class SubscriptionHandler(BaseHandler):
         except Exception:
             await message.answer(self.t(message.from_user.id, "error_generic"))
 
+    async def _is_subscribe_button(self, message: types.Message) -> bool:
+        if not message.text or not message.from_user:
+            return False
+        try:
+            text = message.text.strip()
+            return any(locale.get("btn_subscribe") == text for locale in LOCALES.values())
+        except Exception as exc:
+            logging.getLogger(__name__).exception("Subscribe button check failed: %s", exc)
+            return False
+
+    async def _is_supported_product_link_text(self, message: types.Message) -> bool:
+        if not message.text or not message.from_user:
+            return False
+        try:
+            from bot import extract_supported_url, is_trendyol_short_url
+
+            candidate = extract_supported_url(message.text)
+            candidate_lower = candidate.lower()
+            return "trendyol.com" in candidate_lower or is_trendyol_short_url(candidate)
+        except Exception as exc:
+            logging.getLogger(__name__).exception("Product link check failed: %s", exc)
+            return False
+
+    async def handle_subscribe_button(self, message: types.Message):
+        """Guide the user to send a product link."""
+        action_event("USER", "opened add product prompt", user=actor_label(message.from_user))
+        await message.answer(
+            self.t(message.from_user.id, "send_link_prompt"),
+            reply_markup=get_main_kb(message.from_user.id),
+        )
+
     async def handle_url_subscription(self, message: types.Message):
         """Handle Trendyol URL subscription."""
         from bot import (
+            extract_supported_url,
             normalize_url,
             is_trendyol_product_url,
+            is_trendyol_short_url,
             resolve_short_url,
             send_subscription_added_message,
         )
@@ -62,12 +96,16 @@ class SubscriptionHandler(BaseHandler):
         user_id = message.from_user.id
         status_message = None
         try:
-            raw = (message.text or "").strip()
+            raw = extract_supported_url(message.text or "")
             url = await resolve_short_url(raw)
             url = normalize_url(url)
             url_lower = url.lower()
 
-            if "trendyol.com" not in url_lower and "ty.gl/" not in url_lower:
+            if is_trendyol_short_url(url):
+                await message.answer(self.t(user_id, "short_url_resolve_failed"))
+                return
+
+            if "trendyol.com" not in url_lower:
                 await message.answer(self.t(user_id, "not_trendyol"))
                 return
 
@@ -77,6 +115,12 @@ class SubscriptionHandler(BaseHandler):
 
             add_user_if_not_exists(user_id)
             save_user_profile(message.from_user)
+            try:
+                from services.trending_service import TREND_SEARCH_AWAIT
+
+                TREND_SEARCH_AWAIT.discard(user_id)
+            except Exception:
+                logging.getLogger(__name__).debug("Could not clear trending search state", exc_info=True)
             action_event("USER", "started adding product", user=actor_label(message.from_user))
 
             subs = get_user_subscriptions(user_id)
@@ -196,15 +240,15 @@ class SubscriptionHandler(BaseHandler):
 
     def register(self, dp):
         """Register all subscription-related handlers."""
-        from aiogram import F
         from aiogram.filters import Command
         
                   
         dp.message.register(self.handle_mysubs_command, Command("mysubs"))
         dp.message.register(self.handle_unsubscribe_command, Command("unsubscribe"))
+        dp.message.register(self.handle_subscribe_button, self._is_subscribe_button)
 
                                   
         dp.message.register(
             self.handle_url_subscription,
-            F.text.contains("trendyol.com") | F.text.contains("ty.gl/")
+            self._is_supported_product_link_text,
         )

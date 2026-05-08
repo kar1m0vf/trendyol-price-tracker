@@ -18,6 +18,33 @@ def test_format_trending_items_uses_cards_without_raw_urls():
     assert "https://trendyol.com" not in text
 
 
+def test_format_trending_items_preserves_detected_currency():
+    from bot import format_trending_items
+    from scraper import _parse_price_candidate
+
+    price = _parse_price_candidate("163,97 ₼")
+    text = format_trending_items(12345, [("Phone", price, "https://trendyol.com/phone-p-1")])
+
+    assert "163.97 ₼" in text
+    assert "163.97 TL" not in text
+
+
+def test_format_trending_items_removes_quick_view_label():
+    from bot import format_trending_items, trending_results_kb
+
+    items = [
+        ("Hızlı Bakış Samsung Galaxy S25 Ultra", 45000.0, "https://trendyol.com/phone-p-1"),
+    ]
+
+    text = format_trending_items(12345, items)
+    keyboard = trending_results_kb(12345, items)
+
+    assert "Hızlı" not in text
+    assert "bakış" not in text.lower()
+    assert "Samsung Galaxy S25 Ultra" in text
+    assert "Hızlı" not in keyboard.inline_keyboard[0][0].text
+
+
 def test_trending_results_keyboard_uses_url_buttons():
     from bot import trending_results_kb
 
@@ -75,3 +102,63 @@ async def test_trending_callback_edits_message_with_result_keyboard():
     _args, kwargs = cq.message.edit_text.await_args
     assert kwargs["parse_mode"] == "HTML"
     assert kwargs["reply_markup"].inline_keyboard[0][0].url == "https://trendyol.com/phone-p-1"
+
+
+@pytest.mark.asyncio
+async def test_trending_handler_consumes_search_state():
+    from handlers.trending_handler import TrendingHandler
+    from services.trending_service import TREND_SEARCH_AWAIT
+
+    msg = MagicMock()
+    msg.text = "phone"
+    msg.from_user.id = 12345
+    msg.from_user.username = "user"
+    msg.from_user.first_name = "User"
+    msg.answer = AsyncMock()
+
+    status_message = MagicMock()
+    status_message.edit_text = AsyncMock()
+
+    handler = TrendingHandler()
+    handler.send_status_message = AsyncMock(return_value=status_message)
+
+    items = [("Phone", 45000.0, "https://trendyol.com/phone-p-1")]
+    TREND_SEARCH_AWAIT.add(12345)
+    with patch("handlers.trending_handler.get_trending_by_search_top3_async", new=AsyncMock(return_value=items)):
+        await handler.handle_trending_search_text(msg)
+
+    assert 12345 not in TREND_SEARCH_AWAIT
+    status_message.edit_text.assert_awaited_once()
+    _args, kwargs = status_message.edit_text.await_args
+    assert kwargs["parse_mode"] == "HTML"
+    assert kwargs["reply_markup"].inline_keyboard[0][0].url == "https://trendyol.com/phone-p-1"
+
+
+@pytest.mark.asyncio
+async def test_trending_button_filter_ignores_trendyol_product_links():
+    from handlers.trending_handler import TrendingHandler
+
+    msg = MagicMock()
+    msg.text = "https://www.trendyol.com/jeven-brus/kiss-me-erkek-parfum-edp-50-ml-p-841178228?boutiqueId=61"
+    msg.from_user.id = 12345
+
+    handler = TrendingHandler()
+
+    assert await handler._is_trending_button(msg) is False
+
+
+@pytest.mark.asyncio
+async def test_trending_search_state_ignores_product_links():
+    from handlers.trending_handler import TrendingHandler
+    from services.trending_service import TREND_SEARCH_AWAIT
+
+    msg = MagicMock()
+    msg.text = "https://www.trendyol.com/jeven-brus/kiss-me-erkek-parfum-edp-50-ml-p-841178228?boutiqueId=61"
+    msg.from_user.id = 12345
+
+    handler = TrendingHandler()
+    TREND_SEARCH_AWAIT.add(12345)
+    try:
+        assert await handler._is_trending_search_text(msg) is False
+    finally:
+        TREND_SEARCH_AWAIT.discard(12345)

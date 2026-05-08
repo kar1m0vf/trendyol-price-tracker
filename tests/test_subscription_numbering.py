@@ -1,20 +1,31 @@
+from datetime import datetime
+import time
+
 import bot
 
 
-def _sub(sub_id: int, user_id: int = 12345, title: str = "Test product"):
+def _sub(
+    sub_id: int,
+    user_id: int = 12345,
+    title: str = "Test product",
+    mode: str = "discount",
+    last_price: float | None = 100.0,
+    notify_interval: int = 60,
+    last_notify_time: int | None = None,
+):
     return (
         sub_id,
         user_id,
         f"https://www.trendyol.com/test/product-p-{sub_id}",
-        "discount",
-        100.0,
+        mode,
+        last_price,
         title,
         None,
         90.0,
         120.0,
         None,
-        60,
-        None,
+        notify_interval,
+        last_notify_time,
         None,
     )
 
@@ -41,6 +52,28 @@ def test_subscription_card_uses_user_facing_number(monkeypatch):
 
     assert "\u2116 1" in text
     assert "ID 120" not in text
+
+
+def test_subscription_card_uses_scheduler_time_for_due_hourly(monkeypatch):
+    now = int(time.time())
+    next_check = now + 600
+    sub = _sub(120, mode="hourly", last_notify_time=now - 3600)
+    monkeypatch.setattr(bot, "get_user_subscriptions", lambda user_id: [sub])
+    monkeypatch.setattr(bot, "_get_scheduler_next_check_timestamp", lambda: next_check)
+    monkeypatch.setattr(bot, "get_user_settings", lambda user_id: ("ru", 0, 0))
+
+    text = bot.format_subscription_card(12345, sub)
+
+    assert datetime.fromtimestamp(next_check).strftime("%H:%M") in text
+
+
+def test_subscription_card_waits_for_first_price_before_hourly_notification(monkeypatch):
+    sub = _sub(120, mode="hourly", last_price=None)
+    monkeypatch.setattr(bot, "get_user_subscriptions", lambda user_id: [sub])
+
+    text = bot.format_subscription_card(12345, sub)
+
+    assert bot.t(12345, "next_notify_after_first_check") in text
 
 
 def test_resolve_user_subscription_ref_prefers_visible_number(monkeypatch):

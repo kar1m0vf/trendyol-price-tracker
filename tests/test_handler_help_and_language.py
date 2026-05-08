@@ -52,6 +52,22 @@ async def test_basic_help_full_shows_full_text_without_button():
 
 
 @pytest.mark.asyncio
+async def test_basic_fallback_guides_unrecognized_text():
+    handler = BasicHandler()
+    handler.t = lambda _uid, key, **_kwargs: {"fallback_text": "SEND_LINK_HINT"}[key]
+
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=1003),
+        text="hello",
+        answer=AsyncMock(),
+    )
+
+    await handler.handle_unrecognized_text(message)
+
+    message.answer.assert_awaited_once_with("SEND_LINK_HINT")
+
+
+@pytest.mark.asyncio
 async def test_callback_help_full_branch_edits_message():
     handler = CallbackHandler()
     translations = {

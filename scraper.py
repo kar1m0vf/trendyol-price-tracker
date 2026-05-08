@@ -31,6 +31,44 @@ TRENDING_CACHE_TTL = 600
 TRENDING_STALE_TTL = 6 * 3600
 TRENDING_CACHE: Dict[str, Tuple[List[Tuple[str, Optional[float], str]], float]] = {}
 
+_TRENDING_TITLE_NOISE_RE = re.compile(
+    r"(?:h[\u0131iI\u0130]zl[\u0131iI\u0130]\s*bak[\u0131iI\u0130][\u015fs\u015eS]|hizli\s*bakis|quick\s*view)",
+    re.IGNORECASE,
+)
+_TRENDING_TITLE_PREFIX_RE = re.compile(
+    r"^\s*En\s+(?:\u00c7ok|Cok)\s+(?:Satan|Ziyaret\s+Edilen)\s+\d+\.\s+(?:\u00dcr\u00fcn|Urun)\s+",
+    re.IGNORECASE,
+)
+_TRENDING_TITLE_LABEL_RE = re.compile(
+    r"\b(?:Az\u0259rbaycana\s+\u00d6z\u0259l\s+Endirim|Kargo\s+Bedava|\u0259lav\u0259\s+endirim|Sepete\s+Ekle)\b",
+    re.IGNORECASE,
+)
+_TRENDING_TITLE_RATING_SUFFIX_RE = re.compile(r"\s+\d(?:[.,]\d)?\s*\(\s*\d+\s*\).*$")
+_TRENDING_TITLE_PRICE_SUFFIX_RE = re.compile(
+    r"\s+(?:-?%\d+(?:[.,]\d+)?\s*)?"
+    r"(?:\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?)\s*"
+    r"(?:TL|TRY|\u20ba|AZN|\u20bc).*$",
+    re.IGNORECASE,
+)
+_TRENDING_TITLE_DISCOUNT_SUFFIX_RE = re.compile(r"\s+-?%\d+(?:[.,]\d+)?\s*$")
+_TRENDING_TITLE_STOCK_SUFFIX_RE = re.compile(r"(?:\s+\bVar\b)+\s*$", re.IGNORECASE)
+
+
+def clean_trending_title(title: Optional[str], url: str = "") -> str:
+    """Remove Trendyol card UI labels from product titles."""
+    raw = (title or "").replace("\u00A0", " ").strip()
+    if not raw:
+        return url
+    raw = _TRENDING_TITLE_NOISE_RE.sub(" ", raw)
+    raw = _TRENDING_TITLE_PREFIX_RE.sub(" ", raw)
+    raw = _TRENDING_TITLE_RATING_SUFFIX_RE.sub(" ", raw)
+    raw = _TRENDING_TITLE_LABEL_RE.sub(" ", raw)
+    raw = _TRENDING_TITLE_PRICE_SUFFIX_RE.sub(" ", raw)
+    raw = _TRENDING_TITLE_DISCOUNT_SUFFIX_RE.sub(" ", raw)
+    raw = _TRENDING_TITLE_STOCK_SUFFIX_RE.sub(" ", raw)
+    raw = re.sub(r"\s+", " ", raw).strip(" -|\u2022\u00b7")
+    return raw or url
+
 
 def _get_cache_key(query: str, source: str) -> str:
     """Генерирует ключ кэша для запроса."""
@@ -68,7 +106,10 @@ def _get_trending_cached_result(cache_key: str, *, allow_stale: bool = False) ->
     age = time.time() - timestamp
     max_age = TRENDING_STALE_TTL if allow_stale else TRENDING_CACHE_TTL
     if age <= max_age:
-        return list(cached_data)
+        return [
+            (clean_trending_title(title, url), price, url)
+            for title, price, url in cached_data
+        ]
 
     if age > TRENDING_STALE_TTL:
         TRENDING_CACHE.pop(cache_key, None)
@@ -78,7 +119,11 @@ def _get_trending_cached_result(cache_key: str, *, allow_stale: bool = False) ->
 def _set_trending_cached_result(cache_key: str, data: List[Tuple[str, Optional[float], str]]) -> None:
     if not data:
         return
-    TRENDING_CACHE[cache_key] = (list(data), time.time())
+    cleaned = [
+        (clean_trending_title(title, url), price, url)
+        for title, price, url in data
+    ]
+    TRENDING_CACHE[cache_key] = (cleaned, time.time())
     if len(TRENDING_CACHE) > 50:
         oldest_key = min(TRENDING_CACHE.keys(), key=lambda key: TRENDING_CACHE[key][1])
         del TRENDING_CACHE[oldest_key]
@@ -145,6 +190,226 @@ def parse_price_text(text: str) -> Optional[float]:
         return float(t)
     except Exception:
         return None
+
+
+_PRICE_KEY_RE = re.compile(
+    r"(price|fiyat|amount|selling|discount|sale|listing|market|basket|campaign)",
+    re.IGNORECASE,
+)
+_CURRENCY_PRICE_RE = re.compile(
+    r"(TL|TRY|\u20ba|AZN|\u20bc)\s*(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?)|"
+    r"(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?)\s*(TL|TRY|\u20ba|AZN|\u20bc)",
+    re.IGNORECASE,
+)
+_LISTING_PRICE_SELECTORS = (
+    '[data-price]',
+    '[data-testid*="price"]',
+    '[data-testid*="Price"]',
+    '[data-test-id*="price"]',
+    '[data-test-id*="Price"]',
+    "span.prc-dsc",
+    "span.prc-org",
+    "span.pr-new-br",
+    '[class*="prc"]',
+    '[class*="price"]',
+    '[class*="Price"]',
+    '[class*="fiyat"]',
+)
+_PRICE_ATTRS = ("data-price", "data-value", "content", "value", "title", "aria-label")
+
+
+class ParsedPrice(float):
+    def __new__(cls, value: float, currency: Optional[str] = None):
+        obj = float.__new__(cls, value)
+        obj.currency = currency
+        return obj
+
+
+def _normalize_price_currency(currency: Optional[str]) -> Optional[str]:
+    if not currency:
+        return None
+    value = str(currency).strip().upper()
+    if value in {"AZN", "\u20bc"}:
+        return "\u20bc"
+    if value in {"TL", "TRY", "\u20ba"}:
+        return "TL"
+    return currency.strip()
+
+
+def _is_reasonable_price(price: Optional[float]) -> bool:
+    return price is not None and 0 < price < 5_000_000
+
+
+def _parse_price_candidate(value: Any, *, allow_plain: bool = True) -> Optional[float]:
+    if value is None or isinstance(value, bool):
+        return None
+
+    if isinstance(value, (int, float)):
+        price = float(value)
+        return price if _is_reasonable_price(price) else None
+
+    text = str(value).replace("\u00A0", " ").strip()
+    if not text:
+        return None
+
+    for match in _CURRENCY_PRICE_RE.finditer(text):
+        groups = match.groups()
+        currency = groups[0] or groups[3]
+        amount = groups[1] or groups[2]
+        price = parse_price_text(amount or "")
+        if _is_reasonable_price(price):
+            return ParsedPrice(price, _normalize_price_currency(currency))
+
+    if allow_plain and re.fullmatch(r"[\d\s.,]+", text):
+        price = parse_price_text(text)
+        if _is_reasonable_price(price):
+            return price
+
+    return None
+
+
+def _extract_price_from_object(obj: Any, *, depth: int = 0, in_price_context: bool = False) -> Optional[float]:
+    if depth > 8:
+        return None
+
+    if not isinstance(obj, (dict, list)):
+        return _parse_price_candidate(obj) if in_price_context else None
+
+    if isinstance(obj, list):
+        for item in obj:
+            price = _extract_price_from_object(
+                item,
+                depth=depth + 1,
+                in_price_context=in_price_context,
+            )
+            if _is_reasonable_price(price):
+                return price
+        return None
+
+    priority_keys = (
+        "price",
+        "sellingPrice",
+        "discountedPrice",
+        "originalPrice",
+        "currentPrice",
+        "finalPrice",
+        "salePrice",
+        "listingPrice",
+        "marketPrice",
+        "campaignPrice",
+        "basketPrice",
+        "value",
+        "amount",
+        "text",
+        "priceText",
+        "displayPrice",
+        "formattedPrice",
+    )
+
+    for key in priority_keys:
+        if key not in obj:
+            continue
+        price = _extract_price_from_object(
+            obj.get(key),
+            depth=depth + 1,
+            in_price_context=True,
+        )
+        if _is_reasonable_price(price):
+            return price
+
+    for key, value in obj.items():
+        if key in priority_keys:
+            continue
+        if _PRICE_KEY_RE.search(str(key)):
+            price = _extract_price_from_object(
+                value,
+                depth=depth + 1,
+                in_price_context=True,
+            )
+            if _is_reasonable_price(price):
+                return price
+
+    if in_price_context:
+        for value in obj.values():
+            price = _extract_price_from_object(
+                value,
+                depth=depth + 1,
+                in_price_context=True,
+            )
+            if _is_reasonable_price(price):
+                return price
+        return None
+
+    for value in obj.values():
+        if isinstance(value, (dict, list)):
+            price = _extract_price_from_object(
+                value,
+                depth=depth + 1,
+                in_price_context=False,
+            )
+            if _is_reasonable_price(price):
+                return price
+    return None
+
+
+def _extract_price_from_element(element) -> Optional[float]:
+    for attr in _PRICE_ATTRS:
+        price = _parse_price_candidate(element.get(attr), allow_plain=True)
+        if _is_reasonable_price(price):
+            return price
+
+    text = element.get_text(" ", strip=True)
+    price = _parse_price_candidate(text, allow_plain=False)
+    if _is_reasonable_price(price):
+        return price
+
+    if len(text) <= 30:
+        price = _parse_price_candidate(text, allow_plain=True)
+        if _is_reasonable_price(price):
+            return price
+    return None
+
+
+def _extract_listing_price_from_card(card) -> Optional[float]:
+    for selector in _LISTING_PRICE_SELECTORS:
+        try:
+            for element in card.select(selector):
+                price = _extract_price_from_element(element)
+                if _is_reasonable_price(price):
+                    return price
+        except Exception:
+            continue
+
+    text = card.get_text(" ", strip=True)
+    price = _parse_price_candidate(text, allow_plain=False)
+    return price if _is_reasonable_price(price) else None
+
+
+def _dedupe_trending_items(
+    items: List[Tuple[str, Optional[float], str]],
+    limit: int,
+) -> List[Tuple[str, Optional[float], str]]:
+    positions: Dict[str, int] = {}
+    deduped: List[Tuple[str, Optional[float], str]] = []
+
+    for title, price, url in items:
+        if not url:
+            continue
+        cleaned_title = clean_trending_title(title, url)
+        index = positions.get(url)
+        if index is None:
+            positions[url] = len(deduped)
+            deduped.append((cleaned_title, price, url))
+        else:
+            old_title, old_price, old_url = deduped[index]
+            better_title = cleaned_title if cleaned_title and cleaned_title != old_url else old_title
+            better_price = price if old_price is None and price is not None else old_price
+            deduped[index] = (better_title, better_price, old_url)
+
+        if len(deduped) >= limit and all(item_price is not None for _, item_price, _ in deduped[:limit]):
+            break
+
+    return deduped[:limit]
 
 
 @retry(
@@ -1800,6 +2065,38 @@ def _abs_trendyol_url(href: str) -> str:
     return "https://www.trendyol.com/" + href.lstrip("/")
 
 
+_PRODUCT_LINK_RE = re.compile(r"(/p-|\-p\-)")
+
+
+def _product_urls_in_node(node) -> List[str]:
+    urls: List[str] = []
+    seen = set()
+    try:
+        links = node.find_all("a", href=_PRODUCT_LINK_RE)
+    except Exception:
+        return urls
+
+    for link in links:
+        url = _abs_trendyol_url(link.get("href") or "")
+        if url and url not in seen:
+            seen.add(url)
+            urls.append(url)
+    return urls
+
+
+def _find_single_product_container(anchor):
+    current = anchor
+    for _ in range(7):
+        current = getattr(current, "parent", None)
+        if current is None:
+            break
+        if len(_product_urls_in_node(current)) > 1:
+            continue
+        if _extract_listing_price_from_card(current) is not None:
+            return current
+    return None
+
+
 def _parse_listing_products(html: str, limit: int = 3) -> List[Tuple[str, Optional[float], str]]:
     """
     Пытаемся распарсить карточки товаров со страниц листинга Trendyol.
@@ -1830,17 +2127,6 @@ def _parse_listing_products(html: str, limit: int = 3) -> List[Tuple[str, Option
                 except Exception:
                     data_obj = None
 
-        def _num(x) -> Optional[float]:
-            if x is None:
-                return None
-            try:
-                return float(x)
-            except Exception:
-                try:
-                    return parse_price_text(str(x))
-                except Exception:
-                    return None
-
         def _collect_products(obj) -> List[Tuple[str, Optional[float], str]]:
             res: List[Tuple[str, Optional[float], str]] = []
             try:
@@ -1857,22 +2143,12 @@ def _parse_listing_products(html: str, limit: int = 3) -> List[Tuple[str, Option
                             v = obj.get(k)
                             if isinstance(v, str) and v.strip():
                                 title_parts.append(v.strip())
-                        title = " ".join(dict.fromkeys(title_parts)) if title_parts else ""
-
                         url = obj.get("url") or obj.get("productUrl") or ""
                         url = _abs_trendyol_url(url)
+                        title = " ".join(dict.fromkeys(title_parts)) if title_parts else ""
+                        title = clean_trending_title(title, url)
 
-                        price = None
-                                      
-                        for key in ("price", "discountedPrice", "salePrice", "listingPrice", "marketPrice"):
-                            if key in obj:
-                                cand = obj.get(key)
-                                if isinstance(cand, dict):
-                                    cand = cand.get("value") or cand.get("amount")
-                                p = _num(cand)
-                                if p:
-                                    price = p
-                                    break
+                        price = _extract_price_from_object(obj)
 
                         if title and url:
                             res.append((title, price, url))
@@ -1886,24 +2162,21 @@ def _parse_listing_products(html: str, limit: int = 3) -> List[Tuple[str, Option
 
         if data_obj is not None:
             items = _collect_products(data_obj)
-                                                 
-            seen = set()
-            deduped: List[Tuple[str, Optional[float], str]] = []
-            for title, price, url in items:
-                if not url or url in seen:
-                    continue
-                seen.add(url)
-                deduped.append((title, price, url))
-                if len(deduped) >= limit:
-                    break
+            deduped = _dedupe_trending_items(items, limit)
             if deduped:
                 return deduped
 
                           
         soup = BeautifulSoup(html, "html.parser")
-        cards = soup.select('div.p-card-wrppr, div.p-card-chldrn-cntnr, div.product-card, div.card, div.col-lg-3, div.srch-prdcts *')
+        cards = soup.select(
+            'div.p-card-wrppr, div.p-card-chldrn-cntnr, div[class*="p-card"], '
+            'div.product-card, div[class*="product-card"], div.card, div.col-lg-3'
+        )
         if cards:
             for card in cards:
+                if len(_product_urls_in_node(card)) > 1:
+                    continue
+                        
                         
                 a = card.select_one('a[href*="/p-"], a[href*="-p-"]') or card.find("a", href=re.compile("(/p-|\\-p\\-)"))
                 href = a.get("href") if a else ""
@@ -1915,37 +2188,45 @@ def _parse_listing_products(html: str, limit: int = 3) -> List[Tuple[str, Option
                     card.find("div", class_=re.compile("(prdct-desc|product|title)", re.I)) or
                     (a if a and a.get("title") else None)
                 )
-                title = (title_el.get("title") if title_el and title_el.get("title") else title_el.get_text(" ", strip=True) if title_el else "")
-                title = (title or "").strip()
-
-                      
-                price_el = (
-                    card.select_one('div[class*="prc-box"] span, span.prc-dsc, span.prc-org, span[class*="price"]')
-                    or card.find("span", class_=re.compile("prc-dsc|prc-org|price", re.I))
-                    or card.find("div", class_=re.compile("price", re.I))
+                raw_title = (
+                    title_el.get("title")
+                    if title_el and title_el.get("title")
+                    else title_el.get_text(" ", strip=True)
+                    if title_el
+                    else ""
                 )
-                price_text = price_el.get_text(" ", strip=True) if price_el else ""
-                price = parse_price_text(price_text)
+                title = clean_trending_title(raw_title, url)
+
+                price = _extract_listing_price_from_card(card)
+                if price is None:
+                    price = _parse_price_candidate(raw_title, allow_plain=False)
 
                 if title and url:
                     out.append((title, price, url))
-                    if len(out) >= limit:
-                        return out
+                    if len(out) >= limit * 4:
+                        break
 
-                                                                              
+            deduped = _dedupe_trending_items(out, limit)
+            if len(deduped) >= limit:
+                return deduped
+
+                                                                               
         for a in soup.select('a[href*="/p-"], a[href*="-p-"]'):
-            title = (a.get("title") or a.get_text(" ", strip=True) or "").strip()
             href = a.get("href") or ""
             url = _abs_trendyol_url(href)
-                                  
-            price_text = None
-            prc = a.find_next("span", class_=re.compile("(prc|price)", re.I))
-            if prc:
-                price_text = prc.get_text(" ", strip=True)
-            price = parse_price_text(price_text or "")
+            raw_title = a.get("title") or a.get_text(" ", strip=True) or ""
+            title = clean_trending_title(raw_title, url)
+            price = _parse_price_candidate(raw_title, allow_plain=False)
+            container = _find_single_product_container(a)
+            if price is None:
+                price = _extract_listing_price_from_card(container) if container else None
+            if price is None:
+                prc = a.find_next(["span", "div"], class_=re.compile("(prc|price|fiyat)", re.I))
+                if prc:
+                    price = _extract_price_from_element(prc)
             if title and url:
                 out.append((title, price, url))
-                if len(out) >= limit:
+                if len(_dedupe_trending_items(out, limit)) >= limit:
                     break
 
                                                                                             
@@ -1972,7 +2253,7 @@ def _parse_listing_products(html: str, limit: int = 3) -> List[Tuple[str, Option
                         p = requests.get(prod_url, headers=HEADERS, timeout=10)
                     if p.status_code != 200:
                         continue
-                    title = get_product_title(prod_url) or ''
+                    title = clean_trending_title(get_product_title(prod_url) or '', prod_url)
                     price = get_price(prod_url)
                     if title:
                         out.append((title, price, prod_url))
@@ -1982,7 +2263,7 @@ def _parse_listing_products(html: str, limit: int = 3) -> List[Tuple[str, Option
                     continue
     except Exception as e:
         print("_parse_listing_products error:", e)
-    return out
+    return _dedupe_trending_items(out, limit)
 
 
 def _fetch_first_working_listing(urls: List[str], limit: int = 3) -> List[Tuple[str, Optional[float], str]]:
@@ -2005,6 +2286,21 @@ def _fetch_first_working_listing(urls: List[str], limit: int = 3) -> List[Tuple[
     return []
 
 
+def _fill_missing_trending_prices(
+    items: List[Tuple[str, Optional[float], str]],
+    limit: int,
+) -> List[Tuple[str, Optional[float], str]]:
+    filled: List[Tuple[str, Optional[float], str]] = []
+    for title, price, url in items[:limit]:
+        if price is None and url and "/sr?" not in url:
+            try:
+                price = get_price(url)
+            except Exception:
+                logger.debug("Could not fill missing trending price for %s", url, exc_info=True)
+        filled.append((title, price, url))
+    return filled
+
+
 def _get_trending_listing(cache_key: str, urls: List[str], limit: int = 3) -> List[Tuple[str, Optional[float], str]]:
     cached = _get_trending_cached_result(cache_key)
     if cached is not None:
@@ -2012,6 +2308,7 @@ def _get_trending_listing(cache_key: str, urls: List[str], limit: int = 3) -> Li
 
     result = _fetch_first_working_listing(urls, limit=limit)
     if result:
+        result = _fill_missing_trending_prices(result, limit)
         _set_trending_cached_result(cache_key, result)
         return result[:limit]
 

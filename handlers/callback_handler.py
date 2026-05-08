@@ -20,6 +20,13 @@ from keyboards import subscription_controls_kb_for_user, get_main_kb
 from logging_utils import action_event, actor_label
 from localization import update_language_cache
 from user_texts import format_start_text
+from services.trending_service import (
+    TREND_SEARCH_AWAIT,
+    format_trending_items,
+    trending_categories_kb,
+    trending_menu_kb,
+    trending_results_kb,
+)
 import sqlite3
 import logging
 
@@ -76,16 +83,14 @@ class CallbackHandler(BaseHandler):
                     parts = data.split(":")
 
                     if len(parts) >= 2 and parts[1] == "menu":
-                        import bot as _bot
                         await cq.message.edit_text(
                             self.t(user_id, "trending_header"),
-                            reply_markup=_bot.trending_menu_kb(user_id),
+                            reply_markup=trending_menu_kb(user_id),
                         )
                         return
 
                     if len(parts) >= 2 and parts[1] == "all":
                         from scraper import get_trending_all_top3_async
-                        import bot as _bot
                         try:
                             await cq.message.edit_text(self.t(user_id, "status_loading_trends"), reply_markup=None)
                             status_message = cq.message
@@ -100,30 +105,28 @@ class CallbackHandler(BaseHandler):
                                 status_message,
                                 self.t(user_id, "trending_unavailable"),
                                 fallback_target=user_id,
-                                reply_markup=_bot.trending_menu_kb(user_id),
+                                reply_markup=trending_menu_kb(user_id),
                             )
                             return
                         header = self.t(user_id, "trending_header")
                         await self.replace_status_message(
                             status_message,
-                            header + "\n\n" + _bot.format_trending_items(user_id, items),
+                            header + "\n\n" + format_trending_items(user_id, items),
                             fallback_target=user_id,
-                            reply_markup=_bot.trending_results_kb(user_id, items),
+                            reply_markup=trending_results_kb(user_id, items),
                             parse_mode="HTML",
                         )
                         return
 
 
                     if len(parts) >= 2 and parts[1] == "catmenu":
-                        import bot as _bot
-                        kb = _bot.trending_categories_kb(user_id)
+                        kb = trending_categories_kb(user_id)
                         await cq.message.edit_text(self.t(user_id, "trending_choose_category"), reply_markup=kb)
                         return
 
 
                     if len(parts) >= 2 and parts[1] == "search":
-                        import bot as _bot
-                        _bot.TREND_SEARCH_AWAIT.add(user_id)
+                        TREND_SEARCH_AWAIT.add(user_id)
                         await cq.message.edit_text(self.t(user_id, "trending_enter_query"))
                         return
 
@@ -131,7 +134,6 @@ class CallbackHandler(BaseHandler):
                     if len(parts) >= 3 and parts[1] == "cat":
                         cat_key = parts[2]
                         from scraper import get_trending_by_category_top3_async
-                        import bot as _bot
                         try:
                             await cq.message.edit_text(self.t(user_id, "status_loading_trends"), reply_markup=None)
                             status_message = cq.message
@@ -146,14 +148,14 @@ class CallbackHandler(BaseHandler):
                                 status_message,
                                 self.t(user_id, "trending_no_results"),
                                 fallback_target=user_id,
-                                reply_markup=_bot.trending_categories_kb(user_id),
+                                reply_markup=trending_categories_kb(user_id),
                             )
                             return
                         await self.replace_status_message(
                             status_message,
-                            self.t(user_id, "trending_header") + "\n\n" + _bot.format_trending_items(user_id, items),
+                            self.t(user_id, "trending_header") + "\n\n" + format_trending_items(user_id, items),
                             fallback_target=user_id,
-                            reply_markup=_bot.trending_results_kb(
+                            reply_markup=trending_results_kb(
                                 user_id,
                                 items,
                                 refresh_callback=f"trend:cat:{cat_key}",

@@ -1,11 +1,90 @@
+import os
 from typing import Any, Awaitable, Callable, Dict
 from aiogram import BaseMiddleware
 from aiogram.types import Message, CallbackQuery
 import time
 from collections import defaultdict
 import logging
+from logging_utils import action_event, actor_label, short_value
 
 logger = logging.getLogger('antispam')
+
+
+def _env_flag(name: str, default: bool = True) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _event_label(event: Message | CallbackQuery) -> str:
+    return "callback" if isinstance(event, CallbackQuery) else "message"
+
+
+def _event_details(event: Message | CallbackQuery) -> Dict[str, Any]:
+    if isinstance(event, CallbackQuery):
+        return {
+            "data": short_value(getattr(event, "data", None), 100),
+            "message_id": getattr(getattr(event, "message", None), "message_id", None),
+        }
+
+    text = getattr(event, "text", None) or getattr(event, "caption", None)
+    details: Dict[str, Any] = {
+        "chat": getattr(getattr(event, "chat", None), "id", None),
+        "text": short_value(text, 100),
+    }
+    if text and text.startswith("/"):
+        details["command"] = text.split(maxsplit=1)[0]
+    return details
+
+
+class ActivityLogMiddleware(BaseMiddleware):
+    """Log user-facing activity and handler outcomes to the action log."""
+
+    def __init__(self, *, enabled: bool | None = None, log_success: bool | None = None):
+        self.enabled = _env_flag("BOT_ACTIVITY_LOG", True) if enabled is None else enabled
+        self.log_success = _env_flag("BOT_ACTIVITY_LOG_SUCCESS", True) if log_success is None else log_success
+
+    async def __call__(
+        self,
+        handler: Callable[[Message | CallbackQuery, Dict[str, Any]], Awaitable[Any]],
+        event: Message | CallbackQuery,
+        data: Dict[str, Any],
+    ) -> Any:
+        if not self.enabled:
+            return await handler(event, data)
+
+        user = getattr(event, "from_user", None)
+        event_type = _event_label(event)
+        details = _event_details(event)
+        start = time.perf_counter()
+
+        action_event("IN", f"{event_type} received", user=actor_label(user), **details)
+        try:
+            result = await handler(event, data)
+        except Exception as exc:
+            duration_ms = int((time.perf_counter() - start) * 1000)
+            action_event(
+                "ERROR",
+                f"{event_type} failed",
+                user=actor_label(user),
+                duration_ms=duration_ms,
+                error=type(exc).__name__,
+                detail=short_value(exc, 140),
+                **details,
+            )
+            raise
+
+        if self.log_success:
+            duration_ms = int((time.perf_counter() - start) * 1000)
+            action_event(
+                "OK",
+                f"{event_type} handled",
+                user=actor_label(user),
+                duration_ms=duration_ms,
+                **details,
+            )
+        return result
 
 class UserRateLimit:
     def __init__(self, limit: int, interval: float):
@@ -66,6 +145,7 @@ class AntiSpamMiddleware(BaseMiddleware):
             
         if not limiter.can_proceed(user_id):
             logger.warning(f"Rate limit exceeded for user {user_id} ({action})")
+            action_event("WARN", "rate limit exceeded", user=actor_label(event.from_user), event=action)
                                                    
             if isinstance(event, CallbackQuery):
                                                        
