@@ -48,6 +48,25 @@ def test_no_double_registration():
 
     return
 
+
+def test_router_prunes_subscription_legacy_button_handlers():
+    """Verify button flows moved to package handlers are not served by legacy callbacks."""
+    import bot
+
+    message_handler_names = [
+        getattr(handler.callback, "__name__", "")
+        for handler in bot.router.message.handlers
+    ]
+
+    assert "cmd_mysubs" not in message_handler_names
+    assert "cmd_unsubscribe_all" not in message_handler_names
+    assert message_handler_names.count("handle_mysubs_command") == 2
+    assert "handle_unsubscribe_all_button" in message_handler_names
+
+    fallback_index = message_handler_names.index("handle_unrecognized_text")
+    subscription_button_index = message_handler_names.index("handle_unsubscribe_all_button")
+    assert subscription_button_index < fallback_index
+
 def test_localization_module():
     """Тест нового модуля локализации."""
     try:

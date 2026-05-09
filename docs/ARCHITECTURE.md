@@ -44,14 +44,14 @@ SQLite + Telegram API + Trendyol
 - starting APScheduler jobs;
 - shutting down the scheduler, database connections, and HTTP session cleanly.
 
-Some legacy command helpers still live in `bot.py`, but current registration is routed through `handlers/` where possible.
+Some command helpers still live in `bot.py` while the handler package migration continues. New and migrated flows are registered through `handlers/`; remaining legacy routes are kept only where they still own current behavior.
 
 ## Handler Layers
 
 | Module | Responsibility |
 | --- | --- |
 | `handlers/basic.py` | `/start`, `/help`, `/language`, language/help buttons |
-| `handlers/subscription_handler.py` | `/mysubs`, `/unsubscribe`, Trendyol URL handling |
+| `handlers/subscription_handler.py` | `/mysubs`, `/unsubscribe`, watchlist buttons, Trendyol URL handling |
 | `handlers/analytics_handler.py` | `/stats`, `/all_list`, `/top_drops` |
 | `handlers/callback_handler.py` | Inline product controls, history, compare, alerts, trends, admin callbacks |
 | `handlers/admin_handler.py` | Admin menu, stats, users, broadcast, reports, cleanup, backups, recommendations |
@@ -68,7 +68,7 @@ Some legacy command helpers still live in `bot.py`, but current registration is 
 - price history;
 - recommendations;
 - custom bot texts;
-- exports;
+- direct CSV/JSON export payloads;
 - SQLite backup API usage.
 
 Main tables:

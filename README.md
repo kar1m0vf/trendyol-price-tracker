@@ -37,7 +37,7 @@ Read the full product flow in [User Guide](docs/guides/USER_GUIDE.md).
 
 - Add products from Trendyol URLs.
 - Track each user's own watchlist.
-- Show user-facing product numbers like `No. 1`, `No. 2`, `No. 3` instead of internal database IDs.
+- Show user-facing product numbers like `№ 1`, `№ 2`, `№ 3` instead of internal database IDs.
 - Support discount-only mode, hourly mode, target price alerts, min/max thresholds, percent-change alerts, custom notification intervals, and quiet hours.
 - Group multiple price updates into one notification when needed.
 
@@ -46,7 +46,7 @@ Read the full product flow in [User Guide](docs/guides/USER_GUIDE.md).
 - Store local price history in SQLite.
 - Show price history and statistics.
 - Generate price charts.
-- Export subscriptions and price history as CSV/JSON.
+- Export subscriptions and price history as directly delivered CSV/JSON documents.
 - Compare saved products or two direct product links.
 - Use local history first and external history helpers where available.
 
@@ -96,11 +96,11 @@ Detailed system notes are in [Architecture](docs/ARCHITECTURE.md).
 | `/start` | First launch and main menu |
 | `/help` | User help |
 | `/mysubs` | Personal tracked products |
-| `/history 1` | Price history for product `No. 1` |
+| `/history 1` | Price history for product `№ 1` |
 | `/stats 1` | Price statistics |
 | `/compare 1` | Compare a saved product |
 | `/compare <url1> <url2>` | Compare two product URLs |
-| `/price_alert 1 2500` | Notify when product `No. 1` reaches 2500 TL or lower |
+| `/price_alert 1 2500` | Notify when product `№ 1` reaches 2500 TL or lower |
 | `/settings` | Quiet hours, intervals, and thresholds |
 | `/alerts` | Manage target prices |
 | `/recommend` | Recommendations |
@@ -151,7 +151,8 @@ Key paths:
 
 - `.env` is private and ignored by git.
 - `BOT_TOKEN` must only live in environment variables or `.env`.
-- `trendyol_bot.db`, `logs/`, `backups/`, user exports, and production configuration are runtime artifacts and are not part of the public source.
+- `trendyol_bot.db`, `logs/`, `backups/`, and production configuration are runtime artifacts and are not part of the public source.
+- User export payloads are generated for direct delivery and should not be committed if saved manually.
 - If a Telegram bot token is ever exposed, it must be revoked and regenerated through `@BotFather`.
 
 ## Verification
@@ -168,7 +169,7 @@ The project includes checks for:
 - scraper parsing helpers;
 - notification flow.
 
-Recent local verification: `118 passed, 3 skipped`.
+Recent local verification: `181 passed, 3 skipped`.
 
 ## Documentation
 

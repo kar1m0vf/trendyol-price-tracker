@@ -3,6 +3,7 @@ Handlers for subscription-related commands and functionality.
 """
 from aiogram import types
 from aiogram.filters import Command
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from .base import BaseHandler
 from database import (
@@ -29,6 +30,17 @@ class SubscriptionHandler(BaseHandler):
         action_event("USER", "requested subscriptions", user=actor_label(message.from_user))
         await self._show_user_subscriptions(message)
 
+    async def _is_mysubs_button(self, message: types.Message) -> bool:
+        if not message.text or not message.from_user:
+            return False
+        try:
+            text = message.text.strip()
+            text_lower = text.lower()
+            return any(locale.get("btn_subs") == text for locale in LOCALES.values()) or "мои подпис" in text_lower
+        except Exception as exc:
+            logging.getLogger(__name__).exception("My subscriptions button check failed: %s", exc)
+            return False
+
     async def handle_unsubscribe_command(self, message: types.Message):
         """Handle /unsubscribe command."""
         from bot import resolve_user_subscription_ref
@@ -50,6 +62,25 @@ class SubscriptionHandler(BaseHandler):
             await message.answer(self.t(message.from_user.id, "sub_removed"))
         except Exception:
             await message.answer(self.t(message.from_user.id, "error_generic"))
+
+    async def _is_unsubscribe_all_button(self, message: types.Message) -> bool:
+        if not message.text or not message.from_user:
+            return False
+        try:
+            text = message.text.strip()
+            text_lower = text.lower()
+            return any(locale.get("btn_unsubscribe") == text for locale in LOCALES.values()) or "отпис" in text_lower
+        except Exception as exc:
+            logging.getLogger(__name__).exception("Unsubscribe button check failed: %s", exc)
+            return False
+
+    async def handle_unsubscribe_all_button(self, message: types.Message):
+        """Ask confirmation before removing all user subscriptions."""
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="✅", callback_data="confirm_unsub_all:yes"),
+            InlineKeyboardButton(text="🚫", callback_data="confirm_unsub_all:no"),
+        ]])
+        await message.answer(self.t(message.from_user.id, "btn_unsubscribe") + " ❓", reply_markup=kb)
 
     async def _is_subscribe_button(self, message: types.Message) -> bool:
         if not message.text or not message.from_user:
@@ -244,7 +275,9 @@ class SubscriptionHandler(BaseHandler):
         
                   
         dp.message.register(self.handle_mysubs_command, Command("mysubs"))
+        dp.message.register(self.handle_mysubs_command, self._is_mysubs_button)
         dp.message.register(self.handle_unsubscribe_command, Command("unsubscribe"))
+        dp.message.register(self.handle_unsubscribe_all_button, self._is_unsubscribe_all_button)
         dp.message.register(self.handle_subscribe_button, self._is_subscribe_button)
 
                                   

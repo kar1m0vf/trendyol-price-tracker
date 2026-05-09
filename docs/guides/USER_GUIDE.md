@@ -18,8 +18,9 @@ After a product is added, the bot shows a product card with:
 - product title;
 - current price;
 - notification mode;
-- next expected check;
 - controls for price history, comparison, target price, mode changes, and unsubscribe.
+
+Saved product cards also show the next expected notification/check timing when the user opens the product from the watchlist.
 
 ## Personal Watchlist
 
@@ -32,17 +33,17 @@ Command:
 The bot sends one compact watchlist message instead of separate messages for every product. Each product gets a user-facing number within that user's list:
 
 ```text
-No. 1  Robot vacuum ...
-No. 2  Face moisturizer ...
-No. 3  Sneakers ...
+№ 1  Robot vacuum ...
+№ 2  Face moisturizer ...
+№ 3  Sneakers ...
 ```
 
 The same message includes buttons:
 
 ```text
-No. 1 · Robot vacuum
-No. 2 · Face moisturizer
-No. 3 · Sneakers
+№ 1 · Robot vacuum
+№ 2 · Face moisturizer
+№ 3 · Sneakers
 ```
 
 Tapping a product button opens the selected product card in the same message. Internal database IDs are not shown to regular users.
@@ -59,7 +60,7 @@ Commands that target a specific product use the number from `/mysubs`:
 /unsubscribe 1
 ```
 
-If a product is displayed as `No. 1`, the user enters `1`. This is easier than exposing internal database IDs such as `120`.
+If a product is displayed as `№ 1`, the user enters `1`. This is easier than exposing internal database IDs such as `120`.
 
 ## Notification Modes
 
@@ -176,7 +177,7 @@ Commands:
 /export json
 ```
 
-The bot exports the user's subscriptions. Export files are created as runtime artifacts and sent to the user.
+The bot exports the user's subscriptions as CSV or JSON documents and sends them directly to the user. The normal export flow does not create persistent export files in the runtime artifact directories.
 
 ## User Reports
 
@@ -210,4 +211,3 @@ Supported languages:
 - Users see friendly product numbers, not database IDs.
 - Long-running actions provide clear feedback such as checking, searching, completed, or failed.
 - Errors are phrased as user-facing situations instead of technical tracebacks.
-

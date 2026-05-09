@@ -45,10 +45,10 @@ Expected:
 ## 4. Subscription Flow
 
 In Telegram:
-1. Send `/subscribe <trendyol_product_url>`
+1. Send a Trendyol product URL directly
 2. Verify it appears in `/mysubs`
-3. Send `/history`
-4. Send `/unsubscribe`
+3. Send `/history 1`
+4. Send `/unsubscribe 1`
 
 Expected:
 - subscription is created, visible, and removable;

@@ -1970,37 +1970,36 @@ async def cmd_export(message: types.Message):
             return
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        os.makedirs("backups", exist_ok=True)
-
         if fmt == "json":
-            fname = f"backups/subscriptions_{user_id}_{ts}.json"
-            payload = json.dumps(subs, ensure_ascii=False, indent=2)
-            with open(fname, "w", encoding="utf-8") as f:
-                f.write(payload)
-
-            with open(fname, "rb") as f:
-                await bot.send_document(user_id, types.InputFile(f, filename=os.path.basename(fname)))
+            fname = f"subscriptions_{user_id}_{ts}.json"
+            payload = json.dumps(subs, ensure_ascii=False, indent=2).encode("utf-8")
+            await _get_runtime_bot().send_document(
+                user_id,
+                types.BufferedInputFile(payload, filename=fname),
+            )
             await message.answer(t(user_id, "export_done").format(path=fname))
             return
 
 
-        fname = f"backups/subscriptions_{user_id}_{ts}.csv"
+        fname = f"subscriptions_{user_id}_{ts}.csv"
 
         cols = [
             'id','user_id','url','mode','last_price','product_title','product_image',
             'min_price','max_price','notify_percent','notify_interval','last_notify_time','price_alert','tags'
         ]
 
-        with open(fname, "w", encoding="utf-8-sig", newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=cols)
-            writer.writeheader()
-            for row in subs:
+        csv_buffer = io.StringIO(newline="")
+        writer = csv.DictWriter(csv_buffer, fieldnames=cols)
+        writer.writeheader()
+        for row in subs:
 
-                safe_row = {k: row.get(k, "") for k in cols}
-                writer.writerow(safe_row)
+            safe_row = {k: row.get(k, "") for k in cols}
+            writer.writerow(safe_row)
 
-        with open(fname, "rb") as f:
-            await bot.send_document(user_id, types.InputFile(f, filename=os.path.basename(fname)))
+        await _get_runtime_bot().send_document(
+            user_id,
+            types.BufferedInputFile(csv_buffer.getvalue().encode("utf-8-sig"), filename=fname),
+        )
 
         await message.answer(t(user_id, "export_done").format(path=fname))
 
@@ -2041,7 +2040,6 @@ async def cmd_history_export(message: types.Message):
             await message.answer(t(message.from_user.id, "history_export_no_data"))
             return
 
-        os.makedirs("backups", exist_ok=True)
         ts = datetime.now().strftime('%Y%m%d_%H%M%S')
 
 
@@ -2050,33 +2048,35 @@ async def cmd_history_export(message: types.Message):
                 payload = json.dumps([{"iso": r[0], "price": r[1]} for r in rows], ensure_ascii=False, indent=2)
             else:
                 payload = json.dumps([{"ts": r[0], "price": r[1]} for r in rows], ensure_ascii=False, indent=2)
-            fname = f"backups/history_{sub_id}_{ts}.json"
-            with open(fname, "w", encoding="utf-8") as f:
-                f.write(payload)
-            with open(fname, "rb") as f:
-                await bot.send_document(message.from_user.id, types.InputFile(f, filename=os.path.basename(fname)))
+            fname = f"history_{sub_id}_{ts}.json"
+            await _get_runtime_bot().send_document(
+                message.from_user.id,
+                types.BufferedInputFile(payload.encode("utf-8"), filename=fname),
+            )
             await message.answer(t(message.from_user.id, "history_export_ready").format(filename=fname))
             return
 
 
-        fname = f"backups/history_{sub_id}_{ts}.csv"
-        with open(fname, "w", encoding="utf-8-sig", newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(["ts", "iso_datetime", "price"])
-            for ts_val, price in rows:
-                if isinstance(ts_val, str):
-                    iso = ts_val
-                    raw_ts = ""
-                else:
-                    try:
-                        iso = datetime.utcfromtimestamp(int(ts_val)).isoformat()
-                    except Exception:
-                        iso = ""
-                    raw_ts = ts_val
-                writer.writerow([raw_ts, iso, price])
+        fname = f"history_{sub_id}_{ts}.csv"
+        csv_buffer = io.StringIO(newline="")
+        writer = csv.writer(csv_buffer)
+        writer.writerow(["ts", "iso_datetime", "price"])
+        for ts_val, price in rows:
+            if isinstance(ts_val, str):
+                iso = ts_val
+                raw_ts = ""
+            else:
+                try:
+                    iso = datetime.utcfromtimestamp(int(ts_val)).isoformat()
+                except Exception:
+                    iso = ""
+                raw_ts = ts_val
+            writer.writerow([raw_ts, iso, price])
 
-        with open(fname, "rb") as f:
-            await bot.send_document(message.from_user.id, types.InputFile(f, filename=os.path.basename(fname)))
+        await _get_runtime_bot().send_document(
+            message.from_user.id,
+            types.BufferedInputFile(csv_buffer.getvalue().encode("utf-8-sig"), filename=fname),
+        )
 
         await message.answer(t(message.from_user.id, "history_export_ready").format(filename=fname))
 
@@ -2241,15 +2241,18 @@ async def _compare_products_by_urls(message: types.Message, url1: str, url2: str
             )
             return
 
+        title1_text = html.escape(str(title1 or url1), quote=False)
+        title2_text = html.escape(str(title2 or url2), quote=False)
+
         comparison_text = f"""
 📊 <b>СРАВНЕНИЕ ТОВАРОВ</b>
 
 🏷️ <b>Товар 1:</b>
-{title1 or url1}
+{title1_text}
 💰 Цена: {price1:.2f} TL
 
 🏷️ <b>Товар 2:</b>
-{title2 or url2}
+{title2_text}
 💰 Цена: {price2:.2f} TL
 
 📈 <b>Разница:</b> {abs(price1 - price2):.2f} TL ({abs(price1 - price2) / max(price1, price2) * 100:.1f}%)
@@ -3303,24 +3306,28 @@ async def cmd_alerts(message: types.Message):
             return
 
 
-        lines = [t(user_id, "alerts_header")]
+        lines = [html.escape(t(user_id, "alerts_header"), quote=False)]
 
         keyboard = []
 
         for index, sub in enumerate(subs, start=1):
             try:
                 (sub_id, _, url, mode, last_price, product_title, product_image,
-                 min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert, tags) = sub
+                min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert, tags) = sub
             except ValueError:
                 (sub_id, _, url, mode, last_price, product_title, product_image,
-                 min_price, max_price, notify_percent, notify_interval, last_notify_time) = sub[:12]
+                min_price, max_price, notify_percent, notify_interval, last_notify_time) = sub[:12]
                 price_alert = None
                 tags = None
 
             title = product_title if product_title else url[:40] + "..." if len(url) > 40 else url
             current_alert = f"{price_alert:.0f} TL" if price_alert else t(user_id, "alerts_not_set")
 
-            lines.append(f"📦 <b>{title}</b>\n💰 {t(user_id, 'alerts_current')}: {current_alert}\n")
+            lines.append(
+                f"📦 <b>{html.escape(str(title), quote=False)}</b>\n"
+                f"💰 {html.escape(t(user_id, 'alerts_current'), quote=False)}: "
+                f"{html.escape(str(current_alert), quote=False)}\n"
+            )
 
 
             keyboard.append([
@@ -3410,9 +3417,12 @@ async def cmd_recommend(message: types.Message):
         keyboard = []
 
         for i, rec in enumerate(recommendations[:5], 1):
-            response += f"{i}. <b>{rec['title']}</b>\n"
-            response += f"💰 {rec['price']}\n"
-            response += f"📝 {rec['reason']}\n\n"
+            rec_title = html.escape(str(rec.get("title", "")), quote=False)
+            rec_price = html.escape(str(rec.get("price", "")), quote=False)
+            rec_reason = html.escape(str(rec.get("reason", "")), quote=False)
+            response += f"{i}. <b>{rec_title}</b>\n"
+            response += f"💰 {rec_price}\n"
+            response += f"📝 {rec_reason}\n\n"
 
 
             keyboard.append([
@@ -3538,6 +3548,8 @@ def _prune_decorated_legacy_handlers() -> None:
         "cmd_onboarding_skip",
         "cmd_onboarding_done",
         "cmd_subscribe_ui",
+        "cmd_mysubs",
+        "cmd_unsubscribe_all",
     }
 
     before_msg = len(router.message.handlers)
