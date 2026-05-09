@@ -231,6 +231,7 @@
   "status_active": "Active",
   "status_inactive": "Inactive",
   "status_waiting_price": "Waiting for price",
+  "status_price_unavailable": "Price not found",
   "mode_hourly": "Hourly",
   "mode_discount": "Discount only",
   "subscription_added_header": "Product added",

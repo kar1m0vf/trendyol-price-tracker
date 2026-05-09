@@ -109,7 +109,7 @@ class NotificationService:
         user_id: int,
         url: str,
         hist: List[Tuple[Union[str, datetime], float]]
-    ):
+    ) -> bool:
         """Send history plot for a product."""
         try:
             import matplotlib
@@ -152,7 +152,7 @@ class NotificationService:
                 }.get(lang, "Not enough data to build a chart")
 
                 await self.bot.send_message(user_id, error_msg)
-                return
+                return True
 
                          
             fig = Figure(figsize=(10, 6))
@@ -199,6 +199,7 @@ class NotificationService:
                 photo=image,
                 caption=f"📊 Price history for {url[:50]}..."
             )
+            return True
 
         except ImportError:
                                                      
@@ -210,7 +211,12 @@ class NotificationService:
                 "tr": "Matplotlib kurulmamış. Grafik oluşturulamıyor."
             }.get(lang, "Matplotlib is not installed. Cannot build chart.")
 
-            await self.bot.send_message(user_id, fallback_msg)
+            try:
+                await self.bot.send_message(user_id, fallback_msg)
+                return True
+            except Exception:
+                logger.exception("Failed to send history plot ImportError fallback to %s", user_id)
+                return False
 
         except Exception as e:
             logger.exception(f"Error creating history plot for user {user_id}: {e}")
@@ -221,7 +227,12 @@ class NotificationService:
                 "az": "Qrafik yaradılarkən xəta",
                 "tr": "Grafik oluşturulurken hata"
             }.get(lang, "Error creating chart")
-            await self.bot.send_message(user_id, error_msg)
+            try:
+                await self.bot.send_message(user_id, error_msg)
+                return True
+            except Exception:
+                logger.exception("Failed to send history plot error fallback to %s", user_id)
+                return False
 
 
 

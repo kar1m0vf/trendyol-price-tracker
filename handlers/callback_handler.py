@@ -36,10 +36,40 @@ logger = logging.getLogger(__name__)
 class CallbackHandler(BaseHandler):
     """Handler for callback queries from inline keyboards."""
 
+    @staticmethod
+    def _event_bot(cq: CallbackQuery):
+        for obj in (cq, getattr(cq, "message", None)):
+            if obj is None:
+                continue
+            try:
+                candidate = getattr(obj, "bot", None)
+            except Exception:
+                continue
+            if candidate is not None:
+                return candidate
+        return None
+
+    async def _send_callback_problem(self, cq: CallbackQuery, user_id: int, text: str = "") -> None:
+        """Send a durable error message for callbacks that cannot finish."""
+        message_text = text or self.t(user_id, "error_generic")
+        try:
+            await cq.answer(message_text, show_alert=True)
+        except Exception:
+            logger.debug("Failed to answer callback error", exc_info=True)
+
+        message = getattr(cq, "message", None)
+        if message is not None:
+            try:
+                await message.answer(message_text)
+                return
+            except Exception:
+                logger.debug("Failed to send durable callback error", exc_info=True)
+
     async def handle_main_callback(self, cq: CallbackQuery):
         """Handle main callback queries."""
         data = cq.data or ""
         user_id = cq.from_user.id
+        self.bind_runtime_bot(self._event_bot(cq))
         logger.debug("Callback received: data=%r user=%s", data, user_id)
 
         try:
@@ -401,7 +431,7 @@ class CallbackHandler(BaseHandler):
 
         except Exception as e:
             logger.exception("Main callback handler error: %s", e)
-            await cq.answer(self.t(user_id, "error_generic"), show_alert=True)
+            await self._send_callback_problem(cq, user_id)
 
     @staticmethod
     def _short_title(title, url, limit=90):
@@ -514,7 +544,7 @@ class CallbackHandler(BaseHandler):
             alert_edit_state[user_id] = sub_id
         except Exception as e:
             logger.exception("alert_edit callback error: %s", e)
-            await cq.answer(self.t(user_id, "error_generic"), show_alert=True)
+            await self._send_callback_problem(cq, user_id)
 
     async def _handle_alert_remove(self, cq: CallbackQuery, user_id: int, sub_id: int):
         try:
@@ -531,7 +561,7 @@ class CallbackHandler(BaseHandler):
             await cq.answer()
         except Exception as e:
             logger.exception("alert_remove callback error: %s", e)
-            await cq.answer(self.t(user_id, "error_generic"), show_alert=True)
+            await self._send_callback_problem(cq, user_id)
 
     async def _show_alerts_list(self, cq: CallbackQuery, user_id: int):
         try:
@@ -572,13 +602,13 @@ class CallbackHandler(BaseHandler):
             )
         except Exception as e:
             logger.exception("alerts_back callback error: %s", e)
-            await cq.answer(self.t(user_id, "error_generic"), show_alert=True)
+            await self._send_callback_problem(cq, user_id)
 
-    async def _send_history_plot(self, user_id: int, url: str, hist):
+    async def _send_history_plot(self, user_id: int, url: str, hist) -> bool:
         from services.notification_service import NotificationService
 
         service = NotificationService(self.bot)
-        await service.send_history_plot(user_id, url, hist)
+        return await service.send_history_plot(user_id, url, hist)
 
     async def _handle_history(self, cq: CallbackQuery, user_id: int, sub_id: int):
         await cq.answer(self.t(user_id, "status_loading_history"))
@@ -600,8 +630,15 @@ class CallbackHandler(BaseHandler):
             db_hist = get_price_history(sub_id, limit=1000)
             if db_hist and len(db_hist) >= 2:
                 hist = [(self._safe_ts_to_iso(ts), price) for ts, price in db_hist]
-                await self._send_history_plot(user_id, url, hist)
-                await self.clear_status_message(status_message)
+                delivered = await self._send_history_plot(user_id, url, hist)
+                if delivered:
+                    await self.clear_status_message(status_message)
+                else:
+                    await self.replace_status_message(
+                        status_message,
+                        self.t(user_id, "error_generic"),
+                        fallback_target=user_id,
+                    )
                 return
 
             from scraper import get_price_history_from_akakce_async
@@ -630,8 +667,15 @@ class CallbackHandler(BaseHandler):
                 except Exception:
                     logger.debug("Skipped invalid history point for sub=%s", sub_id, exc_info=True)
 
-            await self._send_history_plot(user_id, url, hist)
-            await self.clear_status_message(status_message)
+            delivered = await self._send_history_plot(user_id, url, hist)
+            if delivered:
+                await self.clear_status_message(status_message)
+            else:
+                await self.replace_status_message(
+                    status_message,
+                    self.t(user_id, "error_generic"),
+                    fallback_target=user_id,
+                )
         except Exception as e:
             logger.exception("history callback error: %s", e)
             await self.replace_status_message(
@@ -902,6 +946,13 @@ class CallbackHandler(BaseHandler):
                 await admin_check_blocked(cq.message)
                 return True
 
+            if data == "admin_broken_subs":
+                await cq.answer(self.t(user_id, "loading"))
+                from handlers.admin_handler import admin_broken_subscriptions
+
+                await admin_broken_subscriptions(cq.message)
+                return True
+
             if data == "admin_recommend":
                 await cq.answer()
                 await cq.message.edit_text(
@@ -1028,7 +1079,7 @@ class CallbackHandler(BaseHandler):
             return True
         except Exception as e:
             logger.exception("admin callback error for %s: %s", data, e)
-            await cq.answer(self.t(user_id, "error_generic"), show_alert=True)
+            await self._send_callback_problem(cq, user_id)
             return True
 
     async def handle_admin_user_details(self, cq: CallbackQuery):

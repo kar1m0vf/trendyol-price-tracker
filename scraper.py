@@ -443,7 +443,11 @@ def get_price(url: str) -> Optional[float]:
             r = requests.get(url, headers=HEADERS, timeout=20)
         
         if r.status_code != 200:
-            logger.error(f"HTTP {r.status_code} when fetching price for {url}")
+            log_message = "HTTP %s when fetching price for %s"
+            if r.status_code == 404:
+                logger.warning(log_message, r.status_code, url)
+            else:
+                logger.error(log_message, r.status_code, url)
             return None
 
         html = r.text

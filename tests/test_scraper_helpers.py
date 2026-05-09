@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 from bs4 import BeautifulSoup
 import scraper
@@ -47,3 +49,31 @@ def test_find_similar_products_filters_same_id(monkeypatch):
                                              
     urls = {r['url'] for r in res}
     assert "https://www.trendyol.com/x/p-12345" not in urls
+
+
+def test_get_price_logs_404_as_warning(monkeypatch, caplog):
+    class DummyLimiter:
+        def can_proceed(self):
+            return True
+
+        def add_request(self):
+            return None
+
+    class DummyReq:
+        @staticmethod
+        def get(url, headers=None, timeout=20):
+            return DummyResponse("", status_code=404)
+
+    monkeypatch.setattr(scraper, "SCRAPER", None)
+    monkeypatch.setattr(scraper, "requests", DummyReq)
+    monkeypatch.setattr(scraper, "TRENDYOL_LIMITER", DummyLimiter())
+
+    with caplog.at_level(logging.WARNING, logger="scraper"):
+        assert scraper.get_price("https://www.trendyol.com/missing-p-1") is None
+
+    matching_records = [
+        record for record in caplog.records
+        if record.name == "scraper" and "HTTP 404" in record.message
+    ]
+    assert matching_records
+    assert all(record.levelno == logging.WARNING for record in matching_records)

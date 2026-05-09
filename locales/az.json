@@ -231,6 +231,7 @@
   "status_active": "Aktiv",
   "status_inactive": "Qeyri-aktiv",
   "status_waiting_price": "Qiymət gözlənilir",
+  "status_price_unavailable": "Qiymət tapılmadı",
   "mode_hourly": "Hər saat",
   "mode_discount": "Yalnız endirim",
   "subscription_added_header": "Məhsul əlavə edildi",

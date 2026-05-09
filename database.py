@@ -156,7 +156,10 @@ def init_db(run_maintenance: bool = True):
                 'max_price': "ALTER TABLE subscriptions ADD COLUMN max_price REAL", 
                 'notify_percent': "ALTER TABLE subscriptions ADD COLUMN notify_percent REAL",
                 'notify_interval': "ALTER TABLE subscriptions ADD COLUMN notify_interval INTEGER DEFAULT 60",
-                'last_notify_time': "ALTER TABLE subscriptions ADD COLUMN last_notify_time INTEGER"
+                'last_notify_time': "ALTER TABLE subscriptions ADD COLUMN last_notify_time INTEGER",
+                'check_fail_count': "ALTER TABLE subscriptions ADD COLUMN check_fail_count INTEGER DEFAULT 0",
+                'last_check_error': "ALTER TABLE subscriptions ADD COLUMN last_check_error TEXT",
+                'last_check_error_at': "ALTER TABLE subscriptions ADD COLUMN last_check_error_at INTEGER",
             }
             
             for col_name, alter_sql in missing_columns.items():
@@ -250,6 +253,9 @@ def init_db(run_maintenance: bool = True):
             notify_percent REAL,
             notify_interval INTEGER DEFAULT 60,
             last_notify_time INTEGER,
+            check_fail_count INTEGER DEFAULT 0,
+            last_check_error TEXT,
+            last_check_error_at INTEGER,
             created_at INTEGER DEFAULT (CAST(strftime('%s', 'now') AS INTEGER)),
             updated_at INTEGER DEFAULT (CAST(strftime('%s', 'now') AS INTEGER)),
             FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
@@ -314,6 +320,18 @@ def init_db(run_maintenance: bool = True):
         except sqlite3.OperationalError:
             pass                         
 
+        check_failure_columns = {
+            "check_fail_count": "ALTER TABLE subscriptions ADD COLUMN check_fail_count INTEGER DEFAULT 0",
+            "last_check_error": "ALTER TABLE subscriptions ADD COLUMN last_check_error TEXT",
+            "last_check_error_at": "ALTER TABLE subscriptions ADD COLUMN last_check_error_at INTEGER",
+        }
+        for col_name, alter_sql in check_failure_columns.items():
+            try:
+                cur.execute(alter_sql)
+                logger.info("Migration: Added %s column to subscriptions table", col_name)
+            except sqlite3.OperationalError:
+                pass
+
                                                  
         cur.execute("""
         CREATE TABLE IF NOT EXISTS recommended_products (
@@ -356,6 +374,7 @@ def init_db(run_maintenance: bool = True):
                 ("idx_subscriptions_mode", "CREATE INDEX idx_subscriptions_mode ON subscriptions(notify_mode)"),
                 ("idx_subscriptions_notify_time", "CREATE INDEX idx_subscriptions_notify_time ON subscriptions(last_notify_time)"),
                 ("idx_subscriptions_url_mode", "CREATE INDEX idx_subscriptions_url_mode ON subscriptions(url, notify_mode)"),
+                ("idx_subscriptions_check_failures", "CREATE INDEX idx_subscriptions_check_failures ON subscriptions(check_fail_count, last_check_error_at)"),
                 ("idx_price_history_ts", "CREATE INDEX idx_price_history_ts ON price_history(ts DESC)"),
                 ("idx_price_history_source", "CREATE INDEX idx_price_history_source ON price_history(source)"),
             ]
@@ -704,6 +723,112 @@ def update_last_price(sub_id: int, price: float) -> None:
         cur = conn.cursor()
         cur.execute("UPDATE subscriptions SET last_price = ?, updated_at = ? WHERE id = ?", (price, int(time.time()), sub_id))
         conn.commit()
+
+
+def record_subscription_check_failure(sub_id: int, reason: str, ts: Optional[int] = None) -> None:
+    """Remember a failed price check without changing the public subscription tuple."""
+    if ts is None:
+        ts = int(time.time())
+    reason_text = (reason or "price_check_failed").strip()[:200]
+    with sqlite3.connect(DB) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE subscriptions
+            SET check_fail_count = COALESCE(check_fail_count, 0) + 1,
+                last_check_error = ?,
+                last_check_error_at = ?
+            WHERE id = ?
+            """,
+            (reason_text, int(ts), sub_id),
+        )
+        conn.commit()
+
+
+def clear_subscription_check_failure(sub_id: int) -> None:
+    """Clear stored price-check failure state after a successful price read."""
+    with sqlite3.connect(DB) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE subscriptions
+            SET check_fail_count = 0,
+                last_check_error = NULL,
+                last_check_error_at = NULL
+            WHERE id = ?
+              AND (
+                COALESCE(check_fail_count, 0) != 0
+                OR last_check_error IS NOT NULL
+                OR last_check_error_at IS NOT NULL
+              )
+            """,
+            (sub_id,),
+        )
+        conn.commit()
+
+
+def get_broken_subscriptions(limit: int = 50, min_fail_count: int = 1) -> List[Dict[str, Any]]:
+    """Return subscriptions with recent consecutive price-check failures."""
+    safe_limit = max(1, min(int(limit or 50), 500))
+    safe_min_fail_count = max(1, int(min_fail_count or 1))
+    with sqlite3.connect(DB) as conn:
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                s.id,
+                s.user_id,
+                s.url,
+                s.notify_mode,
+                s.last_price,
+                s.product_title,
+                s.product_image,
+                COALESCE(s.check_fail_count, 0) AS check_fail_count,
+                s.last_check_error,
+                s.last_check_error_at,
+                u.username,
+                u.first_name,
+                u.last_name
+            FROM subscriptions s
+            LEFT JOIN users u ON u.user_id = s.user_id
+            WHERE COALESCE(s.check_fail_count, 0) >= ?
+            ORDER BY COALESCE(s.check_fail_count, 0) DESC,
+                     COALESCE(s.last_check_error_at, 0) DESC,
+                     s.id DESC
+            LIMIT ?
+            """,
+            (safe_min_fail_count, safe_limit),
+        )
+        rows = cur.fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_subscription_check_failures_for_user(
+    user_id: int,
+    min_fail_count: int = 1,
+) -> Dict[int, Dict[str, Any]]:
+    """Return current price-check failure state for one user's subscriptions."""
+    safe_min_fail_count = max(1, int(min_fail_count or 1))
+    with sqlite3.connect(DB) as conn:
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                id,
+                COALESCE(check_fail_count, 0) AS check_fail_count,
+                last_check_error,
+                last_check_error_at
+            FROM subscriptions
+            WHERE user_id = ?
+              AND COALESCE(check_fail_count, 0) >= ?
+            """,
+            (user_id, safe_min_fail_count),
+        )
+        rows = cur.fetchall()
+    return {int(row["id"]): dict(row) for row in rows}
+
 
 def update_mode(sub_id: int, mode: str) -> None:
     with sqlite3.connect(DB) as conn:

@@ -2,6 +2,7 @@
 Base handler with common utilities and shared functionality.
 """
 import logging
+import sys
 from typing import Optional, Dict, Any
 from aiogram import Bot
 from localization import t as translate_func, get_user_language_safe
@@ -14,14 +15,23 @@ _bot = None
 def get_bot() -> Bot:
     """Get bot instance lazily."""
     global _bot
-    if _bot is None:
-        try:
-            from config import bot as config_bot
-            _bot = config_bot
-        except ImportError:
-                                                      
-            from bot import bot as bot_bot
-            _bot = bot_bot
+    if _bot is not None:
+        return _bot
+
+    for module_name in ("__main__", "bot"):
+        module = sys.modules.get(module_name)
+        runtime_bot = getattr(module, "bot", None) if module else None
+        if runtime_bot is not None:
+            _bot = runtime_bot
+            return _bot
+
+    try:
+        from bot import _get_runtime_bot
+
+        _bot = _get_runtime_bot()
+        return _bot
+    except Exception as exc:
+        raise RuntimeError("Bot runtime is not initialized. Call create_app() first.") from exc
     return _bot
 
                                        
@@ -43,6 +53,15 @@ class BaseHandler:
         if self._bot is None:
             self._bot = get_bot()
         return self._bot
+
+    def bind_runtime_bot(self, candidate) -> None:
+        """Bind bot from an incoming aiogram event when available."""
+        if self._bot is not None:
+            return
+        if candidate is None:
+            return
+        if hasattr(candidate, "send_message"):
+            self._bot = candidate
 
     def t(self, user_id: int, key: str, **kwargs) -> str:
         """Translate text for user with optional formatting."""

@@ -230,6 +230,7 @@
     "status_active": "Aktif",
     "status_inactive": "Pasif",
     "status_waiting_price": "Fiyat bekleniyor",
+    "status_price_unavailable": "Fiyat bulunamadı",
     "mode_hourly": "Saatlik",
     "mode_discount": "Sadece indirim",
     "subscription_added_header": "Ürün eklendi",

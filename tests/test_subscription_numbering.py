@@ -44,6 +44,20 @@ def test_subscription_overview_uses_user_facing_numbers():
     assert keyboard.inline_keyboard[1][0].callback_data == "edit_sub:121"
 
 
+def test_subscription_overview_marks_failed_price_checks_with_warning(monkeypatch):
+    sub = _sub(120, title="Removed product", last_price=100.0)
+    monkeypatch.setattr(
+        bot,
+        "get_subscription_check_failures_for_user",
+        lambda user_id: {120: {"check_fail_count": 2, "last_check_error": "price_not_found"}},
+    )
+
+    text, _keyboard = bot.build_subscriptions_overview(12345, [sub])
+
+    assert "⚠️ <code>№ 1</code>" in text
+    assert "✅ <code>№ 1</code>" not in text
+
+
 def test_subscription_card_uses_user_facing_number(monkeypatch):
     sub = _sub(120)
     monkeypatch.setattr(bot, "get_user_subscriptions", lambda user_id: [sub])
@@ -52,6 +66,22 @@ def test_subscription_card_uses_user_facing_number(monkeypatch):
 
     assert "\u2116 1" in text
     assert "ID 120" not in text
+
+
+def test_subscription_card_marks_failed_price_check_as_unavailable(monkeypatch):
+    sub = _sub(120, last_price=100.0)
+    monkeypatch.setattr(bot, "get_user_subscriptions", lambda user_id: [sub])
+    monkeypatch.setattr(
+        bot,
+        "get_subscription_check_failures_for_user",
+        lambda user_id: {120: {"check_fail_count": 1, "last_check_error": "price_not_found"}},
+    )
+
+    text = bot.format_subscription_card(12345, sub)
+
+    assert "⚠️" in text
+    assert bot.t(12345, "status_price_unavailable") in text
+    assert bot.t(12345, "status_active") not in text
 
 
 def test_subscription_card_uses_scheduler_time_for_due_hourly(monkeypatch):

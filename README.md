@@ -169,7 +169,7 @@ The project includes checks for:
 - scraper parsing helpers;
 - notification flow.
 
-Recent local verification: `181 passed, 3 skipped`.
+Recent local verification: `191 passed, 3 skipped`.
 
 ## Documentation
 

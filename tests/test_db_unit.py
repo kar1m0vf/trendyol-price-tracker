@@ -59,3 +59,30 @@ def test_price_history_functions_empty(temp_db_path):
     assert database.get_price_history(9999999) == []
     assert database.get_last_price_point(9999999) is None
 
+
+def test_subscription_check_failure_tracking(temp_db_path):
+    user_id = 12345
+    url = "https://www.trendyol.com/test-product-p-1"
+    sub_id = database.add_subscription(user_id, url, product_title="Broken Test")
+
+    assert database.get_broken_subscriptions() == []
+
+    database.record_subscription_check_failure(sub_id, "price_not_found", ts=111)
+    database.record_subscription_check_failure(sub_id, "timeout_fetching_product_info", ts=222)
+
+    broken = database.get_broken_subscriptions(limit=10)
+    assert len(broken) == 1
+    assert broken[0]["id"] == sub_id
+    assert broken[0]["check_fail_count"] == 2
+    assert broken[0]["last_check_error"] == "timeout_fetching_product_info"
+    assert broken[0]["last_check_error_at"] == 222
+
+    by_user = database.get_subscription_check_failures_for_user(user_id)
+    assert by_user[sub_id]["check_fail_count"] == 2
+    assert by_user[sub_id]["last_check_error"] == "timeout_fetching_product_info"
+
+    database.clear_subscription_check_failure(sub_id)
+
+    assert database.get_broken_subscriptions() == []
+    assert database.get_subscription_check_failures_for_user(user_id) == {}
+

@@ -231,6 +231,7 @@
     "status_active": "Активна",
     "status_inactive": "Неактивна",
     "status_waiting_price": "Жду цену",
+    "status_price_unavailable": "Цена не найдена",
     "mode_hourly": "Каждый час",
     "mode_discount": "Только при скидке",
     "subscription_added_header": "Товар добавлен",

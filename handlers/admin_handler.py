@@ -21,6 +21,7 @@ from analytics import Analytics
 from config import ADMIN_IDS, DATABASE_PATH
 from database import (
     create_sqlite_backup,
+    get_broken_subscriptions,
     get_bot_text,
     get_user_language,
     get_user_subscriptions,
@@ -188,6 +189,22 @@ def _format_dt(ts: Any, fmt: str = "%d.%m.%Y %H:%M") -> str:
     try:
         return datetime.fromtimestamp(int(ts)).strftime(fmt)
     except Exception:
+        return "-"
+
+
+def _short_admin_text(value: Any, limit: int = 80) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _format_admin_price(price: Any) -> str:
+    if price is None:
+        return "-"
+    try:
+        return f"{float(price):.0f} TL"
+    except (TypeError, ValueError):
         return "-"
 
 
@@ -432,6 +449,10 @@ async def admin_main_menu(message: types.Message):
         ]
     ])
 
+    keyboard.inline_keyboard.insert(2, [
+        InlineKeyboardButton(text="⚠️ Битые товары", callback_data="admin_broken_subs")
+    ])
+
     greeting_name = _safe_html(_admin_greeting_name(message, user_id))
     welcome_text = "🚀 <b>Панель администратора</b>\n\n"
     welcome_text += f"👋 Добро пожаловать, <b>{greeting_name}</b>.\n"
@@ -488,6 +509,8 @@ async def cmd_admin(message: types.Message):
         await admin_recommend(message, args[2:] if len(args) > 2 else [])
     elif command == "blocked":
         await admin_check_blocked(message)
+    elif command in {"broken", "broken_subs", "failures"}:
+        await admin_broken_subscriptions(message)
     else:
         await message.answer(t(user_id, "admin_unknown_command"))
 
@@ -524,6 +547,82 @@ async def admin_stats(message: types.Message):
     except Exception as e:
         logger.exception("Error in admin_stats: %s", e)
         await message.answer(f"❌ Ошибка при получении статистики: {e}")
+
+async def admin_broken_subscriptions(message: types.Message):
+    """Show subscriptions whose price checks are currently failing."""
+    admin_user_id = _get_request_user_id(message)
+    if not is_admin(admin_user_id):
+        await message.answer(t(admin_user_id, "admin_access_denied"))
+        return
+
+    rows = get_broken_subscriptions(limit=30, min_fail_count=1)
+    action_event(
+        "ADMIN",
+        "opened broken subscriptions",
+        admin=admin_user_id,
+        subscriptions=len(rows),
+    )
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_broken_subs")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="admin_main_menu")],
+    ])
+
+    if not rows:
+        await _edit_or_answer(
+            message,
+            "✅ <b>Битые товары</b>\n\nПодписок с неудачными проверками цены сейчас нет.",
+            reply_markup=keyboard,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+        return
+
+    lines = [
+        f"⚠️ <b>Битые товары ({len(rows)})</b>",
+        "",
+        "Подписки, где последняя проверка цены завершилась неудачно.",
+    ]
+
+    for index, row in enumerate(rows, start=1):
+        sub_id = int(row.get("id") or 0)
+        row_user_id = int(row.get("user_id") or 0)
+        url = str(row.get("url") or "")
+        title = _short_admin_text(row.get("product_title") or url, 72)
+        user_display = _user_display_html(
+            row_user_id,
+            row.get("username"),
+            row.get("first_name"),
+            row.get("last_name"),
+        )
+        fail_count = int(row.get("check_fail_count") or 0)
+        last_error = _short_admin_text(row.get("last_check_error") or "-", 48)
+        last_error_at = _format_dt(row.get("last_check_error_at"))
+        last_price = _format_admin_price(row.get("last_price"))
+        short_url = _short_admin_text(url, 110)
+
+        block = (
+            f"{index}. <code>{sub_id}</code> <b>{_safe_html(title)}</b>\n"
+            f"   👤 {user_display} | fail: <b>{fail_count}</b> | last: {_safe_html(last_error_at)}\n"
+            f"   💰 {_safe_html(last_price)} | reason: <code>{_safe_html(last_error)}</code>\n"
+            f"   <code>{_safe_html(short_url)}</code>"
+        )
+
+        if len("\n\n".join(lines + [block])) > 3600:
+            remaining = len(rows) - index + 1
+            lines.append(f"...и еще {remaining} подписок.")
+            break
+
+        lines.append(block)
+
+    await _edit_or_answer(
+        message,
+        "\n\n".join(lines),
+        reply_markup=keyboard,
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+
 
 def _get_broadcast_recipients() -> List[int]:
     with sqlite3.connect(DATABASE_PATH) as conn:

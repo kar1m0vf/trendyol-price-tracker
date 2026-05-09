@@ -168,6 +168,60 @@ async def test_admin_users_page_callback_passes_offset():
 
 
 @pytest.mark.asyncio
+async def test_admin_broken_subscriptions_lists_failures_and_escapes_html():
+    from handlers import admin_handler
+
+    msg = _message("/admin broken")
+    broken_rows = [
+        {
+            "id": 7,
+            "user_id": 12345,
+            "url": "https://example.com/?q=<bad>",
+            "notify_mode": "discount",
+            "last_price": 1200,
+            "product_title": "Sneaker <script>",
+            "product_image": None,
+            "check_fail_count": 3,
+            "last_check_error": "price_not_found <html>",
+            "last_check_error_at": 1000,
+            "username": "buyer",
+            "first_name": "Test",
+            "last_name": None,
+        }
+    ]
+
+    with patch.object(admin_handler, "get_broken_subscriptions", return_value=broken_rows):
+        await admin_handler.admin_broken_subscriptions(msg)
+
+    msg.edit_text.assert_awaited_once()
+    text = msg.edit_text.await_args.args[0]
+    assert "Sneaker &lt;script&gt;" in text
+    assert "price_not_found &lt;html&gt;" in text
+    assert "https://example.com/?q=&lt;bad&gt;" in text
+    assert "fail: <b>3</b>" in text
+    markup = msg.edit_text.await_args.kwargs["reply_markup"]
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+    assert "admin_broken_subs" in callbacks
+    assert "admin_main_menu" in callbacks
+
+
+@pytest.mark.asyncio
+async def test_admin_broken_subscriptions_callback_opens_screen():
+    from handlers.callback_handler import CallbackHandler
+
+    cq = MagicMock()
+    cq.answer = AsyncMock()
+    cq.message = MagicMock()
+    handler = CallbackHandler()
+
+    with patch("handlers.admin_handler.admin_broken_subscriptions", new_callable=AsyncMock) as broken_screen:
+        handled = await handler._handle_admin_callback(cq, "admin_broken_subs", ADMIN_ID)
+
+    assert handled is True
+    broken_screen.assert_awaited_once_with(cq.message)
+
+
+@pytest.mark.asyncio
 async def test_admin_main_menu_greets_admin_by_name():
     from handlers import admin_handler
 

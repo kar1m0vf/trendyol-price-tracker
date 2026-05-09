@@ -43,6 +43,9 @@ from database import (
     update_notify_time,
     update_subscription_settings,
     update_user_settings,
+    record_subscription_check_failure,
+    clear_subscription_check_failure,
+    get_subscription_check_failures_for_user,
     save_price_points_batch,
     get_bot_text,
     close_all_connections,
@@ -577,8 +580,10 @@ async def send_history_plot(user_id: int, url: str, hist):
         logger.exception("notification_service.send_history_plot failed for user %s url=%s", user_id, url)
         try:
             await bot.send_message(user_id, t(user_id, "history_not_found"))
+            return True
         except Exception:
             logger.exception("Failed to send fallback history_not_found message to %s", user_id)
+            return False
 
 
 async def send_history_for_subscription(user_id: int, sub_id: int, url: str):
@@ -1139,6 +1144,33 @@ def format_subscription_added_card(
     ])
 
 
+def _subscription_status_for_display(
+    user_id: int,
+    data: Dict[str, Any],
+    failure_state: Optional[Dict[str, Any]] = None,
+) -> Tuple[str, str]:
+    fail_count = 0
+    if failure_state:
+        try:
+            fail_count = int(failure_state.get("check_fail_count") or 0)
+        except (TypeError, ValueError):
+            fail_count = 0
+
+    if fail_count > 0:
+        return "⚠️", t(user_id, "status_price_unavailable")
+    if data["last_price"] is not None:
+        return "✅", t(user_id, "status_active")
+    return "⏳", t(user_id, "status_waiting_price")
+
+
+def _subscription_failure_map_for_user(user_id: int) -> Dict[int, Dict[str, Any]]:
+    try:
+        return get_subscription_check_failures_for_user(user_id)
+    except Exception as e:
+        logger.exception("Could not load subscription check failures for user %s: %s", user_id, e)
+        return {}
+
+
 def format_subscription_card(user_id: int, sub: Tuple[Any, ...]) -> str:
     data = _subscription_fields(sub)
     sub_id = data["sub_id"]
@@ -1147,8 +1179,8 @@ def format_subscription_card(user_id: int, sub: Tuple[Any, ...]) -> str:
     title_text = html.escape(_short_title(data["product_title"], url))
     price_text = html.escape(_format_price_for_user(user_id, data["last_price"]))
     mode_text = html.escape(_mode_text_for_user(user_id, data["mode"]))
-    status_text = t(user_id, "status_active") if data["last_price"] is not None else t(user_id, "status_waiting_price")
-    status_icon = "✅" if data["last_price"] is not None else "⏳"
+    failure_state = _subscription_failure_map_for_user(user_id).get(sub_id)
+    status_icon, status_text = _subscription_status_for_display(user_id, data, failure_state)
     next_notify = html.escape(_next_notification_for_subscription_card(user_id, data))
 
     lines = [
@@ -1193,6 +1225,7 @@ def build_subscriptions_overview(
     lines = [html.escape(t(user_id, "mysubs_summary").format(count=len(subs))), ""]
     button_rows = []
     shown = 0
+    failure_map = _subscription_failure_map_for_user(user_id)
 
     for index, sub in enumerate(subs, start=1):
         data = _subscription_fields(sub)
@@ -1202,7 +1235,8 @@ def build_subscriptions_overview(
         title_html = html.escape(title)
         price_text = html.escape(_format_price_for_user(user_id, data["last_price"]))
         mode_text = html.escape(_mode_text_for_user(user_id, data["mode"]))
-        status_icon = "✅" if data["last_price"] is not None else "⏳"
+        failure_state = failure_map.get(sub_id)
+        status_icon, _status_text = _subscription_status_for_display(user_id, data, failure_state)
 
         line = (
             f"{status_icon} <code>№ {index}</code> "
@@ -1498,8 +1532,15 @@ async def cmd_history(message: types.Message):
 
             hist = [(safe_ts_to_iso(r[0]), r[1]) for r in db_hist]
             try:
-                await send_history_plot(message.from_user.id, url, hist)
-                await _clear_progress_message(status_message)
+                delivered = await send_history_plot(message.from_user.id, url, hist)
+                if delivered:
+                    await _clear_progress_message(status_message)
+                else:
+                    await _replace_progress_message(
+                        status_message,
+                        t(message.from_user.id, "error_generic"),
+                        fallback_target=message,
+                    )
             except Exception as e:
                 logger.exception("history plot send failed: %s", e)
                 await _replace_progress_message(
@@ -1550,8 +1591,15 @@ async def cmd_history(message: types.Message):
             logger.exception("Failed to save akakce history into DB for sub %s", sid)
 
         try:
-            await send_history_plot(message.from_user.id, url, hist)
-            await _clear_progress_message(status_message)
+            delivered = await send_history_plot(message.from_user.id, url, hist)
+            if delivered:
+                await _clear_progress_message(status_message)
+            else:
+                await _replace_progress_message(
+                    status_message,
+                    t(message.from_user.id, "error_generic"),
+                    fallback_target=message,
+                )
         except Exception as e:
             logger.exception("history plot send failed: %s", e)
             await _replace_progress_message(
@@ -1592,8 +1640,15 @@ async def cmd_history(message: types.Message):
         )
         return
     try:
-        await send_history_plot(message.from_user.id, url, hist)
-        await _clear_progress_message(status_message)
+        delivered = await send_history_plot(message.from_user.id, url, hist)
+        if delivered:
+            await _clear_progress_message(status_message)
+        else:
+            await _replace_progress_message(
+                status_message,
+                t(message.from_user.id, "error_generic"),
+                fallback_target=message,
+            )
     except Exception as e:
         logger.exception("history plot send failed: %s", e)
         await _replace_progress_message(
@@ -1817,7 +1872,10 @@ async def cmd_runcheck(message: types.Message):
             return
         await message.answer(
             "✅ " + t(user_id, "done") +
-            f"\nProcessed: {result.get('processed', 0)}, alerted: {result.get('alerted', 0)}"
+            f"\nProcessed: {result.get('processed', 0)}, "
+            f"failed: {result.get('failed', 0)}, "
+            f"skipped: {result.get('skipped', 0)}, "
+            f"alerted: {result.get('alerted', 0)}"
         )
     except Exception as e:
         logger.exception("manual runcheck error: %s", e)
@@ -2130,8 +2188,15 @@ async def cmd_history_plot(message: types.Message):
                 hist.append((iso, price))
 
         url = sub[2] if len(sub) > 2 else ""
-        await send_history_plot(message.from_user.id, url, hist)
-        await _clear_progress_message(status_message)
+        delivered = await send_history_plot(message.from_user.id, url, hist)
+        if delivered:
+            await _clear_progress_message(status_message)
+        else:
+            await _replace_progress_message(
+                status_message,
+                t(message.from_user.id, "error_generic"),
+                fallback_target=message,
+            )
 
     except Exception as e:
         logger.exception("history_plot error: %s", e)
@@ -2631,6 +2696,8 @@ async def _check_all_impl(trigger: str = "scheduler") -> Dict[str, Any]:
 
     sem = asyncio.Semaphore(CHECK_ALL_FETCH_CONCURRENCY)
     processed_count = 0
+    failed_count = 0
+    skipped_count = 0
     alerted_count = 0
 
 
@@ -2639,8 +2706,16 @@ async def _check_all_impl(trigger: str = "scheduler") -> Dict[str, Any]:
 
     grouped_notifications = {}
 
+    def remember_check_failure(sub_id: int, reason: str) -> None:
+        nonlocal failed_count
+        failed_count += 1
+        try:
+            record_subscription_check_failure(sub_id, reason)
+        except Exception as e:
+            logger.exception("Failed to record check failure for sub %s: %s", sub_id, e)
+
     async def process(sub):
-        nonlocal processed_count, alerted_count
+        nonlocal processed_count, failed_count, skipped_count, alerted_count
 
         try:
             (sub_id, user_id, url, mode, last_price, product_title, product_image,
@@ -2665,12 +2740,14 @@ async def _check_all_impl(trigger: str = "scheduler") -> Dict[str, Any]:
 
                 if is_quiet_time:
                     logger.debug(f"Quiet hours for user {user_id} ({current_hour}:00)")
+                    skipped_count += 1
                     return
 
 
                 current_time = int(time.time())
                 if last_notify_time and notify_interval:
                     if current_time - last_notify_time < notify_interval * 60:
+                        skipped_count += 1
                         return
 
 
@@ -2678,12 +2755,15 @@ async def _check_all_impl(trigger: str = "scheduler") -> Dict[str, Any]:
                     price, title, image = await get_product_info_async(url)
                 except asyncio.TimeoutError:
                     logger.warning("Timeout fetching product info for sub %s", sub_id)
+                    remember_check_failure(sub_id, "timeout_fetching_product_info")
                     return
                 except aiohttp.ClientError as e:
                     logger.warning("Network error fetching product info for sub %s: %s", sub_id, e)
+                    remember_check_failure(sub_id, f"network_error:{type(e).__name__}")
                     return
                 except Exception as e:
                     logger.exception("Unexpected error fetching product info for sub %s: %s", sub_id, e)
+                    remember_check_failure(sub_id, f"unexpected_error:{type(e).__name__}")
                     return
 
 
@@ -2694,8 +2774,10 @@ async def _check_all_impl(trigger: str = "scheduler") -> Dict[str, Any]:
 
                 if price is None:
                     logger.info("Price not found for sub %s url %s", sub_id, url)
+                    remember_check_failure(sub_id, "price_not_found")
                     return
 
+                clear_subscription_check_failure(sub_id)
                 processed_count += 1
 
                 if last_price is None:
@@ -2836,6 +2918,10 @@ async def _check_all_impl(trigger: str = "scheduler") -> Dict[str, Any]:
             except Exception as e:
                 sid = locals().get('sub_id', 'unknown')
                 logger.exception("check_all inner error for sub %s: %s", sid, e)
+                if isinstance(sid, int):
+                    remember_check_failure(sid, f"check_error:{type(e).__name__}")
+                else:
+                    failed_count += 1
 
     current_batch = []
     for sub in iter_all_subscriptions(batch_size=db_batch_size):
@@ -2865,9 +2951,11 @@ async def _check_all_impl(trigger: str = "scheduler") -> Dict[str, Any]:
     await send_grouped_notifications(grouped_notifications)
 
     logger.info(
-        "Scheduler job finished (trigger=%s) — processed %d, alerted %d",
+        "Scheduler job finished (trigger=%s) — processed %d, failed %d, skipped %d, alerted %d",
         trigger,
         processed_count,
+        failed_count,
+        skipped_count,
         alerted_count,
     )
     return {
@@ -2875,6 +2963,8 @@ async def _check_all_impl(trigger: str = "scheduler") -> Dict[str, Any]:
         "trigger": trigger,
         "total": total,
         "processed": processed_count,
+        "failed": failed_count,
+        "skipped": skipped_count,
         "alerted": alerted_count,
     }
 
@@ -2897,6 +2987,8 @@ async def check_all(trigger: str = "scheduler") -> Dict[str, Any]:
                 trigger=trigger,
                 total=result.get("total"),
                 processed=result.get("processed"),
+                failed=result.get("failed"),
+                skipped=result.get("skipped"),
                 alerted=result.get("alerted"),
                 duration=f"{result['duration_sec']}s",
             )
