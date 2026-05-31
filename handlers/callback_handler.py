@@ -12,14 +12,17 @@ from .base import BaseHandler
 from database import (
     get_subscription, remove_subscription, remove_subscriptions_by_user,
     update_mode, set_user_language, update_subscription_settings,
-    get_price_history, add_price_point, get_user_subscriptions,
+    update_last_price, update_subscription_meta,
+    get_price_history, add_price_point, save_price_point, get_user_subscriptions,
     get_user_language, get_bot_text, get_recommended_products,
-    remove_recommended_product
+    remove_recommended_product, record_subscription_check_failure,
+    clear_subscription_check_failure
 )
 from keyboards import subscription_controls_kb_for_user, get_main_kb
 from logging_utils import action_event, actor_label
 from localization import update_language_cache
 from user_texts import format_start_text
+from scraper import get_product_info_async
 from services.trending_service import (
     TREND_SEARCH_AWAIT,
     format_trending_items,
@@ -413,6 +416,15 @@ class CallbackHandler(BaseHandler):
                 await self._show_alerts_list(cq, user_id)
                 return
 
+            if data.startswith("refresh_price:"):
+                try:
+                    sub_id = int(data.split(":", 1)[1])
+                except ValueError:
+                    await cq.answer(self.t(user_id, "error_invalid_id"), show_alert=True)
+                    return
+                await self._handle_refresh_price(cq, user_id, sub_id)
+                return
+
             if data.startswith("history:"):
                 try:
                     sub_id = int(data.split(":", 1)[1])
@@ -448,6 +460,35 @@ class CallbackHandler(BaseHandler):
             return f"{float(price):.0f} TL"
         except (TypeError, ValueError):
             return self.t(user_id, "unknown_price")
+
+    @staticmethod
+    def _price_changed(old_price, new_price) -> bool:
+        if old_price is None:
+            return True
+        try:
+            return round(float(old_price), 2) != round(float(new_price), 2)
+        except (TypeError, ValueError):
+            return True
+
+    @staticmethod
+    def _format_price_change(old_price, new_price) -> str:
+        try:
+            old_value = float(old_price)
+            new_value = float(new_price)
+        except (TypeError, ValueError):
+            return ""
+
+        diff = new_value - old_value
+        if abs(diff) < 0.005:
+            return "0 TL"
+
+        sign = "+" if diff > 0 else ""
+        diff_text = f"{sign}{diff:.0f} TL"
+        if old_value:
+            percent = diff / old_value * 100
+            percent_sign = "+" if percent > 0 else ""
+            diff_text += f" ({percent_sign}{percent:.1f}%)"
+        return diff_text
 
     @staticmethod
     def _safe_ts_to_iso(ts_val):
@@ -603,6 +644,85 @@ class CallbackHandler(BaseHandler):
         except Exception as e:
             logger.exception("alerts_back callback error: %s", e)
             await self._send_callback_problem(cq, user_id)
+
+    async def _handle_refresh_price(self, cq: CallbackQuery, user_id: int, sub_id: int):
+        sub = get_subscription(sub_id)
+        if not sub or sub[1] != user_id:
+            await cq.answer(self.t(user_id, "error_not_your_sub"), show_alert=True)
+            return
+
+        status_text = self.t(user_id, "status_checking_product")
+        await cq.answer(status_text)
+        status_message = await self.send_status_message(user_id, status_text)
+
+        values = list(sub)
+        while len(values) < 7:
+            values.append(None)
+        _, _, url, _, old_price, old_title, old_image = values[:7]
+
+        try:
+            new_price, new_title, new_image = await get_product_info_async(url)
+            if new_price is None:
+                record_subscription_check_failure(sub_id, "manual_price_not_found")
+                await self.replace_status_message(
+                    status_message,
+                    self.t(user_id, "refresh_price_unavailable"),
+                    fallback_target=user_id,
+                    reply_markup=self._subscription_detail_keyboard(user_id, sub_id),
+                )
+                return
+
+            new_price = float(new_price)
+            title_to_store = new_title or old_title
+            image_to_store = new_image or old_image
+            if title_to_store != old_title or image_to_store != old_image:
+                update_subscription_meta(sub_id, title_to_store, image_to_store)
+
+            changed = self._price_changed(old_price, new_price)
+            if changed:
+                save_price_point(sub_id, new_price)
+                update_last_price(sub_id, new_price)
+
+            clear_subscription_check_failure(sub_id)
+            action_event(
+                "USER",
+                "checked subscription price from button",
+                user=actor_label(cq.from_user),
+                sub_id=sub_id,
+                changed=changed,
+            )
+
+            title = html.escape(self._short_title(title_to_store, url, limit=90))
+            new_price_text = html.escape(self._format_price(user_id, new_price))
+            if old_price is None:
+                body = self.t(user_id, "refresh_price_loaded", price=new_price_text)
+            elif changed:
+                body = self.t(
+                    user_id,
+                    "refresh_price_updated",
+                    old_price=html.escape(self._format_price(user_id, old_price)),
+                    new_price=new_price_text,
+                    change=html.escape(self._format_price_change(old_price, new_price)),
+                )
+            else:
+                body = self.t(user_id, "refresh_price_unchanged", price=new_price_text)
+
+            result_text = f"<b>{title}</b>\n\n{body}"
+            await self.replace_status_message(
+                status_message,
+                result_text,
+                fallback_target=user_id,
+                reply_markup=self._subscription_detail_keyboard(user_id, sub_id),
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+        except Exception as e:
+            logger.exception("refresh_price callback error: %s", e)
+            await self.replace_status_message(
+                status_message,
+                self.t(user_id, "error_generic"),
+                fallback_target=user_id,
+            )
 
     async def _send_history_plot(self, user_id: int, url: str, hist) -> bool:
         from services.notification_service import NotificationService

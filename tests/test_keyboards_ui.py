@@ -32,6 +32,7 @@ def test_subscription_controls_use_unsubscribe_inline_key_and_callback(monkeypat
         "btn_mode_discount": "MODE_DISCOUNT",
         "btn_history": "HISTORY",
         "btn_price_alert": "PRICE_ALERT",
+        "btn_refresh_price": "REFRESH",
         "btn_unsubscribe_inline": "UNSUB_INLINE",
         "btn_compare": "COMPARE",
     }
@@ -53,9 +54,11 @@ def test_subscription_controls_use_unsubscribe_inline_key_and_callback(monkeypat
 
     assert kb.inline_keyboard[0][0].text == "MODE_DISCOUNT"
     assert kb.inline_keyboard[0][1].text == "✅ MODE_HOURLY"
-    assert kb.inline_keyboard[1][1].text == "PRICE_ALERT"
-    assert kb.inline_keyboard[1][1].callback_data == "alert_edit:55"
-    assert kb.inline_keyboard[2][0].text == "COMPARE"
-    assert kb.inline_keyboard[2][0].callback_data == "compare:55"
-    assert kb.inline_keyboard[2][1].text == "UNSUB_INLINE"
-    assert kb.inline_keyboard[2][1].callback_data == "unsubscribe:55"
+    assert kb.inline_keyboard[1][0].text == "REFRESH"
+    assert kb.inline_keyboard[1][0].callback_data == "refresh_price:55"
+    assert kb.inline_keyboard[2][1].text == "PRICE_ALERT"
+    assert kb.inline_keyboard[2][1].callback_data == "alert_edit:55"
+    assert kb.inline_keyboard[3][0].text == "COMPARE"
+    assert kb.inline_keyboard[3][0].callback_data == "compare:55"
+    assert kb.inline_keyboard[3][1].text == "UNSUB_INLINE"
+    assert kb.inline_keyboard[3][1].callback_data == "unsubscribe:55"

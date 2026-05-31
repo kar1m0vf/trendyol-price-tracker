@@ -115,6 +115,12 @@ def subscription_controls_kb_for_user(
             ],
             [
                 InlineKeyboardButton(
+                    text=translate_func(user_id, "btn_refresh_price"),
+                    callback_data=f"refresh_price:{sub_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
                     text=translate_func(user_id, "btn_history"),
                     callback_data=f"history:{sub_id}",
                 ),

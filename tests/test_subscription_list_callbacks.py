@@ -155,6 +155,148 @@ async def test_history_callback_keeps_visible_error_when_plot_delivery_fails(mon
 
 
 @pytest.mark.asyncio
+async def test_refresh_price_callback_rejects_foreign_subscription(monkeypatch):
+    handler = CallbackHandler()
+    foreign_sub = (
+        42,
+        99999,
+        "https://www.trendyol.com/test/product-p-42",
+        "discount",
+        199.0,
+        "Test product",
+        None,
+        None,
+        None,
+        None,
+        60,
+        None,
+        None,
+    )
+    fetch = AsyncMock(return_value=(179.0, "Fresh title", None))
+    handler.send_status_message = AsyncMock()
+
+    monkeypatch.setattr(callback_module, "get_subscription", lambda sub_id: foreign_sub)
+    monkeypatch.setattr(callback_module, "get_product_info_async", fetch)
+
+    cq = MagicMock()
+    cq.data = "refresh_price:42"
+    cq.from_user.id = 12345
+    cq.answer = AsyncMock()
+    cq.message = MagicMock()
+
+    await handler.handle_main_callback(cq)
+
+    fetch.assert_not_awaited()
+    handler.send_status_message.assert_not_awaited()
+    cq.answer.assert_awaited_once_with(handler.t(12345, "error_not_your_sub"), show_alert=True)
+
+
+@pytest.mark.asyncio
+async def test_refresh_price_callback_updates_changed_price(monkeypatch):
+    handler = CallbackHandler()
+    status_message = MagicMock()
+    sub = (
+        42,
+        12345,
+        "https://www.trendyol.com/test/product-p-42",
+        "discount",
+        199.0,
+        "Test product",
+        None,
+        None,
+        None,
+        None,
+        60,
+        None,
+        None,
+    )
+    fetch = AsyncMock(return_value=(179.0, "Fresh title", "https://img.example/1.jpg"))
+    update_last = MagicMock()
+    update_meta = MagicMock()
+    save_point = MagicMock(return_value=1)
+    clear_failure = MagicMock()
+
+    monkeypatch.setattr(callback_module, "get_subscription", lambda sub_id: sub)
+    monkeypatch.setattr(callback_module, "get_product_info_async", fetch)
+    monkeypatch.setattr(callback_module, "update_last_price", update_last)
+    monkeypatch.setattr(callback_module, "update_subscription_meta", update_meta)
+    monkeypatch.setattr(callback_module, "save_price_point", save_point)
+    monkeypatch.setattr(callback_module, "clear_subscription_check_failure", clear_failure)
+    monkeypatch.setattr(callback_module, "action_event", lambda *args, **kwargs: None)
+    handler.send_status_message = AsyncMock(return_value=status_message)
+    handler.replace_status_message = AsyncMock(return_value=True)
+    handler._subscription_detail_keyboard = MagicMock(return_value=None)
+
+    cq = MagicMock()
+    cq.data = "refresh_price:42"
+    cq.from_user.id = 12345
+    cq.answer = AsyncMock()
+    cq.message = MagicMock()
+
+    await handler.handle_main_callback(cq)
+
+    fetch.assert_awaited_once_with("https://www.trendyol.com/test/product-p-42")
+    update_meta.assert_called_once_with(42, "Fresh title", "https://img.example/1.jpg")
+    save_point.assert_called_once_with(42, 179.0)
+    update_last.assert_called_once_with(42, 179.0)
+    clear_failure.assert_called_once_with(42)
+    handler.replace_status_message.assert_awaited_once()
+    result_text = handler.replace_status_message.await_args.args[1]
+    assert "Fresh title" in result_text
+    assert "199" in result_text
+    assert "179" in result_text
+    assert handler.replace_status_message.await_args.kwargs["parse_mode"] == "HTML"
+
+
+@pytest.mark.asyncio
+async def test_refresh_price_callback_records_failure_when_price_missing(monkeypatch):
+    handler = CallbackHandler()
+    status_message = MagicMock()
+    sub = (
+        42,
+        12345,
+        "https://www.trendyol.com/test/product-p-42",
+        "discount",
+        199.0,
+        "Test product",
+        None,
+        None,
+        None,
+        None,
+        60,
+        None,
+        None,
+    )
+    fetch = AsyncMock(return_value=(None, None, None))
+    record_failure = MagicMock()
+    update_last = MagicMock()
+    save_point = MagicMock()
+
+    monkeypatch.setattr(callback_module, "get_subscription", lambda sub_id: sub)
+    monkeypatch.setattr(callback_module, "get_product_info_async", fetch)
+    monkeypatch.setattr(callback_module, "record_subscription_check_failure", record_failure)
+    monkeypatch.setattr(callback_module, "update_last_price", update_last)
+    monkeypatch.setattr(callback_module, "save_price_point", save_point)
+    handler.send_status_message = AsyncMock(return_value=status_message)
+    handler.replace_status_message = AsyncMock(return_value=True)
+    handler._subscription_detail_keyboard = MagicMock(return_value=None)
+
+    cq = MagicMock()
+    cq.data = "refresh_price:42"
+    cq.from_user.id = 12345
+    cq.answer = AsyncMock()
+    cq.message = MagicMock()
+
+    await handler.handle_main_callback(cq)
+
+    record_failure.assert_called_once_with(42, "manual_price_not_found")
+    update_last.assert_not_called()
+    save_point.assert_not_called()
+    handler.replace_status_message.assert_awaited_once()
+    assert handler.t(12345, "refresh_price_unavailable") in handler.replace_status_message.await_args.args[1]
+
+
+@pytest.mark.asyncio
 async def test_callback_unexpected_error_sends_durable_message(monkeypatch):
     handler = CallbackHandler()
     monkeypatch.setattr(callback_module, "get_user_subscriptions", lambda user_id: (_ for _ in ()).throw(RuntimeError("db down")))

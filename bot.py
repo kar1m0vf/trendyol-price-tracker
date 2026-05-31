@@ -667,6 +667,9 @@ def subscription_controls_kb_for_user(user_id: int, sub_id: int) -> InlineKeyboa
             InlineKeyboardButton(text=mode_label_hourly, callback_data=f"mode:{sub_id}:hourly")
         ],
         [
+            InlineKeyboardButton(text=t(user_id, "btn_refresh_price"), callback_data=f"refresh_price:{sub_id}")
+        ],
+        [
             InlineKeyboardButton(text=t(user_id, "btn_history"), callback_data=f"history:{sub_id}"),
             InlineKeyboardButton(text=t(user_id, "btn_price_alert"), callback_data=f"alert_edit:{sub_id}")
         ],
