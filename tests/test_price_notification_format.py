@@ -85,3 +85,5 @@ async def test_grouped_price_notifications_use_summaries(monkeypatch):
     assert "Product B" in sent[0]["text"]
     assert url_a not in sent[0]["text"]
     assert url_b not in sent[0]["text"]
+    assert "\u2022 " in sent[0]["text"]
+    assert "\n1. " not in sent[0]["text"]

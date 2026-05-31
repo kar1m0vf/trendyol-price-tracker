@@ -54,6 +54,28 @@ def test_add_subscription_and_price_flow(temp_db_path):
                     
     assert database.get_subscription(sub_id) is None
 
+
+def test_subscription_order_stays_stable_after_price_updates(temp_db_path, monkeypatch):
+    user_id = 12345
+    first_id = database.add_subscription(
+        user_id,
+        "https://www.trendyol.com/test-product-a",
+        product_title="First product",
+    )
+    second_id = database.add_subscription(
+        user_id,
+        "https://www.trendyol.com/test-product-b",
+        product_title="Second product",
+    )
+
+    monkeypatch.setattr(database.time, "time", lambda: 4102444800)
+    database.update_last_price(first_id, 99.0)
+    database.update_notify_time(first_id)
+
+    subs = database.get_user_subscriptions(user_id)
+
+    assert [sub[0] for sub in subs] == [second_id, first_id]
+
 def test_price_history_functions_empty(temp_db_path):
                                                                        
     assert database.get_price_history(9999999) == []

@@ -61,6 +61,7 @@ Commands that target a specific product use the number from `/mysubs`:
 ```
 
 If a product is displayed as `№ 1`, the user enters `1`. This is easier than exposing internal database IDs such as `120`.
+Price notifications use the same product numbers, and background price checks do not renumber the watchlist.
 
 ## Notification Modes
 

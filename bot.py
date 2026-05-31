@@ -2650,8 +2650,8 @@ async def send_grouped_notifications(grouped_notifications: Dict[int, List[Notif
                         f"({len(notifications)})\n\n"
                     )
 
-                    for i, notification in enumerate(notifications[:10], 1):
-                        grouped_text += f"{i}. {_notification_summary_html(notification)}\n\n"
+                    for notification in notifications[:10]:
+                        grouped_text += f"\u2022 {_notification_summary_html(notification)}\n\n"
 
                     if len(notifications) > 10:
                         grouped_text += html.escape(

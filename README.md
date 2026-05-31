@@ -122,7 +122,8 @@ Detailed system notes are in [Architecture](docs/ARCHITECTURE.md).
 | `/runcheck` | Admin manual price check run |
 | `/admin` | Admin panel |
 
-Product numbers come from `/mysubs`. Internal database IDs are intentionally hidden from regular users.
+Product numbers come from `/mysubs` and keep the same stable order in price notifications.
+Internal database IDs are intentionally hidden from regular users.
 
 ## Architecture Snapshot
 

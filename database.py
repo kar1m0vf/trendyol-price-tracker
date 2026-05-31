@@ -267,6 +267,10 @@ def init_db(run_maintenance: bool = True):
         cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_subscriptions_user_compound ON subscriptions(user_id, updated_at DESC)
         """)
+
+        cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_subscriptions_user_order ON subscriptions(user_id, id DESC)
+        """)
         
                                                     
         cur.execute("""
@@ -370,6 +374,7 @@ def init_db(run_maintenance: bool = True):
             indexes_to_create = [
                 ("idx_users_language", "CREATE INDEX idx_users_language ON users(language)"),
                 ("idx_subscriptions_user_id", "CREATE INDEX idx_subscriptions_user_id ON subscriptions(user_id)"),
+                ("idx_subscriptions_user_order", "CREATE INDEX idx_subscriptions_user_order ON subscriptions(user_id, id DESC)"),
                 ("idx_subscriptions_url", "CREATE INDEX idx_subscriptions_url ON subscriptions(url)"),
                 ("idx_subscriptions_mode", "CREATE INDEX idx_subscriptions_mode ON subscriptions(notify_mode)"),
                 ("idx_subscriptions_notify_time", "CREATE INDEX idx_subscriptions_notify_time ON subscriptions(last_notify_time)"),
@@ -602,7 +607,7 @@ def get_user_subscriptions(user_id: int) -> List[Tuple]:
                    min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert, tags
             FROM subscriptions
             WHERE user_id = ?
-            ORDER BY updated_at DESC
+            ORDER BY id DESC
         """, (user_id,))
         rows = cur.fetchall()
     return rows
@@ -641,7 +646,7 @@ def get_user_subscriptions_by_tag(user_id: int, tag: str) -> List[Tuple]:
                    min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert, tags
             FROM subscriptions
             WHERE user_id = ? AND (',' || IFNULL(tags, '') || ',') LIKE ?
-            ORDER BY updated_at DESC
+            ORDER BY id DESC
         """, (user_id, '%,' + tag + ',%'))
         return cur.fetchall()
 
