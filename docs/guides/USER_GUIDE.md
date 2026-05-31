@@ -179,6 +179,20 @@ Commands:
 
 The bot exports the user's subscriptions as CSV or JSON documents and sends them directly to the user. The normal export flow does not create persistent export files in the runtime artifact directories.
 
+## Import
+
+Command:
+
+```text
+/import
+```
+
+The bot can restore subscriptions from CSV or JSON files created by `/export`.
+Users can run `/import` and then attach the file, or send the file with `/import`
+in the document caption. Existing tracked products are skipped as duplicates;
+valid new Trendyol product rows are added with their saved mode, alert settings,
+interval, last known price, title, image, and tags where present.
+
 ## User Reports
 
 Command:

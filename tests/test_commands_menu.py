@@ -43,6 +43,7 @@ async def test_set_commands_menu():
         BotCommand(command="about", description="ℹ️ About the bot"),
         BotCommand(command="ping", description="🏓 Check bot response"),
         BotCommand(command="health", description="💚 Bot health status"),
+        BotCommand(command="import", description="📥 Import data"),
     ]
 
     try:

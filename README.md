@@ -113,7 +113,7 @@ Detailed system notes are in [Architecture](docs/ARCHITECTURE.md).
 | `/alerts` | Manage target prices |
 | `/recommend` | Recommendations |
 | `/export csv` | Export user subscriptions |
-| `/import` | Import instructions for subscriptions |
+| `/import` | Import subscriptions from CSV/JSON export |
 | `/report` | Send a report to admins |
 | `/about` | Bot information |
 | `/ping` | Response check |

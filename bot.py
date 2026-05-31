@@ -23,7 +23,7 @@ from aiogram.types import (
 from config import BOT_TOKEN, _check_bot_token, USE_NEW_HANDLERS, DATABASE_PATH
 from utils import get_next_notification_time
 import aiogram
-from logging_utils import action_event, configure_logging, short_value
+from logging_utils import action_event, actor_label, configure_logging, short_value
 from database import (
     init_db,
     add_user_if_not_exists,
@@ -46,6 +46,7 @@ from database import (
     record_subscription_check_failure,
     clear_subscription_check_failure,
     get_subscription_check_failures_for_user,
+    set_subscription_tags,
     save_price_points_batch,
     get_bot_text,
     close_all_connections,
@@ -278,6 +279,7 @@ health_check_interval = 60
 
 alert_edit_state = {}
 report_state = {}
+import_state = set()
 
 
 onboarding_state = {}
@@ -3445,17 +3447,252 @@ async def cmd_alerts(message: types.Message):
         logger.exception("Error in cmd_alerts: %s", e)
         await message.answer(t(user_id, "error_generic"))
 
+IMPORT_MAX_BYTES = 2 * 1024 * 1024
+IMPORT_FIELDS = {
+    "url",
+    "mode",
+    "notify_mode",
+    "last_price",
+    "product_title",
+    "product_image",
+    "min_price",
+    "max_price",
+    "notify_percent",
+    "notify_interval",
+    "price_alert",
+    "tags",
+}
+
+
+def _import_row_value(row: Dict[str, Any], *keys: str) -> Any:
+    lowered = {str(k).strip().lower(): v for k, v in row.items()}
+    for key in keys:
+        value = lowered.get(key.lower())
+        if value is not None:
+            return value
+    return None
+
+
+def _import_blank_to_none(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in {"none", "null", "nan"}:
+        return None
+    return text
+
+
+def _import_float(value: Any) -> Optional[float]:
+    text = _import_blank_to_none(value)
+    if text is None:
+        return None
+    text = text.replace("TL", "").replace("₺", "").replace(" ", "").replace(",", ".")
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _import_int(value: Any, default: int = 60) -> int:
+    text = _import_blank_to_none(value)
+    if text is None:
+        return default
+    try:
+        return max(15, int(float(text.replace(",", "."))))
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_import_rows(filename: str, payload: bytes) -> List[Dict[str, Any]]:
+    name = (filename or "").lower()
+    text = payload.decode("utf-8-sig")
+
+    if name.endswith(".json") or text.lstrip().startswith(("[", "{")):
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            if isinstance(parsed.get("subscriptions"), list):
+                parsed = parsed["subscriptions"]
+            else:
+                parsed = [parsed]
+        if not isinstance(parsed, list):
+            raise ValueError("unsupported_format")
+        return [item for item in parsed if isinstance(item, dict)]
+
+    if name.endswith(".csv"):
+        reader = csv.DictReader(io.StringIO(text))
+        if not reader.fieldnames:
+            raise ValueError("unsupported_format")
+        fieldnames = {field.strip().lower() for field in reader.fieldnames if field}
+        if "url" not in fieldnames or not fieldnames.intersection(IMPORT_FIELDS):
+            raise ValueError("unsupported_format")
+        return [dict(row) for row in reader]
+
+    raise ValueError("unsupported_format")
+
+
+def _import_subscription_rows(user_id: int, rows: List[Dict[str, Any]]) -> Dict[str, int]:
+    result = {
+        "total": len(rows),
+        "added": 0,
+        "duplicates": 0,
+        "invalid": 0,
+        "failed": 0,
+    }
+
+    existing_urls = {
+        normalize_url(sub[2]).lower()
+        for sub in get_user_subscriptions(user_id)
+        if len(sub) > 2 and sub[2]
+    }
+
+    for row in rows:
+        try:
+            raw_url = _import_blank_to_none(_import_row_value(row, "url"))
+            url = normalize_url(ensure_url_scheme(raw_url or ""))
+            url_key = url.lower()
+            if not url or "trendyol.com" not in url_key or not is_trendyol_product_url(url):
+                result["invalid"] += 1
+                continue
+
+            if url_key in existing_urls:
+                result["duplicates"] += 1
+                continue
+
+            mode = (_import_blank_to_none(_import_row_value(row, "mode", "notify_mode")) or DEFAULT_NOTIFY_MODE).lower()
+            if mode not in {"discount", "hourly"}:
+                mode = DEFAULT_NOTIFY_MODE
+
+            min_price = _import_float(_import_row_value(row, "min_price"))
+            max_price = _import_float(_import_row_value(row, "max_price"))
+            notify_percent = _import_float(_import_row_value(row, "notify_percent"))
+            notify_interval = _import_int(_import_row_value(row, "notify_interval"), default=60)
+            product_title = _import_blank_to_none(_import_row_value(row, "product_title", "title"))
+            product_image = _import_blank_to_none(_import_row_value(row, "product_image", "image"))
+
+            sub_id = add_subscription(
+                user_id,
+                url,
+                mode,
+                min_price=min_price,
+                max_price=max_price,
+                notify_percent=notify_percent,
+                notify_interval=notify_interval,
+                product_title=product_title,
+                product_image=product_image,
+            )
+
+            last_price = _import_float(_import_row_value(row, "last_price"))
+            if last_price is not None:
+                update_last_price(sub_id, last_price)
+                save_price_point(sub_id, last_price)
+
+            price_alert = _import_float(_import_row_value(row, "price_alert"))
+            if price_alert is not None:
+                update_subscription_settings(sub_id, price_alert=price_alert)
+
+            tags_text = _import_blank_to_none(_import_row_value(row, "tags"))
+            if tags_text:
+                set_subscription_tags(sub_id, [tag.strip() for tag in tags_text.split(",")])
+
+            existing_urls.add(url_key)
+            result["added"] += 1
+        except Exception as exc:
+            logger.exception("Failed to import subscription row for user=%s: %s", user_id, exc)
+            result["failed"] += 1
+
+    return result
+
+
+async def _read_import_document_bytes(message: types.Message) -> Tuple[str, bytes]:
+    document = getattr(message, "document", None)
+    if document is None:
+        raise ValueError("missing_file")
+
+    filename = getattr(document, "file_name", "") or ""
+    file_size = getattr(document, "file_size", None)
+    if file_size and int(file_size) > IMPORT_MAX_BYTES:
+        raise ValueError("file_too_large")
+
+    buffer = io.BytesIO()
+    downloaded = await _get_runtime_bot().download(document, destination=buffer)
+    if downloaded is not None and hasattr(downloaded, "getvalue"):
+        payload = downloaded.getvalue()
+    else:
+        payload = buffer.getvalue()
+
+    if len(payload) > IMPORT_MAX_BYTES:
+        raise ValueError("file_too_large")
+    return filename, payload
+
+
+async def _handle_import_document(message: types.Message) -> None:
+    user_id = message.from_user.id
+    add_user_if_not_exists(user_id)
+
+    try:
+        filename, payload = await _read_import_document_bytes(message)
+        rows = _parse_import_rows(filename, payload)
+        if not rows:
+            await message.answer(t(user_id, "import_empty"))
+            return
+
+        result = _import_subscription_rows(user_id, rows)
+        await message.answer(t(user_id, "import_result", **result))
+        action_event(
+            "USER",
+            "imported subscriptions",
+            user=actor_label(message.from_user),
+            added=result["added"],
+            duplicates=result["duplicates"],
+            invalid=result["invalid"],
+            failed=result["failed"],
+        )
+    except ValueError as exc:
+        reason = str(exc)
+        if reason == "file_too_large":
+            await message.answer(t(user_id, "import_file_too_large", limit_mb=IMPORT_MAX_BYTES // 1024 // 1024))
+        elif reason in {"unsupported_format", "missing_file"}:
+            await message.answer(t(user_id, "import_unsupported_format"))
+        else:
+            await message.answer(t(user_id, "import_parse_error"))
+    except (UnicodeDecodeError, json.JSONDecodeError, csv.Error):
+        await message.answer(t(user_id, "import_parse_error"))
+    except Exception as exc:
+        logger.exception("Import command error: %s", exc)
+        await message.answer(t(user_id, "error_generic"))
+    finally:
+        import_state.discard(user_id)
+
+
+def _filter_import_document(message: types.Message) -> bool:
+    document = getattr(message, "document", None)
+    if document is None or getattr(message, "from_user", None) is None:
+        return False
+    caption = (getattr(message, "caption", None) or "").strip().lower()
+    return message.from_user.id in import_state or caption.startswith("/import")
+
+
 @router.message(Command("import"))
 async def cmd_import(message: types.Message):
     """Импорт подписок из файла"""
     user_id = message.from_user.id
     add_user_if_not_exists(user_id)
 
+    if getattr(message, "document", None) is not None:
+        await _handle_import_document(message)
+        return
+
+    import_state.add(user_id)
     await message.answer(
         f"{t(user_id, 'import_help')}\n\n"
         f"📎 {t(user_id, 'import_instruction')}",
         parse_mode="HTML"
     )
+
+@router.message(_filter_import_document)
+async def cmd_import_document(message: types.Message):
+    await _handle_import_document(message)
+
 
 async def cmd_compare_urls(message: types.Message):
     """Legacy helper: compare two direct URLs (router now lives in cmd_compare)."""
@@ -3731,6 +3968,7 @@ async def set_commands_menu():
         BotCommand(command="about", description="ℹ️ About the bot"),
         BotCommand(command="ping", description="🏓 Check bot response"),
         BotCommand(command="health", description="💚 Bot health status"),
+        BotCommand(command="import", description="📥 Import data"),
     ]
 
     try:

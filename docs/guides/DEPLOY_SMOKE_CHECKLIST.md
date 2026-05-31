@@ -51,12 +51,14 @@ In Telegram:
 4. Send `/history_export 1 30 csv`
 5. Send `/history_plot 1 30`
 6. Send `/export csv`
-7. Send `/unsubscribe 1`
+7. Send `/import` and attach the exported CSV file
+8. Send `/unsubscribe 1`
 
 Expected:
 - subscription is created, visible, and removable;
-- history, chart, and export commands do not fail;
-- export commands deliver Telegram documents directly.
+- history, chart, export, and import commands do not fail;
+- export commands deliver Telegram documents directly;
+- import skips duplicates and reports the result clearly.
 
 ## 5. Discovery Flow
 
