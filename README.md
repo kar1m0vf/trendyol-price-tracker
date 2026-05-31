@@ -96,16 +96,29 @@ Detailed system notes are in [Architecture](docs/ARCHITECTURE.md).
 | `/start` | First launch and main menu |
 | `/help` | User help |
 | `/mysubs` | Personal tracked products |
+| `/unsubscribe 1` | Remove product `№ 1` from the watchlist |
 | `/history 1` | Price history for product `№ 1` |
+| `/history_export 1 30 csv` | Export recent price history |
+| `/history_plot 1 30` | Generate a price history chart |
 | `/stats 1` | Price statistics |
+| `/all_list` | Compact table of tracked products |
+| `/top_drops` | Products with the largest visible price drops |
 | `/compare 1` | Compare a saved product |
 | `/compare <url1> <url2>` | Compare two product URLs |
+| `/setmode 1 discount` | Change notification mode |
 | `/price_alert 1 2500` | Notify when product `№ 1` reaches 2500 TL or lower |
-| `/settings` | Quiet hours, intervals, and thresholds |
+| `/settings quiet 23 7` | Configure quiet hours |
+| `/settings interval 1 60` | Configure a product notification interval |
+| `/settings price 1 min:1000 max:3000 percent:10` | Configure min/max and percent thresholds |
 | `/alerts` | Manage target prices |
 | `/recommend` | Recommendations |
-| `/export` | Export user subscriptions |
+| `/export csv` | Export user subscriptions |
+| `/import` | Import instructions for subscriptions |
+| `/report` | Send a report to admins |
+| `/about` | Bot information |
+| `/ping` | Response check |
 | `/health` | Admin health check |
+| `/runcheck` | Admin manual price check run |
 | `/admin` | Admin panel |
 
 Product numbers come from `/mysubs`. Internal database IDs are intentionally hidden from regular users.
@@ -121,6 +134,7 @@ aiogram Dispatcher / Router
     +--> handlers/basic.py
     +--> handlers/subscription_handler.py
     +--> handlers/analytics_handler.py
+    +--> handlers/trending_handler.py
     +--> handlers/callback_handler.py
     +--> handlers/admin_handler.py
     |
@@ -169,7 +183,7 @@ The project includes checks for:
 - scraper parsing helpers;
 - notification flow.
 
-Recent local verification: `191 passed, 3 skipped`.
+Latest recorded local verification: `191 passed, 3 skipped`. Re-run `python -m pytest -q` before release or deployment.
 
 ## Documentation
 

@@ -9,7 +9,7 @@ This repository contains the source code and documentation for the Trendyol Pric
 | [README.md](README.md) | General | Product overview, capabilities, ownership policy |
 | [User Guide](docs/guides/USER_GUIDE.md) | Product | Telegram user experience and workflows |
 | [Architecture](docs/ARCHITECTURE.md) | Engineering | Runtime, modules, data model, scheduler, callbacks |
-| [Owner Operations Runbook](docs/guides/OPERATIONS.md) | Operations | Private runtime, maintenance, backups, and checks |
+| Owner Operations Runbook | Operations | Private runtime notes, kept outside the public source tree |
 
 ## Diagnostics
 

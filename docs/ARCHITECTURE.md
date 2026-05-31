@@ -17,6 +17,7 @@ aiogram Dispatcher / Router
     +--> handlers/basic.py
     +--> handlers/subscription_handler.py
     +--> handlers/analytics_handler.py
+    +--> handlers/trending_handler.py
     +--> handlers/callback_handler.py
     +--> handlers/admin_handler.py
     |
@@ -53,6 +54,7 @@ Some command helpers still live in `bot.py` while the handler package migration 
 | `handlers/basic.py` | `/start`, `/help`, `/language`, language/help buttons |
 | `handlers/subscription_handler.py` | `/mysubs`, `/unsubscribe`, watchlist buttons, Trendyol URL handling |
 | `handlers/analytics_handler.py` | `/stats`, `/all_list`, `/top_drops` |
+| `handlers/trending_handler.py` | Trend menu entry point and trend search text input |
 | `handlers/callback_handler.py` | Inline product controls, history, compare, alerts, trends, admin callbacks |
 | `handlers/admin_handler.py` | Admin menu, stats, users, broadcast, reports, cleanup, backups, recommendations |
 
