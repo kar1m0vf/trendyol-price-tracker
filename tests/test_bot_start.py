@@ -64,17 +64,17 @@ async def test_bot_start():
             print(f"⚠️  Webhook deletion failed (may be OK): {e}")
 
         print("🎉 Bot startup test completed successfully!")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Bot startup test failed: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        raise AssertionError("test reported failure")
 
 if __name__ == "__main__":
-    success = asyncio.run(test_bot_start())
-    sys.exit(0 if success else 1)
+    asyncio.run(test_bot_start())
+    sys.exit(0)
 
 
 

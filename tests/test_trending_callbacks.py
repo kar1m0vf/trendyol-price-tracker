@@ -29,8 +29,12 @@ async def test_trending_callbacks():
         mock_cq.answer = AsyncMock()
 
 
-        with patch.object(bot, 'bot') as mock_bot:
+        with patch.object(bot, 'bot') as mock_bot, \
+             patch('scraper.get_trending_all_top3_async', new_callable=AsyncMock) as mock_all, \
+             patch('scraper.get_trending_by_category_top3_async', new_callable=AsyncMock) as mock_category:
             mock_bot.send_message = AsyncMock()
+            mock_all.return_value = [("Test Product", 1000.0, "https://trendyol.com/test-p-123")]
+            mock_category.return_value = [("Category Product", 900.0, "https://trendyol.com/category-p-456")]
             handler = CallbackHandler()
             handler._bot = mock_bot
 
@@ -38,10 +42,10 @@ async def test_trending_callbacks():
             await handler.handle_main_callback(mock_cq)
 
 
-            assert mock_bot.send_message.called, "bot.send_message не был вызван для trend:all"
+            assert mock_cq.message.edit_text.called, "message.edit_text не был вызван для trend:all"
 
 
-            mock_bot.send_message.reset_mock()
+            mock_cq.message.edit_text.reset_mock()
             mock_cq.data = "trend:catmenu"
             mock_cq.message.edit_text.reset_mock()
 
@@ -59,10 +63,10 @@ async def test_trending_callbacks():
             await handler.handle_main_callback(mock_cq)
 
 
-            assert mock_bot.send_message.called, "bot.send_message не был вызван для trend:cat:electronics"
+            assert mock_cq.message.edit_text.called, "message.edit_text не был вызван для trend:cat:electronics"
 
 
-            mock_bot.send_message.reset_mock()
+            mock_cq.message.edit_text.reset_mock()
             mock_cq.data = "trend:search"
 
 
@@ -72,13 +76,13 @@ async def test_trending_callbacks():
             assert mock_cq.message.edit_text.called, "message.edit_text не был вызван для trend:search"
 
         print("✅ Callback handlers трендов работают корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в callback handlers трендов: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_trending_menu_kb():
     """Тест клавиатуры меню трендов"""
@@ -106,11 +110,11 @@ async def test_trending_menu_kb():
             assert expected in button_callbacks, f"Кнопка с callback_data '{expected}' не найдена"
 
         print("✅ Клавиатура меню трендов работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в клавиатуре меню трендов: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_trending_categories_kb():
     """Тест клавиатуры категорий трендов"""
@@ -138,11 +142,11 @@ async def test_trending_categories_kb():
             assert expected in button_callbacks, f"Кнопка с callback_data '{expected}' не найдена"
 
         print("✅ Клавиатура категорий трендов работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в клавиатуре категорий трендов: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_format_trending_items():
     """Тест функции format_trending_items"""
@@ -168,15 +172,15 @@ async def test_format_trending_items():
         assert len(result) > 0, "Строка не должна быть пустой"
 
 
-        assert "45000.0 TL" in result, "Цена должна быть отформатирована"
+        assert "45000 TL" in result, "Цена должна быть отформатирована"
         assert "цена неизвестна" in result, "Неизвестная цена должна быть обработана"
 
         print("✅ format_trending_items работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в format_trending_items: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_send_trending_list():
     """Тест функции send_trending_list"""
@@ -212,11 +216,11 @@ async def test_send_trending_list():
             assert mock_bot.send_message.call_count == 1, "Должно быть отправлено 1 сообщение"
 
         print("✅ send_trending_list работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в send_trending_list: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def main():
     """Запуск всех тестов трендов в боте"""
@@ -237,7 +241,7 @@ async def main():
     for test_func in test_functions:
         try:
             result = await test_func()
-            results.append(result)
+            results.append(result is not False)
         except Exception as e:
             print(f"❌ Критическая ошибка в {test_func.__name__}: {e}")
             results.append(False)

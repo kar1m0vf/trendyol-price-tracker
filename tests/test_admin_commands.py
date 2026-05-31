@@ -29,11 +29,11 @@ async def test_admin_command():
         assert mock_msg.answer.called, "Должен быть ответ на команду /admin"
 
         print("✅ Команда /admin работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в команде /admin: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_admin_stats():
     """Тест команды /admin stats"""
@@ -54,11 +54,11 @@ async def test_admin_stats():
         assert mock_msg.answer.called, "Должен быть ответ на команду /admin stats"
 
         print("✅ Команда /admin stats работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в команде /admin stats: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_admin_broadcast():
     """Тест команды /admin broadcast"""
@@ -85,11 +85,11 @@ async def test_admin_broadcast():
                                                                                                     
 
         print("✅ Команда /admin broadcast работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в команде /admin broadcast: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_admin_broadcast_empty():
     """Тест команды /admin broadcast без сообщения"""
@@ -110,11 +110,11 @@ async def test_admin_broadcast_empty():
         assert mock_msg.answer.called, "Должен быть ответ об ошибке"
 
         print("✅ Обработка пустого broadcast работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в обработке пустого broadcast: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_admin_users():
     """Тест команды /admin users"""
@@ -135,11 +135,11 @@ async def test_admin_users():
         assert mock_msg.answer.called, "Должен быть ответ на команду /admin users"
 
         print("✅ Команда /admin users работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в команде /admin users: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_admin_cleanup():
     """Тест команды /admin cleanup"""
@@ -160,11 +160,11 @@ async def test_admin_cleanup():
         assert mock_msg.answer.called, "Должен быть ответ на команду /admin cleanup"
 
         print("✅ Команда /admin cleanup работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в команде /admin cleanup: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_admin_backup():
     """Тест команды /admin backup"""
@@ -185,11 +185,11 @@ async def test_admin_backup():
         assert mock_msg.answer.called, "Должен быть ответ на команду /admin backup"
 
         print("✅ Команда /admin backup работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в команде /admin backup: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_admin_respond():
     """Тест команды /admin respond"""
@@ -210,11 +210,11 @@ async def test_admin_respond():
         assert mock_msg.answer.called, "Должен быть ответ на команду /admin respond"
 
         print("✅ Команда /admin respond работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в команде /admin respond: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_admin_unknown_command():
     """Тест неизвестной админской команды"""
@@ -235,11 +235,11 @@ async def test_admin_unknown_command():
         assert mock_msg.answer.called, "Должен быть ответ на неизвестную команду"
 
         print("✅ Обработка неизвестных команд работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в обработке неизвестных команд: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_admin_non_admin():
     """Тест доступа к админским командам не-админом"""
@@ -260,11 +260,11 @@ async def test_admin_non_admin():
         assert mock_msg.answer.called, "Должен быть отказ в доступе"
 
         print("✅ Защита от не-админов работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в защите от не-админов: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_is_admin_function():
     """Тест функции is_admin"""
@@ -283,11 +283,11 @@ async def test_is_admin_function():
         assert not is_admin(123456789), "Должен вернуть False для не-админа"
 
         print("✅ Функция is_admin работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в функции is_admin: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def main():
     """Запуск всех тестов админских команд"""
@@ -314,7 +314,7 @@ async def main():
     for test_func in test_functions:
         try:
             result = await test_func()
-            results.append(result)
+            results.append(result is not False)
         except Exception as e:
             print(f"❌ Критическая ошибка в {test_func.__name__}: {e}")
             results.append(False)

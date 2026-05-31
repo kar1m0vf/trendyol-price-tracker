@@ -39,11 +39,11 @@ def test_parse_price_text():
                 print(f"  ❌ '{input_text}' -> {result} (ожидалось {expected})")
 
         print(f"Результат parse_price_text: {passed}/{len(test_cases)} тестов пройдено")
-        return passed == len(test_cases)
+        assert passed == len(test_cases)
 
     except Exception as e:
         print(f"❌ Ошибка в parse_price_text: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 def test_extract_json_from_js_var():
     """Тест функции _extract_json_from_js_var"""
@@ -64,14 +64,14 @@ def test_extract_json_from_js_var():
 
         if result == expected:
             print("✅ _extract_json_from_js_var работает корректно")
-            return True
+            return
         else:
             print(f"❌ _extract_json_from_js_var: ожидалось {expected}, получено {result}")
-            return False
+            raise AssertionError("test reported failure")
 
     except Exception as e:
         print(f"❌ Ошибка в _extract_json_from_js_var: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_get_price_async_with_mock():
     """Тест get_price_async с mock данными"""
@@ -102,16 +102,16 @@ async def test_get_price_async_with_mock():
 
             if result == 2599.99:
                 print("✅ get_price_async с JavaScript парсингом работает")
-                return True
+                return
             else:
                 print(f"❌ get_price_async: ожидалось 2599.99, получено {result}")
-                return False
+                raise AssertionError("test reported failure")
 
     except Exception as e:
         print(f"❌ Ошибка в get_price_async: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_get_product_info_async_with_mock():
     """Тест get_product_info_async с mock данными"""
@@ -146,6 +146,7 @@ async def test_get_product_info_async_with_mock():
             mock_scraper.get.return_value = mock_response
 
             price, title, image = await get_product_info_async("https://trendyol.com/test-product-p-123")
+            assert mock_scraper.get.call_count == 1, "информация о товаре должна грузиться одним HTTP-запросом"
 
             success = True
             if price != 45000.99:
@@ -160,15 +161,15 @@ async def test_get_product_info_async_with_mock():
 
             if success:
                 print("✅ get_product_info_async работает корректно")
-                return True
+                return
             else:
-                return False
+                raise AssertionError("test reported failure")
 
     except Exception as e:
         print(f"❌ Ошибка в get_product_info_async: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        raise AssertionError("test reported failure")
 
 def test_rate_limiters():
     """Тест rate limiter'ов"""
@@ -182,14 +183,14 @@ def test_rate_limiters():
         if initial_can_proceed:
             TRENDYOL_LIMITER.add_request()
             print("✅ Синхронный rate limiter работает")
-            return True
+            return
         else:
             print("❌ Синхронный rate limiter не работает")
-            return False
+            raise AssertionError("test reported failure")
 
     except Exception as e:
         print(f"❌ Ошибка в rate limiter'ах: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_trendyol_url_validation():
     """Тест валидации URL Trendyol"""
@@ -218,11 +219,11 @@ async def test_trendyol_url_validation():
                 print(f"  ❌ '{url[:50]}...' -> {result} (ожидалось {expected})")
 
         print(f"Результат валидации URL: {passed}/{len(test_urls)} тестов пройдено")
-        return passed == len(test_urls)
+        assert passed == len(test_urls)
 
     except Exception as e:
         print(f"❌ Ошибка в валидации URL: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_parsing_error_handling():
     """Тест обработки ошибок в парсинге"""
@@ -238,14 +239,14 @@ async def test_parsing_error_handling():
                                                  
         if result1 is None and result2[0] is None:
             print("✅ Обработка ошибок сети работает корректно")
-            return True
+            return
         else:
             print(f"❌ Ожидалось (None, (None, None, None)), получено ({result1}, {result2})")
-            return False
+            raise AssertionError("test reported failure")
 
     except Exception as e:
         print(f"❌ Ошибка в обработке ошибок парсинга: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 def test_scraper_initialization():
     """Тест инициализации scraper'а"""
@@ -259,13 +260,13 @@ def test_scraper_initialization():
             print("✅ HEADERS инициализированы")
         else:
             print("❌ HEADERS не инициализированы")
-            return False
+            raise AssertionError("test reported failure")
 
         if TRENDYOL_LIMITER:
             print("✅ TRENDYOL_LIMITER инициализирован")
         else:
             print("❌ TRENDYOL_LIMITER не инициализирован")
-            return False
+            raise AssertionError("test reported failure")
 
                                                 
         if SCRAPER is not None:
@@ -273,11 +274,11 @@ def test_scraper_initialization():
         else:
             print("⚠️  SCRAPER не доступен (будет использоваться requests)")
 
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в инициализации scraper'а: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_fallback_parsing():
     """Тест fallback парсинга"""
@@ -303,14 +304,14 @@ async def test_fallback_parsing():
 
         if isinstance(result, list):
             print(f"✅ Fallback парсинг вернул {len(result)} товаров")
-            return True
+            return
         else:
             print(f"❌ Fallback парсинг вернул {type(result)}")
-            return False
+            raise AssertionError("test reported failure")
 
     except Exception as e:
         print(f"❌ Ошибка в fallback парсинге: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def main():
     """Запуск всех тестов парсинга"""
@@ -338,7 +339,7 @@ async def main():
                 result = await test_func()
             else:
                 result = test_func()
-            results.append(result)
+            results.append(result is not False)
         except Exception as e:
             print(f"❌ Критическая ошибка в {test_func.__name__}: {e}")
             results.append(False)

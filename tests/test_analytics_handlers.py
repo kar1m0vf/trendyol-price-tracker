@@ -30,7 +30,7 @@ def test_analytics_handlers_import():
         assert hasattr(handler, 'handle_top_drops_command'), "handle_top_drops_command method missing"
         assert hasattr(handler, 'register'), "register method missing"
         print("✅ All required methods present")
-        return True
+        return
     except Exception as e:
         print(f"❌ AnalyticsHandler test failed: {e}")
         raise
@@ -67,7 +67,7 @@ async def test_analytics_functionality():
         mock_msg.answer.assert_called_once()
         print("✅ handle_top_drops_command works")
 
-        return True
+        return
     except Exception as e:
         print(f"❌ Analytics functionality test failed: {e}")
         raise
@@ -118,13 +118,13 @@ async def test_stats_command_with_valid_data():
             assert "+5.0%" in text, "должен содержать тренд"
 
         print("✅ /stats с валидными данными работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в /stats с валидными данными: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_stats_command_invalid_id():
     """Тест команды /stats с некорректным ID."""
@@ -146,11 +146,11 @@ async def test_stats_command_invalid_id():
         assert mock_msg.answer.called, "answer должен быть вызван"
 
         print("✅ /stats с некорректным ID обрабатывается корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в /stats с некорректным ID: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_stats_command_no_args():
     """Тест команды /stats без аргументов."""
@@ -172,11 +172,11 @@ async def test_stats_command_no_args():
         assert mock_msg.answer.called, "answer должен быть вызван"
 
         print("✅ /stats без аргументов обрабатывается корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в /stats без аргументов: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_all_list_command_with_data():
     """Тест команды /all_list с данными."""
@@ -214,13 +214,13 @@ async def test_all_list_command_with_data():
             assert "⏰" in text, "должен содержать режимы уведомлений"
 
         print("✅ /all_list с данными работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в /all_list с данными: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_top_drops_command_with_data():
     """Тест команды /top_drops с данными."""
@@ -259,13 +259,13 @@ async def test_top_drops_command_with_data():
             assert "№ 1" in text, "должен содержать номер подписки"
 
         print("✅ /top_drops с данными работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в /top_drops с данными: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        raise AssertionError("test reported failure")
 
 def test_handler_registration():
     """Тест регистрации обработчиков."""
@@ -286,11 +286,11 @@ def test_handler_registration():
         assert mock_dp.message.register.call_count == 3, f"должно быть 3 регистрации, получено {mock_dp.message.register.call_count}"
 
         print("✅ Регистрация обработчиков работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в регистрации обработчиков: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def main():
     """Запуск всех тестов."""
@@ -302,7 +302,7 @@ async def main():
                   
     try:
         result = test_analytics_handlers_import()
-        results.append(result)
+        results.append(result is not False)
     except Exception as e:
         print(f"❌ Тест импорта провалился: {e}")
         results.append(False)
@@ -325,7 +325,7 @@ async def main():
     for test_func in sync_tests:
         try:
             result = test_func()
-            results.append(result)
+            results.append(result is not False)
         except Exception as e:
             print(f"❌ {test_func.__name__} провалился: {e}")
             results.append(False)
@@ -333,7 +333,7 @@ async def main():
     for test_func in test_functions:
         try:
             result = await test_func()
-            results.append(result)
+            results.append(result is not False)
         except Exception as e:
             print(f"❌ {test_func.__name__} провалился: {e}")
             results.append(False)

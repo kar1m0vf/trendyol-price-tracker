@@ -39,13 +39,13 @@ async def test_user_details_callback():
             assert mock_cq.answer.called, "cq.answer должен быть вызван"
 
         print("✅ Callback user_details работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в callback user_details: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_user_details_callback_non_admin():
     """Тест callback handler для деталей пользователя от не-админа"""
@@ -70,11 +70,11 @@ async def test_user_details_callback_non_admin():
         assert mock_cq.answer.called, "cq.answer должен быть вызван с отказом"
 
         print("✅ Защита user_details от не-админов работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в защите user_details: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_user_details_callback_invalid_id():
     """Тест callback handler с некорректным ID пользователя"""
@@ -98,11 +98,11 @@ async def test_user_details_callback_invalid_id():
         assert mock_cq.answer.called, "cq.answer должен быть вызван с ошибкой"
 
         print("✅ Обработка некорректных ID в user_details работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в обработке некорректных ID: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_admin_users_refresh_callback():
     """Тест callback handler для обновления списка пользователей"""
@@ -128,13 +128,13 @@ async def test_admin_users_refresh_callback():
         assert mock_cq.answer.called, "cq.answer должен быть вызван"
 
         print("✅ Callback admin_users_refresh работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в callback admin_users_refresh: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_admin_users_refresh_non_admin():
     """Тест callback handler для обновления списка пользователей от не-админа"""
@@ -158,11 +158,11 @@ async def test_admin_users_refresh_non_admin():
         assert mock_cq.answer.called, "cq.answer должен быть вызван с отказом"
 
         print("✅ Защита admin_users_refresh от не-админов работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в защите admin_users_refresh: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_admin_user_details_callback_function():
     """Тест функции admin_user_details_callback"""
@@ -187,13 +187,13 @@ async def test_admin_user_details_callback_function():
             assert mock_msg.edit_text.called, "edit_text должен быть вызван"
 
         print("✅ Функция admin_user_details_callback работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в функции admin_user_details_callback: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_admin_users_list_interactive():
     """Тест функции admin_users_list_interactive"""
@@ -213,13 +213,13 @@ async def test_admin_users_list_interactive():
         assert mock_msg.edit_text.called, "edit_text должен быть вызван"
 
         print("✅ Функция admin_users_list_interactive работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в функции admin_users_list_interactive: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_admin_user_details():
     """Тест функции admin_user_details"""
@@ -239,13 +239,13 @@ async def test_admin_user_details():
         assert mock_msg.answer.called, "answer должен быть вызван"
 
         print("✅ Функция admin_user_details работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в функции admin_user_details: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        raise AssertionError("test reported failure")
 
 async def main():
     """Запуск всех тестов админских callback handlers"""
@@ -269,7 +269,7 @@ async def main():
     for test_func in test_functions:
         try:
             result = await test_func()
-            results.append(result)
+            results.append(result is not False)
         except Exception as e:
             print(f"❌ Критическая ошибка в {test_func.__name__}: {e}")
             results.append(False)

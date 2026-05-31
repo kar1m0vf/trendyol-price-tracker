@@ -201,11 +201,11 @@ def test_get_trending_all_top3():
             assert isinstance(url, str), f"URL должен быть строкой, получен {type(url)}"
 
         print(f"✅ get_trending_all_top3 вернул {len(result)} элементов")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в get_trending_all_top3: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 def test_get_trending_by_search_top3():
     """Тест функции get_trending_by_search_top3"""
@@ -226,11 +226,11 @@ def test_get_trending_by_search_top3():
             assert len(item) == 3, f"Ожидался tuple из 3 элементов, получен {len(item)}"
 
         print(f"✅ get_trending_by_search_top3 вернул {len(result)} элементов")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в get_trending_by_search_top3: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 def test_get_trending_by_category_top3():
     """Тест функции get_trending_by_category_top3"""
@@ -254,11 +254,11 @@ def test_get_trending_by_category_top3():
         assert isinstance(result_unknown, list), "Неизвестная категория должна вернуть список"
 
         print("✅ get_trending_by_category_top3 работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в get_trending_by_category_top3: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_async_wrappers():
     """Тест асинхронных оберток для функций трендов"""
@@ -278,11 +278,11 @@ async def test_async_wrappers():
         assert isinstance(result_cat, list), "get_trending_by_category_top3_async должен вернуть список"
 
         print("✅ Асинхронные обертки работают корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в асинхронных обертках: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 def test_parse_listing_products():
     """Тест функции _parse_listing_products"""
@@ -320,11 +320,11 @@ def test_parse_listing_products():
         assert isinstance(result_mock, list), "Mock HTML должен вернуть список"
 
         print("✅ _parse_listing_products работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в _parse_listing_products: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 def test_fetch_first_working_listing():
     """Тест функции _fetch_first_working_listing"""
@@ -337,11 +337,11 @@ def test_fetch_first_working_listing():
         assert len(result_empty) == 0, "Пустой список URL должен вернуть пустой список"
 
         print("✅ _fetch_first_working_listing работает корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в _fetch_first_working_listing: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 def main():
     """Запуск всех тестов трендов"""
@@ -363,7 +363,7 @@ def main():
     for test_func in tests:
         try:
             result = test_func()
-            results.append(result)
+            results.append(result is not False)
         except Exception as e:
             print(f"❌ Критическая ошибка в {test_func.__name__}: {e}")
             results.append(False)
@@ -371,7 +371,7 @@ def main():
                        
     try:
         async_result = asyncio.run(test_async_wrappers())
-        results.append(async_result)
+        results.append(async_result is not False)
     except Exception as e:
         print(f"❌ Критическая ошибка в асинхронных тестах: {e}")
         results.append(False)

@@ -62,12 +62,12 @@ async def test_callback_flow():
             assert lang == "ru", f"Language should be 'ru', got '{lang}'"
             print("✅ Language changed successfully")
 
-        return True
+        return
     except Exception as e:
         print(f"❌ Callback flow test failed: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        raise AssertionError("test reported failure")
 
 def main():
     """Запуск тестов."""

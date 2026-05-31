@@ -55,11 +55,11 @@ def test_notification_logic():
                 print(f"  ❌ {desc} (ожидалось {expected}, получено {notification_needed})")
 
         print(f"Результат логики: {passed}/{len(test_cases)} тестов пройдено")
-        return passed == len(test_cases)
+        assert passed == len(test_cases)
 
     except Exception as e:
         print(f"❌ Ошибка в логике уведомлений: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_send_grouped_notifications():
     """Тест отправки групповых уведомлений"""
@@ -88,11 +88,11 @@ async def test_send_grouped_notifications():
             assert mock_send.call_count >= 2, f"Ожидалось минимум 2 вызова, получено {mock_send.call_count}"
 
             print("✅ Групповые уведомления отправляются корректно")
-            return True
+            return
 
     except Exception as e:
         print(f"❌ Ошибка в групповых уведомлениях: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_scheduler_setup():
     """Тест настройки планировщика"""
@@ -109,11 +109,11 @@ async def test_scheduler_setup():
         assert callable(start_scheduler_async), "start_scheduler_async должна быть функцией"
 
         print("✅ Планировщик настроен корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в настройке планировщика: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_notification_service_methods():
     """Тест методов NotificationService"""
@@ -146,13 +146,13 @@ async def test_notification_service_methods():
         assert mock_bot.send_message.called, "send_message должен быть вызван для fallback"
 
         print("✅ Методы NotificationService работают корректно")
-        return True
+        return
 
     except Exception as e:
         print(f"❌ Ошибка в NotificationService: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_quiet_hours_logic():
     """Тест логики тихих часов"""
@@ -186,11 +186,11 @@ async def test_quiet_hours_logic():
                 print(f"  ❌ {desc} (ожидалось {expected}, получено {is_quiet_time})")
 
         print(f"Результат тихих часов: {passed}/{len(test_cases)} тестов пройдено")
-        return passed == len(test_cases)
+        assert passed == len(test_cases)
 
     except Exception as e:
         print(f"❌ Ошибка в логике тихих часов: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def test_notification_templates():
     """Тест шаблонов уведомлений"""
@@ -224,11 +224,11 @@ async def test_notification_templates():
                 print(f"  ❌ Шаблон {template_key}: {e}")
 
         print(f"Результат шаблонов: {passed}/{len(templates)} шаблонов корректны")
-        return passed == len(templates)
+        assert passed == len(templates)
 
     except Exception as e:
         print(f"❌ Ошибка в шаблонах уведомлений: {e}")
-        return False
+        raise AssertionError("test reported failure")
 
 async def main():
     """Запуск всех тестов уведомлений"""
@@ -253,7 +253,7 @@ async def main():
                 result = await test_func()
             else:
                 result = test_func()
-            results.append(result)
+            results.append(result is not False)
         except Exception as e:
             print(f"❌ Критическая ошибка в {test_func.__name__}: {e}")
             results.append(False)

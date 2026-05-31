@@ -2,6 +2,7 @@
 import requests
 from bs4 import BeautifulSoup
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from urllib.parse import quote_plus
 from typing import List, Tuple, Optional, Dict, Any
@@ -19,6 +20,13 @@ except Exception:
 
                        
 logger = setup_logger('scraper', 'scraper.log')
+
+
+@dataclass(frozen=True)
+class ProductSnapshot:
+    price: Optional[float]
+    title: Optional[str]
+    image: Optional[str]
 
                                                                       
 TRENDYOL_LIMITER = RateLimiter(max_requests=30, time_window=60)
@@ -216,6 +224,27 @@ _LISTING_PRICE_SELECTORS = (
     '[class*="fiyat"]',
 )
 _PRICE_ATTRS = ("data-price", "data-value", "content", "value", "title", "aria-label")
+_PRODUCT_PRICE_JS_VARS = (
+    'window.__PRODUCT_DETAIL_APP_INITIAL_STATE__',
+    'window.__INITIAL_STATE__',
+    'window.__PRODUCT_INITIAL_STATE__',
+    '__PRODUCT_DETAIL_APP_INITIAL_STATE__',
+)
+_PRODUCT_PRICE_SELECTORS = (
+    "span.prc-dsc",
+    "span.prc-org",
+    "span.pr-new-br",
+    'span[class*="prc"]',
+    'span[class*="price"]',
+    'div[class*="price"] span',
+    'div[class*="prc"] span',
+    '[data-testid*="price"]',
+    '[data-testid*="Price"]',
+    'div.product-price-container span',
+    'div.price-container span',
+    'div[class*="ProductPrice"] span',
+    'span[data-testid="price"]',
+)
 
 
 class ParsedPrice(float):
@@ -410,6 +439,228 @@ def _dedupe_trending_items(
             break
 
     return deduped[:limit]
+
+
+def _fetch_trendyol_page(url: str, *, timeout: int = 20) -> Optional[str]:
+    """Fetch one Trendyol page through the configured scraper/client."""
+    if not TRENDYOL_LIMITER.can_proceed():
+        logger.warning("Rate limit exceeded while fetching product page for %s", url)
+        time.sleep(2)
+
+    TRENDYOL_LIMITER.add_request()
+    if SCRAPER is not None:
+        response = SCRAPER.get(url, headers=HEADERS, timeout=timeout)
+    else:
+        response = requests.get(url, headers=HEADERS, timeout=timeout)
+
+    if response.status_code != 200:
+        log_message = "HTTP %s when fetching product page for %s"
+        if response.status_code == 404:
+            logger.warning(log_message, response.status_code, url)
+        else:
+            logger.error(log_message, response.status_code, url)
+        return None
+    return response.text
+
+
+def _extract_price_from_product_html(
+    html: str,
+    url: str = "",
+    *,
+    soup: Optional[BeautifulSoup] = None,
+) -> Optional[float]:
+    soup = soup or BeautifulSoup(html, "html.parser")
+
+    for var_name in _PRODUCT_PRICE_JS_VARS:
+        data_obj = _extract_json_from_js_var(html, var_name)
+        price = _extract_price_from_object(data_obj)
+        if _is_reasonable_price(price):
+            logger.debug("Found price %s in JS var %s for %s", price, var_name, url)
+            return price
+
+    meta = soup.find("meta", {"property": "product:price:amount"})
+    if meta and meta.get("content"):
+        price = parse_price_text(meta["content"])
+        if _is_reasonable_price(price):
+            return price
+
+    for script in soup.find_all("script", type=re.compile("ld\\+json")):
+        try:
+            data = json.loads(script.string or "")
+        except Exception:
+            continue
+        price = _extract_price_from_object(data)
+        if _is_reasonable_price(price):
+            return price
+
+    for selector in _PRODUCT_PRICE_SELECTORS:
+        try:
+            for element in soup.select(selector):
+                price = _extract_price_from_element(element)
+                if _is_reasonable_price(price):
+                    logger.debug("Found price %s using selector %s for %s", price, selector, url)
+                    return price
+        except Exception:
+            continue
+
+    text = soup.get_text(" ", strip=True)
+    for match in re.finditer(r"(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)\s*TL", text):
+        price = parse_price_text(match.group(1))
+        if _is_reasonable_price(price):
+            logger.debug("Found price %s using text regex for %s", price, url)
+            return price
+
+    try:
+        for element in soup.find_all(attrs={"data-price": True}):
+            price = parse_price_text(str(element.get("data-price") or ""))
+            if _is_reasonable_price(price):
+                logger.debug("Found price %s in data-price attribute for %s", price, url)
+                return price
+    except Exception:
+        logger.debug("Could not inspect data-price attributes", exc_info=True)
+
+    return None
+
+
+def _clean_product_title(value: str) -> str:
+    title = re.sub(r"\s+", " ", (value or "").strip())
+    for marker in (" | Trendyol", " - Trendyol"):
+        if marker in title:
+            title = title.split(marker, 1)[0].strip()
+    return title
+
+
+def _extract_product_title_from_html(
+    html: str,
+    url: str,
+    *,
+    soup: Optional[BeautifulSoup] = None,
+) -> Optional[str]:
+    soup = soup or BeautifulSoup(html, "html.parser")
+
+    title = _extract_title_from_json(html)
+    if title:
+        return _clean_product_title(title)
+
+    candidates = [
+        ("h1", {"class": re.compile(r"pr-new-br", re.I)}),
+        ("h1", {"class": re.compile(r"product-name", re.I)}),
+        ("h1", {"class": re.compile(r"title", re.I)}),
+        ("h1", {"data-testid": re.compile(r"product-name", re.I)}),
+        ("h1", None),
+        ("div", {"class": re.compile(r"product-info", re.I)}),
+        ("div", {"class": re.compile(r"product-detail", re.I)}),
+        ("span", {"class": re.compile(r"product-name", re.I)}),
+        ("meta", {"property": "og:title"}),
+        ("meta", {"name": "title"}),
+        ("title", None),
+    ]
+
+    for tag, attrs in candidates:
+        try:
+            element = soup.find(tag, attrs=attrs) if attrs else soup.find(tag)
+            if not element:
+                continue
+            if tag == "meta":
+                text = element.get("content") or ""
+            else:
+                text = element.get_text(" ", strip=True)
+            title = _clean_product_title(text)
+            if len(title) > 5:
+                return title
+        except Exception:
+            continue
+
+    try:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        path_parts = parsed.path.strip('/').split('/')
+        if path_parts:
+            last_part = path_parts[-1]
+            if '-p-' in last_part and len(last_part) > 10:
+                title = last_part.replace('-p-', '').replace('-', ' ').title()
+                if len(title) > 10:
+                    return title
+    except Exception:
+        logger.debug("Could not derive product title from URL", exc_info=True)
+
+    return None
+
+
+def _normalize_image_url(src: Optional[str]) -> Optional[str]:
+    if not src:
+        return None
+    value = src.strip()
+    if value.startswith("//"):
+        return "https:" + value
+    if value.startswith("/"):
+        return "https://www.trendyol.com" + value
+    return value
+
+
+def _extract_product_image_from_html(
+    html: str,
+    *,
+    soup: Optional[BeautifulSoup] = None,
+) -> Optional[str]:
+    soup = soup or BeautifulSoup(html, "html.parser")
+
+    meta = soup.find("meta", property="og:image")
+    image = _normalize_image_url(meta.get("content") if meta else None)
+    if image:
+        return image
+
+    link = soup.find("link", rel="image_src")
+    image = _normalize_image_url(link.get("href") if link else None)
+    if image:
+        return image
+
+    for img in soup.find_all("img"):
+        src = img.get("src") or img.get("data-src")
+        image = _normalize_image_url(src)
+        if not image:
+            continue
+        width = img.get("width")
+        height = img.get("height")
+        try:
+            if width and int(width) < 50:
+                continue
+            if height and int(height) < 50:
+                continue
+        except Exception:
+            pass
+        return image
+    return None
+
+
+def parse_product_snapshot_from_html(html: str, url: str) -> ProductSnapshot:
+    soup = BeautifulSoup(html or "", "html.parser")
+    return ProductSnapshot(
+        price=_extract_price_from_product_html(html or "", url, soup=soup),
+        title=_extract_product_title_from_html(html or "", url, soup=soup),
+        image=_extract_product_image_from_html(html or "", soup=soup),
+    )
+
+
+@retry(
+    exceptions=(requests.RequestException, json.JSONDecodeError),
+    tries=3,
+    delay=1,
+    backoff=2,
+    logger=logger
+)
+def get_product_info(url: str) -> Tuple[Optional[float], Optional[str], Optional[str]]:
+    """Return product price, title, and image from a single fetched page."""
+    try:
+        html = _fetch_trendyol_page(url, timeout=20)
+        if not html:
+            return None, None, None
+        snapshot = parse_product_snapshot_from_html(html, url)
+        return snapshot.price, snapshot.title, snapshot.image
+    except Exception as e:
+        logger.exception("get_product_info error for %s: %s", url, e)
+        return None, None, None
 
 
 @retry(
@@ -1651,7 +1902,7 @@ async def get_price_async(url: str) -> Optional[float]:
 
 
 async def get_product_info_async(url: str) -> Tuple[Optional[float], Optional[str], Optional[str]]:
-    """Возвращает кортеж (price, title, image_url) — выполняет сетевые запросы в thread.
+    """Возвращает кортеж (price, title, image_url) — выполняет один сетевой запрос в thread.
     Нужна для случаев, когда надо показать пользователю название/обложку вместе с ценой.
     """
     if not await ASYNC_TRENDYOL_LIMITER.can_proceed():
@@ -1659,14 +1910,8 @@ async def get_product_info_async(url: str) -> Tuple[Optional[float], Optional[st
         await asyncio.sleep(1)
     await ASYNC_TRENDYOL_LIMITER.add_request()
 
-    def _sync():
-        price = get_price(url)
-        title = get_product_title(url)
-        image = get_product_image(url)
-        return price, title, image
-
     try:
-        return await asyncio.wait_for(asyncio.to_thread(_sync), timeout=30.0)                     
+        return await asyncio.wait_for(asyncio.to_thread(get_product_info, url), timeout=30.0)
     except asyncio.TimeoutError:
         logger.warning("Timeout fetching product info for %s", url)
         return None, None, None
