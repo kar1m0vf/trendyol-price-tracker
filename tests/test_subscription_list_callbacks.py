@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+import sys
 
 import pytest
 
@@ -8,7 +9,6 @@ from handlers import CallbackHandler
 
 
 def test_base_handler_resolves_runtime_bot_from_main_module(monkeypatch):
-    import sys
     from handlers import base
 
     runtime_bot = SimpleNamespace(send_message=AsyncMock())
@@ -16,6 +16,20 @@ def test_base_handler_resolves_runtime_bot_from_main_module(monkeypatch):
     monkeypatch.setattr(sys.modules["__main__"], "bot", runtime_bot, raising=False)
 
     assert base.get_bot() is runtime_bot
+
+
+def test_alert_edit_state_updates_running_main_module(monkeypatch):
+    import bot
+
+    main_state = {}
+    bot_state = {}
+    monkeypatch.setattr(sys.modules["__main__"], "alert_edit_state", main_state, raising=False)
+    monkeypatch.setattr(bot, "alert_edit_state", bot_state, raising=False)
+
+    CallbackHandler._set_alert_edit_state(12345, 42)
+
+    assert main_state[12345] == 42
+    assert bot_state[12345] == 42
 
 
 @pytest.mark.asyncio

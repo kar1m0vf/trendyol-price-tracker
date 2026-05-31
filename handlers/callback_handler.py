@@ -2,6 +2,7 @@
 Handlers for callback queries (button clicks).
 """
 from datetime import datetime
+import sys
 
 from aiogram import types
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
@@ -532,6 +533,21 @@ class CallbackHandler(BaseHandler):
         return values[:13]
 
     @staticmethod
+    def _set_alert_edit_state(user_id: int, sub_id: int) -> None:
+        updated = False
+        for module_name in ("__main__", "bot"):
+            module = sys.modules.get(module_name)
+            state = getattr(module, "alert_edit_state", None) if module else None
+            if isinstance(state, dict):
+                state[user_id] = sub_id
+                updated = True
+
+        if not updated:
+            from bot import alert_edit_state
+
+            alert_edit_state[user_id] = sub_id
+
+    @staticmethod
     def _price_changed(old_price, new_price) -> bool:
         if old_price is None:
             return True
@@ -855,8 +871,7 @@ class CallbackHandler(BaseHandler):
             disable_web_page_preview=True,
         )
 
-        from bot import alert_edit_state
-        alert_edit_state[user_id] = sub_id
+        self._set_alert_edit_state(user_id, sub_id)
 
     async def _handle_settings_alert_remove(self, cq: CallbackQuery, user_id: int, sub_id: int) -> None:
         sub = get_subscription(sub_id)
@@ -922,8 +937,7 @@ class CallbackHandler(BaseHandler):
                 disable_web_page_preview=True,
             )
 
-            from bot import alert_edit_state
-            alert_edit_state[user_id] = sub_id
+            self._set_alert_edit_state(user_id, sub_id)
         except Exception as e:
             logger.exception("alert_edit callback error: %s", e)
             await self._send_callback_problem(cq, user_id)
