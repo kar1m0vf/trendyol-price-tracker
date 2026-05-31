@@ -412,6 +412,54 @@ async def test_subscription_settings_alert_remove_updates_menu(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_settings_alert_edit_keeps_code_tag_formatted(monkeypatch):
+    handler = CallbackHandler()
+    handler._bot = SimpleNamespace(send_message=AsyncMock())
+    sub = (
+        42,
+        12345,
+        "https://www.trendyol.com/test/product-p-42",
+        "discount",
+        199.0,
+        "Test product",
+        None,
+        None,
+        None,
+        None,
+        60,
+        None,
+        None,
+    )
+
+    monkeypatch.setattr(callback_module, "get_subscription", lambda sub_id: sub)
+    monkeypatch.setattr(
+        callback_module.CallbackHandler,
+        "t",
+        lambda _self, _user_id, key, **_kwargs: {
+            "alerts_edit_title": "EDIT ALERT",
+            "current_price": "Current",
+            "alerts_current": "Alert",
+            "alerts_not_set": "not set",
+            "alerts_edit_help": "Send <code>price</code>",
+            "btn_back": "Back",
+        }.get(key, key),
+    )
+
+    cq = MagicMock()
+    cq.data = "settings_alert_edit:42"
+    cq.from_user.id = 12345
+    cq.answer = AsyncMock()
+    cq.message = MagicMock()
+
+    await handler.handle_main_callback(cq)
+
+    sent_text = handler._bot.send_message.await_args.args[1]
+    assert "<code>price</code>" in sent_text
+    assert "&lt;code&gt;" not in sent_text
+    assert handler._bot.send_message.await_args.kwargs["parse_mode"] == "HTML"
+
+
+@pytest.mark.asyncio
 async def test_callback_unexpected_error_sends_durable_message(monkeypatch):
     handler = CallbackHandler()
     monkeypatch.setattr(callback_module, "get_user_subscriptions", lambda user_id: (_ for _ in ()).throw(RuntimeError("db down")))

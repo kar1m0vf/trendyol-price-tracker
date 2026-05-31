@@ -838,7 +838,7 @@ class CallbackHandler(BaseHandler):
             f"📦 {title}\n"
             f"💰 {html.escape(self.t(user_id, 'current_price'))}: {current_price}\n"
             f"🎯 {html.escape(self.t(user_id, 'alerts_current'))}: {html.escape(current_alert)}\n\n"
-            f"{html.escape(self.t(user_id, 'alerts_edit_help'))}"
+            f"{self.t(user_id, 'alerts_edit_help')}"
         )
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
@@ -900,7 +900,7 @@ class CallbackHandler(BaseHandler):
                 f"📦 {title}\n"
                 f"💰 {html.escape(self.t(user_id, 'current_price'))}: {current_price}\n"
                 f"🎯 {html.escape(self.t(user_id, 'alerts_current'))}: {html.escape(current_alert)}\n\n"
-                f"{html.escape(self.t(user_id, 'alerts_edit_help'))}"
+                f"{self.t(user_id, 'alerts_edit_help')}"
             )
 
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
