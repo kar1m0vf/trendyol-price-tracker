@@ -416,6 +416,69 @@ class CallbackHandler(BaseHandler):
                 await self._show_alerts_list(cq, user_id)
                 return
 
+            if data.startswith("sub_settings:"):
+                try:
+                    sub_id = int(data.split(":", 1)[1])
+                except ValueError:
+                    await cq.answer(self.t(user_id, "error_invalid_id"), show_alert=True)
+                    return
+                await self._show_subscription_settings(cq, user_id, sub_id)
+                return
+
+            if data.startswith("settings_mode:"):
+                parts = data.split(":")
+                if len(parts) != 3:
+                    await cq.answer(self.t(user_id, "error_invalid_id"), show_alert=True)
+                    return
+                try:
+                    sub_id = int(parts[1])
+                except ValueError:
+                    await cq.answer(self.t(user_id, "error_invalid_id"), show_alert=True)
+                    return
+                await self._handle_settings_mode(cq, user_id, sub_id, parts[2])
+                return
+
+            if data.startswith("settings_interval:"):
+                parts = data.split(":")
+                if len(parts) != 3:
+                    await cq.answer(self.t(user_id, "error_invalid_id"), show_alert=True)
+                    return
+                try:
+                    sub_id = int(parts[1])
+                    minutes = int(parts[2])
+                except ValueError:
+                    await cq.answer(self.t(user_id, "error_invalid_id"), show_alert=True)
+                    return
+                await self._handle_settings_interval(cq, user_id, sub_id, minutes)
+                return
+
+            if data.startswith("settings_alert_edit:"):
+                try:
+                    sub_id = int(data.split(":", 1)[1])
+                except ValueError:
+                    await cq.answer(self.t(user_id, "error_invalid_id"), show_alert=True)
+                    return
+                await self._handle_settings_alert_edit(cq, user_id, sub_id)
+                return
+
+            if data.startswith("settings_alert_remove:"):
+                try:
+                    sub_id = int(data.split(":", 1)[1])
+                except ValueError:
+                    await cq.answer(self.t(user_id, "error_invalid_id"), show_alert=True)
+                    return
+                await self._handle_settings_alert_remove(cq, user_id, sub_id)
+                return
+
+            if data.startswith("settings_back:"):
+                try:
+                    sub_id = int(data.split(":", 1)[1])
+                except ValueError:
+                    await cq.answer(self.t(user_id, "error_invalid_id"), show_alert=True)
+                    return
+                await self._show_subscription_detail(cq, user_id, sub_id)
+                return
+
             if data.startswith("refresh_price:"):
                 try:
                     sub_id = int(data.split(":", 1)[1])
@@ -460,6 +523,13 @@ class CallbackHandler(BaseHandler):
             return f"{float(price):.0f} TL"
         except (TypeError, ValueError):
             return self.t(user_id, "unknown_price")
+
+    @staticmethod
+    def _subscription_values(sub):
+        values = list(sub or [])
+        while len(values) < 13:
+            values.append(None)
+        return values[:13]
 
     @staticmethod
     def _price_changed(old_price, new_price) -> bool:
@@ -521,6 +591,115 @@ class CallbackHandler(BaseHandler):
         ])
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
+    def _subscription_settings_keyboard(self, user_id: int, sub) -> InlineKeyboardMarkup:
+        (
+            sub_id, _owner_id, _url, mode, _last_price, _title, _image,
+            _min_price, _max_price, _notify_percent, notify_interval,
+            _last_notify_time, price_alert,
+        ) = self._subscription_values(sub)
+
+        mode_label_discount = self.t(user_id, "btn_mode_discount")
+        mode_label_hourly = self.t(user_id, "btn_mode_hourly")
+        if mode == "discount":
+            mode_label_discount = "✅ " + mode_label_discount
+        elif mode == "hourly":
+            mode_label_hourly = "✅ " + mode_label_hourly
+
+        try:
+            interval = int(notify_interval or 60)
+        except (TypeError, ValueError):
+            interval = 60
+
+        def interval_label(minutes: int) -> str:
+            prefix = "✅ " if interval == minutes else ""
+            return f"{prefix}{minutes} min"
+
+        rows = [
+            [
+                InlineKeyboardButton(
+                    text=mode_label_discount,
+                    callback_data=f"settings_mode:{sub_id}:discount",
+                ),
+                InlineKeyboardButton(
+                    text=mode_label_hourly,
+                    callback_data=f"settings_mode:{sub_id}:hourly",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=interval_label(15),
+                    callback_data=f"settings_interval:{sub_id}:15",
+                ),
+                InlineKeyboardButton(
+                    text=interval_label(30),
+                    callback_data=f"settings_interval:{sub_id}:30",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=interval_label(60),
+                    callback_data=f"settings_interval:{sub_id}:60",
+                ),
+                InlineKeyboardButton(
+                    text=interval_label(180),
+                    callback_data=f"settings_interval:{sub_id}:180",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=self.t(user_id, "btn_price_alert"),
+                    callback_data=f"settings_alert_edit:{sub_id}",
+                )
+            ],
+        ]
+        if price_alert is not None:
+            rows.append([
+                InlineKeyboardButton(
+                    text=f"❌ {self.t(user_id, 'alerts_remove')}",
+                    callback_data=f"settings_alert_remove:{sub_id}",
+                )
+            ])
+        rows.append([
+            InlineKeyboardButton(
+                text=f"⬅️ {self.t(user_id, 'btn_back')}",
+                callback_data=f"settings_back:{sub_id}",
+            )
+        ])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def _subscription_settings_text(self, user_id: int, sub) -> str:
+        (
+            _sub_id, _owner_id, url, mode, last_price, product_title, _image,
+            _min_price, _max_price, _notify_percent, notify_interval,
+            _last_notify_time, price_alert,
+        ) = self._subscription_values(sub)
+
+        title = html.escape(self._short_title(product_title, url, limit=90))
+        price = html.escape(self._format_price(user_id, last_price))
+        mode_text = html.escape(
+            self.t(user_id, f"mode_{mode}")
+            if mode in {"discount", "hourly"}
+            else self.t(user_id, "next_notify_unknown")
+        )
+        try:
+            interval = int(notify_interval or 60)
+        except (TypeError, ValueError):
+            interval = 60
+        target = (
+            html.escape(self._format_price(user_id, price_alert))
+            if price_alert is not None
+            else html.escape(self.t(user_id, "alerts_not_set"))
+        )
+
+        return (
+            f"⚙️ <b>{html.escape(self.t(user_id, 'subscription_settings_title'))}</b>\n\n"
+            f"📦 <b>{title}</b>\n"
+            f"💰 {html.escape(self.t(user_id, 'current_price'))}: {price}\n"
+            f"🔔 {html.escape(self.t(user_id, 'subscription_settings_mode'))}: {mode_text}\n"
+            f"⏱ {html.escape(self.t(user_id, 'subscription_settings_interval'))}: {interval} min\n"
+            f"🎯 {html.escape(self.t(user_id, 'subscription_settings_target'))}: {target}"
+        )
+
     async def _show_subscriptions_overview(self, cq: CallbackQuery, user_id: int) -> None:
         from bot import build_subscriptions_overview
 
@@ -535,6 +714,168 @@ class CallbackHandler(BaseHandler):
             reply_markup=overview_keyboard,
             parse_mode="HTML",
             disable_web_page_preview=True,
+        )
+
+    async def _show_subscription_detail(self, cq: CallbackQuery, user_id: int, sub_id: int) -> None:
+        from bot import format_subscription_card
+
+        sub = get_subscription(sub_id)
+        if not sub or sub[1] != user_id:
+            await cq.answer(self.t(user_id, "error_not_your_sub"), show_alert=True)
+            return
+
+        await cq.answer()
+        text = (
+            f"⚙️ <b>{html.escape(self.t(user_id, 'edit_subscription'))}</b>\n\n"
+            + format_subscription_card(user_id, sub)
+        )
+        await cq.message.edit_text(
+            text,
+            reply_markup=self._subscription_detail_keyboard(user_id, sub_id),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+
+    async def _show_subscription_settings(
+        self,
+        cq: CallbackQuery,
+        user_id: int,
+        sub_id: int,
+        notice: str = "",
+    ) -> None:
+        sub = get_subscription(sub_id)
+        if not sub or sub[1] != user_id:
+            await cq.answer(self.t(user_id, "error_not_your_sub"), show_alert=True)
+            return
+
+        await cq.answer(notice or None)
+        await cq.message.edit_text(
+            self._subscription_settings_text(user_id, sub),
+            reply_markup=self._subscription_settings_keyboard(user_id, sub),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+
+    async def _handle_settings_mode(
+        self,
+        cq: CallbackQuery,
+        user_id: int,
+        sub_id: int,
+        mode: str,
+    ) -> None:
+        if mode not in {"discount", "hourly"}:
+            await cq.answer(self.t(user_id, "error_invalid_id"), show_alert=True)
+            return
+
+        sub = get_subscription(sub_id)
+        if not sub or sub[1] != user_id:
+            await cq.answer(self.t(user_id, "error_not_your_sub"), show_alert=True)
+            return
+
+        update_mode(sub_id, mode)
+        action_event(
+            "USER",
+            "changed subscription mode from settings menu",
+            user=actor_label(cq.from_user),
+            sub_id=sub_id,
+            mode=mode,
+        )
+        await self._show_subscription_settings(
+            cq,
+            user_id,
+            sub_id,
+            self.t(user_id, "subscription_settings_updated"),
+        )
+
+    async def _handle_settings_interval(
+        self,
+        cq: CallbackQuery,
+        user_id: int,
+        sub_id: int,
+        minutes: int,
+    ) -> None:
+        if minutes not in {15, 30, 60, 180}:
+            await cq.answer(self.t(user_id, "error_invalid_id"), show_alert=True)
+            return
+
+        sub = get_subscription(sub_id)
+        if not sub or sub[1] != user_id:
+            await cq.answer(self.t(user_id, "error_not_your_sub"), show_alert=True)
+            return
+
+        update_subscription_settings(sub_id, notify_interval=minutes)
+        action_event(
+            "USER",
+            "changed subscription interval from settings menu",
+            user=actor_label(cq.from_user),
+            sub_id=sub_id,
+            interval=minutes,
+        )
+        await self._show_subscription_settings(
+            cq,
+            user_id,
+            sub_id,
+            self.t(user_id, "subscription_settings_updated"),
+        )
+
+    async def _handle_settings_alert_edit(self, cq: CallbackQuery, user_id: int, sub_id: int) -> None:
+        await cq.answer()
+        sub = get_subscription(sub_id)
+        if not sub or sub[1] != user_id:
+            await cq.answer(self.t(user_id, "error_not_your_sub"), show_alert=True)
+            return
+
+        url = sub[2]
+        last_price = sub[4]
+        product_title = sub[5]
+        price_alert = sub[12] if len(sub) > 12 else None
+
+        title = html.escape(self._short_title(product_title, url, limit=80))
+        current_price = html.escape(self._format_price(user_id, last_price))
+        current_alert = f"{price_alert:.0f} TL" if price_alert else self.t(user_id, "alerts_not_set")
+        alert_text = (
+            f"⚙️ <b>{html.escape(self.t(user_id, 'alerts_edit_title'))}</b>\n\n"
+            f"📦 {title}\n"
+            f"💰 {html.escape(self.t(user_id, 'current_price'))}: {current_price}\n"
+            f"🎯 {html.escape(self.t(user_id, 'alerts_current'))}: {html.escape(current_alert)}\n\n"
+            f"{html.escape(self.t(user_id, 'alerts_edit_help'))}"
+        )
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=f"⬅️ {self.t(user_id, 'btn_back')}",
+                callback_data=f"sub_settings:{sub_id}",
+            )],
+        ])
+
+        await self.bot.send_message(
+            user_id,
+            alert_text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+
+        from bot import alert_edit_state
+        alert_edit_state[user_id] = sub_id
+
+    async def _handle_settings_alert_remove(self, cq: CallbackQuery, user_id: int, sub_id: int) -> None:
+        sub = get_subscription(sub_id)
+        if not sub or sub[1] != user_id:
+            await cq.answer(self.t(user_id, "error_not_your_sub"), show_alert=True)
+            return
+
+        update_subscription_settings(sub_id, price_alert=None)
+        action_event(
+            "USER",
+            "removed subscription target price from settings menu",
+            user=actor_label(cq.from_user),
+            sub_id=sub_id,
+        )
+        await self._show_subscription_settings(
+            cq,
+            user_id,
+            sub_id,
+            self.t(user_id, "alerts_removed_success"),
         )
 
     async def _handle_alert_edit(self, cq: CallbackQuery, user_id: int, sub_id: int):

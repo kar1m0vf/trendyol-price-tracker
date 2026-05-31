@@ -39,6 +39,7 @@ Read the full product flow in [User Guide](docs/guides/USER_GUIDE.md).
 - Track each user's own watchlist.
 - Show user-facing product numbers like `№ 1`, `№ 2`, `№ 3` instead of internal database IDs.
 - Support discount-only mode, hourly mode, target price alerts, min/max thresholds, percent-change alerts, custom notification intervals, and quiet hours.
+- Let users change per-product mode, interval, and target price through inline settings buttons.
 - Group multiple price updates into one notification when needed.
 
 ### Price Intelligence

@@ -84,6 +84,10 @@ Examples:
 /settings interval 1 60
 ```
 
+The same per-product controls are also available through inline buttons:
+open `/mysubs`, choose a product, and use `⚙️ Settings` to change mode,
+notification interval, and target price without typing command arguments.
+
 ## Quiet Hours
 
 The user can configure hours when the bot should not send notifications:

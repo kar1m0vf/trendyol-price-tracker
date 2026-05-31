@@ -297,6 +297,121 @@ async def test_refresh_price_callback_records_failure_when_price_missing(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_subscription_settings_callback_opens_settings_menu(monkeypatch):
+    handler = CallbackHandler()
+    sub = (
+        42,
+        12345,
+        "https://www.trendyol.com/test/product-p-42",
+        "discount",
+        199.0,
+        "Test product",
+        None,
+        None,
+        None,
+        None,
+        60,
+        None,
+        180.0,
+    )
+    monkeypatch.setattr(callback_module, "get_subscription", lambda sub_id: sub)
+
+    cq = MagicMock()
+    cq.data = "sub_settings:42"
+    cq.from_user.id = 12345
+    cq.answer = AsyncMock()
+    cq.message.edit_text = AsyncMock()
+
+    await handler.handle_main_callback(cq)
+
+    cq.answer.assert_awaited_once()
+    cq.message.edit_text.assert_awaited_once()
+    text = cq.message.edit_text.await_args.args[0]
+    keyboard = cq.message.edit_text.await_args.kwargs["reply_markup"]
+    callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
+    assert "Test product" in text
+    assert "settings_mode:42:discount" in callbacks
+    assert "settings_interval:42:60" in callbacks
+    assert "settings_alert_edit:42" in callbacks
+    assert "settings_alert_remove:42" in callbacks
+    assert "settings_back:42" in callbacks
+
+
+@pytest.mark.asyncio
+async def test_subscription_settings_interval_updates_subscription(monkeypatch):
+    handler = CallbackHandler()
+    sub = (
+        42,
+        12345,
+        "https://www.trendyol.com/test/product-p-42",
+        "hourly",
+        199.0,
+        "Test product",
+        None,
+        None,
+        None,
+        None,
+        60,
+        None,
+        None,
+    )
+    update_settings = MagicMock()
+
+    monkeypatch.setattr(callback_module, "get_subscription", lambda sub_id: sub)
+    monkeypatch.setattr(callback_module, "update_subscription_settings", update_settings)
+    monkeypatch.setattr(callback_module, "action_event", lambda *args, **kwargs: None)
+
+    cq = MagicMock()
+    cq.data = "settings_interval:42:30"
+    cq.from_user.id = 12345
+    cq.answer = AsyncMock()
+    cq.message.edit_text = AsyncMock()
+
+    await handler.handle_main_callback(cq)
+
+    update_settings.assert_called_once_with(42, notify_interval=30)
+    cq.message.edit_text.assert_awaited_once()
+    assert cq.answer.await_args.args[0] == handler.t(12345, "subscription_settings_updated")
+
+
+@pytest.mark.asyncio
+async def test_subscription_settings_alert_remove_updates_menu(monkeypatch):
+    handler = CallbackHandler()
+    sub = (
+        42,
+        12345,
+        "https://www.trendyol.com/test/product-p-42",
+        "discount",
+        199.0,
+        "Test product",
+        None,
+        None,
+        None,
+        None,
+        60,
+        None,
+        180.0,
+    )
+    update_settings = MagicMock()
+
+    monkeypatch.setattr(callback_module, "get_subscription", lambda sub_id: sub)
+    monkeypatch.setattr(callback_module, "update_subscription_settings", update_settings)
+    monkeypatch.setattr(callback_module, "action_event", lambda *args, **kwargs: None)
+
+    cq = MagicMock()
+    cq.data = "settings_alert_remove:42"
+    cq.from_user.id = 12345
+    cq.answer = AsyncMock()
+    cq.message.edit_text = AsyncMock()
+
+    await handler.handle_main_callback(cq)
+
+    update_settings.assert_called_once_with(42, price_alert=None)
+    cq.message.edit_text.assert_awaited_once()
+    assert cq.answer.await_args.args[0] == handler.t(12345, "alerts_removed_success")
+
+
+@pytest.mark.asyncio
 async def test_callback_unexpected_error_sends_durable_message(monkeypatch):
     handler = CallbackHandler()
     monkeypatch.setattr(callback_module, "get_user_subscriptions", lambda user_id: (_ for _ in ()).throw(RuntimeError("db down")))
