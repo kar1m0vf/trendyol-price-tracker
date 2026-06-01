@@ -6,7 +6,8 @@ from aiogram import types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from database import add_user_if_not_exists, save_user_profile, set_user_language
+from database import add_user_if_not_exists, get_user_profile, save_user_profile, set_user_language
+from keyboards import get_main_kb, get_onboarding_inline_kb
 from logging_utils import action_event, actor_label
 from localization import LOCALES, update_language_cache
 from user_texts import format_start_text
@@ -21,6 +22,13 @@ class BasicHandler(BaseHandler):
     async def handle_start(self, message: types.Message):
         """Handle /start command."""
         user_id = message.from_user.id
+        try:
+            existing_profile = get_user_profile(user_id)
+        except Exception as exc:
+            logger.exception("Failed to load user profile before /start: %s", exc)
+            existing_profile = None
+
+        is_new_user = existing_profile is None
         add_user_if_not_exists(user_id)
         save_user_profile(message.from_user)
         action_event("USER", "opened /start", user=actor_label(message.from_user))
@@ -33,19 +41,27 @@ class BasicHandler(BaseHandler):
 
         preferred = lang_code if lang_code in LOCALES else "en"
 
-        try:
-            set_user_language(user_id, preferred)
-            update_language_cache(user_id, preferred)
-        except Exception as exc:
-            logger.exception("Failed to set user language: %s", exc)
-
-        from keyboards import get_main_kb
+        if is_new_user:
+            try:
+                set_user_language(user_id, preferred)
+                update_language_cache(user_id, preferred)
+            except Exception as exc:
+                logger.exception("Failed to set user language: %s", exc)
+        else:
+            existing_language = (existing_profile or {}).get("language")
+            if existing_language in LOCALES:
+                update_language_cache(user_id, existing_language)
 
         await message.answer(
             format_start_text(user_id, message.from_user, self.t),
             reply_markup=get_main_kb(user_id),
             parse_mode="Markdown",
         )
+        if is_new_user:
+            await message.answer(
+                self.t(user_id, "onboarding_quick_actions"),
+                reply_markup=get_onboarding_inline_kb(user_id),
+            )
 
     async def handle_help(self, message: types.Message):
         """Handle /help command."""
@@ -82,8 +98,6 @@ class BasicHandler(BaseHandler):
                 except Exception as exc:
                     logger.exception("Failed to send lang_changed message: %s", exc)
                 try:
-                    from keyboards import get_main_kb
-
                     await self.bot.send_message(
                         user_id,
                         format_start_text(user_id, message.from_user, self.t),

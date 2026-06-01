@@ -10,15 +10,16 @@ The bot tracks Trendyol products. A user sends a product link, the bot saves it 
 
 1. The user opens the bot in Telegram.
 2. The user sends `/start`.
-3. The user chooses a language if needed.
-4. The user sends a Trendyol product URL.
+3. The bot shows a short explanation, the persistent main menu, and quick-action buttons for the first step.
+4. The user chooses a language if needed.
+5. The user sends a Trendyol product URL or taps `➕ Add product` to see the expected link format.
 
 After a product is added, the bot shows a product card with:
 
 - product title;
 - current price;
 - notification mode;
-- controls for price history, comparison, target price, mode changes, and unsubscribe.
+- controls for manual refresh, price history, comparison, target price, pause/resume, mode changes, settings, and unsubscribe.
 
 Saved product cards also show the next expected notification/check timing when the user opens the product from the watchlist.
 

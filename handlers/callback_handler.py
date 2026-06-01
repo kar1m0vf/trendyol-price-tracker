@@ -84,6 +84,14 @@ class CallbackHandler(BaseHandler):
                 await cq.message.edit_text(self.t(user_id, "help_full"))
                 return
 
+            if data == "onboarding:add":
+                await cq.answer()
+                await cq.message.answer(
+                    self.t(user_id, "send_link_prompt"),
+                    reply_markup=get_main_kb(user_id),
+                )
+                return
+
             if data == "subs:list":
                 await cq.answer()
                 action_event("USER", "opened subscriptions from button", user=actor_label(cq.from_user))

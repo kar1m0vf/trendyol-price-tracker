@@ -36,6 +36,7 @@ Read the full product flow in [User Guide](docs/guides/USER_GUIDE.md).
 ### Tracking And Alerts
 
 - Add products from Trendyol URLs.
+- Guide first-time users with a short `/start` explanation and quick-action buttons.
 - Track each user's own watchlist.
 - Show user-facing product numbers like `№ 1`, `№ 2`, `№ 3` instead of internal database IDs.
 - Support discount-only mode, hourly mode, target price alerts, min/max thresholds, percent-change alerts, custom notification intervals, and quiet hours.

@@ -26,6 +26,31 @@ def test_main_keyboard_uses_localized_labels_without_extra_prefix(monkeypatch):
     ]
 
 
+def test_onboarding_inline_keyboard_points_to_first_steps(monkeypatch):
+    labels = {
+        "btn_subscribe": "ADD",
+        "btn_subs": "PRODUCTS",
+        "btn_trending": "TRENDS",
+        "btn_detailed_help": "HELP",
+    }
+    monkeypatch.setattr(
+        keyboards,
+        "translate_func",
+        lambda _uid, key: labels[key],
+    )
+
+    kb = keyboards.get_onboarding_inline_kb(user_id=101)
+
+    assert kb.inline_keyboard[0][0].text == "ADD"
+    assert kb.inline_keyboard[0][0].callback_data == "onboarding:add"
+    assert kb.inline_keyboard[0][1].text == "TRENDS"
+    assert kb.inline_keyboard[0][1].callback_data == "trend:menu"
+    assert kb.inline_keyboard[1][0].text == "PRODUCTS"
+    assert kb.inline_keyboard[1][0].callback_data == "subs:list"
+    assert kb.inline_keyboard[1][1].text == "HELP"
+    assert kb.inline_keyboard[1][1].callback_data == "help:full"
+
+
 def test_subscription_controls_use_unsubscribe_inline_key_and_callback(monkeypatch):
     labels = {
         "btn_mode_hourly": "MODE_HOURLY",

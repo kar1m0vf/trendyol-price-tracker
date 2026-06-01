@@ -36,6 +36,34 @@ def get_main_kb(user_id: int) -> ReplyKeyboardMarkup:
     )
 
 
+def get_onboarding_inline_kb(user_id: int) -> InlineKeyboardMarkup:
+    """Return quick-start inline actions for first-time users."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=translate_func(user_id, "btn_subscribe"),
+                    callback_data="onboarding:add",
+                ),
+                InlineKeyboardButton(
+                    text=translate_func(user_id, "btn_trending"),
+                    callback_data="trend:menu",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=translate_func(user_id, "btn_subs"),
+                    callback_data="subs:list",
+                ),
+                InlineKeyboardButton(
+                    text=translate_func(user_id, "btn_detailed_help"),
+                    callback_data="help:full",
+                ),
+            ],
+        ]
+    )
+
+
 def get_notify_inline_kb(
     user_id: int, sub_id: Optional[int] = None
 ) -> InlineKeyboardMarkup:
