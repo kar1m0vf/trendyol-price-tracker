@@ -55,6 +55,7 @@ from database import (
     close_all_connections,
 )
 from localization import t, LOCALES
+from keyboards import get_about_inline_kb, get_help_inline_kb
 
 
 def _parse_kv_floats(text: Optional[str]) -> Dict[str, float]:
@@ -1534,11 +1535,10 @@ async def cmd_help_old(message: types.Message):
     if len(args) > 1 and args[1].lower() == "full":
         await message.answer(t(user_id, "help_full"))
     else:
-
-        help_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=t(user_id, "btn_detailed_help"), callback_data="help:full")]
-        ])
-        await message.answer(t(user_id, "help_text"), reply_markup=help_keyboard)
+        await message.answer(
+            t(user_id, "help_text"),
+            reply_markup=get_help_inline_kb(user_id),
+        )
 
 @router.message(Command("report"))
 async def cmd_report(message: types.Message):
@@ -1831,7 +1831,11 @@ async def cmd_price_alert(message: types.Message):
 
 @router.message(Command("about"))
 async def cmd_about(message: types.Message):
-    await message.answer(t(message.from_user.id, "about_text"))
+    user_id = message.from_user.id
+    await message.answer(
+        t(user_id, "about_text"),
+        reply_markup=get_about_inline_kb(user_id),
+    )
 
 @router.message(Command("ping"))
 async def cmd_ping(message: types.Message):

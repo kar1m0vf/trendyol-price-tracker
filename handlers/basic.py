@@ -4,10 +4,14 @@ import logging
 
 from aiogram import types
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from database import add_user_if_not_exists, get_user_profile, save_user_profile, set_user_language
-from keyboards import get_main_kb, get_onboarding_inline_kb
+from keyboards import (
+    get_fallback_inline_kb,
+    get_help_inline_kb,
+    get_main_kb,
+    get_onboarding_inline_kb,
+)
 from logging_utils import action_event, actor_label
 from localization import LOCALES, update_language_cache
 from user_texts import format_start_text
@@ -71,17 +75,10 @@ class BasicHandler(BaseHandler):
             await message.answer(self.t(user_id, "help_full"))
             return
 
-        help_keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text=self.t(user_id, "btn_detailed_help"),
-                        callback_data="help:full",
-                    )
-                ]
-            ]
+        await message.answer(
+            self.t(user_id, "help_text"),
+            reply_markup=get_help_inline_kb(user_id),
         )
-        await message.answer(self.t(user_id, "help_text"), reply_markup=help_keyboard)
 
     async def handle_language_command(self, message: types.Message):
         """Handle /language command."""
@@ -149,7 +146,10 @@ class BasicHandler(BaseHandler):
     async def handle_unrecognized_text(self, message: types.Message):
         """Guide users when a plain text message did not match any workflow."""
         user_id = message.from_user.id
-        await message.answer(self.t(user_id, "fallback_text"))
+        await message.answer(
+            self.t(user_id, "fallback_text"),
+            reply_markup=get_fallback_inline_kb(user_id),
+        )
 
     def register(self, dp):
         """Register all handlers."""

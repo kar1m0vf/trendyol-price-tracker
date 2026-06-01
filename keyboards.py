@@ -10,6 +10,7 @@ from aiogram.types import (
 )
 
 from localization import t as translate_func
+from project_links import GITHUB_REPO_URL
 import logging
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,74 @@ def get_onboarding_inline_kb(user_id: int) -> InlineKeyboardMarkup:
                     text=translate_func(user_id, "btn_detailed_help"),
                     callback_data="help:full",
                 ),
+            ],
+        ]
+    )
+
+
+def get_help_inline_kb(user_id: int) -> InlineKeyboardMarkup:
+    """Return inline actions for the short help message."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=translate_func(user_id, "btn_detailed_help"),
+                    callback_data="help:full",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=translate_func(user_id, "btn_github"),
+                    url=GITHUB_REPO_URL,
+                )
+            ],
+        ]
+    )
+
+
+def get_about_inline_kb(user_id: int) -> InlineKeyboardMarkup:
+    """Return inline actions for the about message."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=translate_func(user_id, "btn_subscribe"),
+                    callback_data="onboarding:add",
+                ),
+                InlineKeyboardButton(
+                    text=translate_func(user_id, "btn_subs"),
+                    callback_data="subs:list",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=translate_func(user_id, "btn_github"),
+                    url=GITHUB_REPO_URL,
+                )
+            ],
+        ]
+    )
+
+
+def get_fallback_inline_kb(user_id: int) -> InlineKeyboardMarkup:
+    """Return quick actions for unrecognized plain text."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=translate_func(user_id, "btn_subscribe"),
+                    callback_data="onboarding:add",
+                ),
+                InlineKeyboardButton(
+                    text=translate_func(user_id, "btn_subs"),
+                    callback_data="subs:list",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=translate_func(user_id, "btn_detailed_help"),
+                    callback_data="help:full",
+                )
             ],
         ]
     )

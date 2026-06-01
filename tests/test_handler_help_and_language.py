@@ -10,13 +10,12 @@ import handlers.callback_handler as callback_module
 
 
 @pytest.mark.asyncio
-async def test_basic_help_default_shows_detailed_help_button():
+async def test_basic_help_default_shows_detailed_help_button(monkeypatch):
     handler = BasicHandler()
-    translations = {
-        "help_text": "HELP_TEXT",
-        "btn_detailed_help": "DETAIL_BUTTON",
-    }
+    translations = {"help_text": "HELP_TEXT"}
     handler.t = lambda _uid, key, **_kwargs: translations[key]
+    help_kb = MagicMock(return_value="HELP_KB")
+    monkeypatch.setattr(basic_module, "get_help_inline_kb", help_kb)
 
     message = SimpleNamespace(
         from_user=SimpleNamespace(id=1001),
@@ -29,10 +28,8 @@ async def test_basic_help_default_shows_detailed_help_button():
     message.answer.assert_awaited_once()
     args, kwargs = message.answer.call_args
     assert args[0] == "HELP_TEXT"
-    assert "reply_markup" in kwargs
-    kb = kwargs["reply_markup"]
-    assert kb.inline_keyboard[0][0].text == "DETAIL_BUTTON"
-    assert kb.inline_keyboard[0][0].callback_data == "help:full"
+    assert kwargs["reply_markup"] == "HELP_KB"
+    help_kb.assert_called_once_with(1001)
 
 
 @pytest.mark.asyncio
@@ -117,9 +114,11 @@ async def test_basic_help_full_shows_full_text_without_button():
 
 
 @pytest.mark.asyncio
-async def test_basic_fallback_guides_unrecognized_text():
+async def test_basic_fallback_guides_unrecognized_text(monkeypatch):
     handler = BasicHandler()
     handler.t = lambda _uid, key, **_kwargs: {"fallback_text": "SEND_LINK_HINT"}[key]
+    fallback_kb = MagicMock(return_value="FALLBACK_KB")
+    monkeypatch.setattr(basic_module, "get_fallback_inline_kb", fallback_kb)
 
     message = SimpleNamespace(
         from_user=SimpleNamespace(id=1003),
@@ -129,7 +128,11 @@ async def test_basic_fallback_guides_unrecognized_text():
 
     await handler.handle_unrecognized_text(message)
 
-    message.answer.assert_awaited_once_with("SEND_LINK_HINT")
+    message.answer.assert_awaited_once_with(
+        "SEND_LINK_HINT",
+        reply_markup="FALLBACK_KB",
+    )
+    fallback_kb.assert_called_once_with(1003)
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,8 @@
 
 This guide describes the bot from the Telegram user's point of view. It does not explain how to install or self-host the code; the bot is intended to be used as a service inside Telegram.
 
+Open the live bot in Telegram: [@trendyolpw_bot](https://t.me/trendyolpw_bot).
+
 ## Summary
 
 The bot tracks Trendyol products. A user sends a product link, the bot saves it to a personal watchlist, checks the price in the background, stores price history, and sends notifications when the price changes or matches a configured alert rule.
