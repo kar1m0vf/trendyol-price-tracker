@@ -78,7 +78,7 @@ Main tables:
 | Table | Purpose |
 | --- | --- |
 | `users` | Telegram user ID, language, quiet hours, created timestamp |
-| `subscriptions` | Product URL, title, image, mode, price settings, notification state |
+| `subscriptions` | Product URL, title, image, mode, pause state, price settings, notification state |
 | `price_history` | Price time series for tracked products |
 | `recommended_products` | Admin-managed recommendation catalog |
 | `bot_texts` | Custom copy controlled by admin flows |

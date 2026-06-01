@@ -89,6 +89,10 @@ The same per-product controls are also available through inline buttons:
 open `/mysubs`, choose a product, and use `⚙️ Settings` to change mode,
 notification interval, and target price without typing command arguments.
 
+Users can also pause a product from its card or settings menu. A paused product
+stays in `/mysubs`; history, manual price checks, settings, and deletion still
+work, but background price alerts are skipped until the user resumes it.
+
 ## Quiet Hours
 
 The user can configure hours when the bot should not send notifications:
@@ -196,7 +200,7 @@ The bot can restore subscriptions from CSV or JSON files created by `/export`.
 Users can run `/import` and then attach the file, or send the file with `/import`
 in the document caption. Existing tracked products are skipped as duplicates;
 valid new Trendyol product rows are added with their saved mode, alert settings,
-interval, last known price, title, image, and tags where present.
+interval, pause state, last known price, title, image, and tags where present.
 
 ## User Reports
 

@@ -17,7 +17,8 @@ from database import (
     get_price_history, add_price_point, save_price_point, get_user_subscriptions,
     get_user_language, get_bot_text, get_recommended_products,
     remove_recommended_product, record_subscription_check_failure,
-    clear_subscription_check_failure
+    clear_subscription_check_failure, get_subscription_active,
+    set_subscription_active
 )
 from keyboards import subscription_controls_kb_for_user, get_main_kb
 from logging_utils import action_event, actor_label
@@ -471,6 +472,15 @@ class CallbackHandler(BaseHandler):
                 await self._handle_settings_alert_remove(cq, user_id, sub_id)
                 return
 
+            if data.startswith("settings_toggle_active:"):
+                try:
+                    sub_id = int(data.split(":", 1)[1])
+                except ValueError:
+                    await cq.answer(self.t(user_id, "error_invalid_id"), show_alert=True)
+                    return
+                await self._handle_toggle_subscription_active(cq, user_id, sub_id, source="settings")
+                return
+
             if data.startswith("settings_back:"):
                 try:
                     sub_id = int(data.split(":", 1)[1])
@@ -478,6 +488,15 @@ class CallbackHandler(BaseHandler):
                     await cq.answer(self.t(user_id, "error_invalid_id"), show_alert=True)
                     return
                 await self._show_subscription_detail(cq, user_id, sub_id)
+                return
+
+            if data.startswith("toggle_active:"):
+                try:
+                    sub_id = int(data.split(":", 1)[1])
+                except ValueError:
+                    await cq.answer(self.t(user_id, "error_invalid_id"), show_alert=True)
+                    return
+                await self._handle_toggle_subscription_active(cq, user_id, sub_id, source="detail")
                 return
 
             if data.startswith("refresh_price:"):
@@ -626,6 +645,12 @@ class CallbackHandler(BaseHandler):
         except (TypeError, ValueError):
             interval = 60
 
+        try:
+            is_active = get_subscription_active(sub_id)
+        except Exception:
+            logger.exception("Failed to read active state for subscription %s", sub_id)
+            is_active = True
+
         def interval_label(minutes: int) -> str:
             prefix = "✅ " if interval == minutes else ""
             return f"{prefix}{minutes} min"
@@ -667,6 +692,12 @@ class CallbackHandler(BaseHandler):
                     callback_data=f"settings_alert_edit:{sub_id}",
                 )
             ],
+            [
+                InlineKeyboardButton(
+                    text=self.t(user_id, "btn_pause_subscription" if is_active else "btn_resume_subscription"),
+                    callback_data=f"settings_toggle_active:{sub_id}",
+                )
+            ],
         ]
         if price_alert is not None:
             rows.append([
@@ -685,7 +716,7 @@ class CallbackHandler(BaseHandler):
 
     def _subscription_settings_text(self, user_id: int, sub) -> str:
         (
-            _sub_id, _owner_id, url, mode, last_price, product_title, _image,
+            sub_id, _owner_id, url, mode, last_price, product_title, _image,
             _min_price, _max_price, _notify_percent, notify_interval,
             _last_notify_time, price_alert,
         ) = self._subscription_values(sub)
@@ -706,9 +737,19 @@ class CallbackHandler(BaseHandler):
             if price_alert is not None
             else html.escape(self.t(user_id, "alerts_not_set"))
         )
+        try:
+            is_active = get_subscription_active(sub_id)
+        except Exception:
+            logger.exception("Failed to read active state for subscription %s", sub_id)
+            is_active = True
+        status = html.escape(
+            self.t(user_id, "status_active" if is_active else "status_paused")
+        )
+        status_icon = "\u2705" if is_active else "\u23f8\ufe0f"
 
         return (
             f"⚙️ <b>{html.escape(self.t(user_id, 'subscription_settings_title'))}</b>\n\n"
+            f"{status_icon} {html.escape(self.t(user_id, 'subscription_settings_status'))}: {status}\n"
             f"📦 <b>{title}</b>\n"
             f"💰 {html.escape(self.t(user_id, 'current_price'))}: {price}\n"
             f"🔔 {html.escape(self.t(user_id, 'subscription_settings_mode'))}: {mode_text}\n"
@@ -732,7 +773,13 @@ class CallbackHandler(BaseHandler):
             disable_web_page_preview=True,
         )
 
-    async def _show_subscription_detail(self, cq: CallbackQuery, user_id: int, sub_id: int) -> None:
+    async def _show_subscription_detail(
+        self,
+        cq: CallbackQuery,
+        user_id: int,
+        sub_id: int,
+        notice: str = "",
+    ) -> None:
         from bot import format_subscription_card
 
         sub = get_subscription(sub_id)
@@ -740,7 +787,7 @@ class CallbackHandler(BaseHandler):
             await cq.answer(self.t(user_id, "error_not_your_sub"), show_alert=True)
             return
 
-        await cq.answer()
+        await cq.answer(notice or None)
         text = (
             f"⚙️ <b>{html.escape(self.t(user_id, 'edit_subscription'))}</b>\n\n"
             + format_subscription_card(user_id, sub)
@@ -771,6 +818,43 @@ class CallbackHandler(BaseHandler):
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
+
+    async def _handle_toggle_subscription_active(
+        self,
+        cq: CallbackQuery,
+        user_id: int,
+        sub_id: int,
+        *,
+        source: str = "detail",
+    ) -> None:
+        sub = get_subscription(sub_id)
+        if not sub or sub[1] != user_id:
+            await cq.answer(self.t(user_id, "error_not_your_sub"), show_alert=True)
+            return
+
+        try:
+            currently_active = get_subscription_active(sub_id)
+        except Exception:
+            logger.exception("Failed to read active state for subscription %s", sub_id)
+            currently_active = True
+
+        new_active = not currently_active
+        if not set_subscription_active(sub_id, new_active):
+            await cq.answer(self.t(user_id, "error_generic"), show_alert=True)
+            return
+
+        action_event(
+            "USER",
+            "changed subscription active state",
+            user=actor_label(cq.from_user),
+            sub_id=sub_id,
+            active=new_active,
+        )
+        notice_key = "subscription_resumed" if new_active else "subscription_paused"
+        if source == "settings":
+            await self._show_subscription_settings(cq, user_id, sub_id, self.t(user_id, notice_key))
+            return
+        await self._show_subscription_detail(cq, user_id, sub_id, self.t(user_id, notice_key))
 
     async def _handle_settings_mode(
         self,

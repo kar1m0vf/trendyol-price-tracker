@@ -348,6 +348,7 @@ async def test_subscription_settings_callback_opens_settings_menu(monkeypatch):
     assert "settings_interval:42:60" in callbacks
     assert "settings_alert_edit:42" in callbacks
     assert "settings_alert_remove:42" in callbacks
+    assert "settings_toggle_active:42" in callbacks
     assert "settings_back:42" in callbacks
 
 
@@ -423,6 +424,91 @@ async def test_subscription_settings_alert_remove_updates_menu(monkeypatch):
     update_settings.assert_called_once_with(42, price_alert=None)
     cq.message.edit_text.assert_awaited_once()
     assert cq.answer.await_args.args[0] == handler.t(12345, "alerts_removed_success")
+
+
+@pytest.mark.asyncio
+async def test_subscription_toggle_active_pauses_and_refreshes_detail(monkeypatch):
+    handler = CallbackHandler()
+    sub = (
+        42,
+        12345,
+        "https://www.trendyol.com/test/product-p-42",
+        "discount",
+        199.0,
+        "Test product",
+        None,
+        None,
+        None,
+        None,
+        60,
+        None,
+        None,
+    )
+    set_active = MagicMock(return_value=True)
+
+    monkeypatch.setattr(callback_module, "get_subscription", lambda sub_id: sub)
+    monkeypatch.setattr(callback_module, "get_subscription_active", lambda sub_id: True)
+    monkeypatch.setattr(callback_module, "set_subscription_active", set_active)
+    monkeypatch.setattr(callback_module, "action_event", lambda *args, **kwargs: None)
+
+    cq = MagicMock()
+    cq.data = "toggle_active:42"
+    cq.from_user.id = 12345
+    cq.answer = AsyncMock()
+    cq.message.edit_text = AsyncMock()
+
+    with patch("bot.format_subscription_card", return_value="CARD"):
+        await handler.handle_main_callback(cq)
+
+    set_active.assert_called_once_with(42, False)
+    cq.message.edit_text.assert_awaited_once()
+    assert cq.answer.await_args.args[0] == handler.t(12345, "subscription_paused")
+
+
+@pytest.mark.asyncio
+async def test_subscription_settings_toggle_active_resumes_and_refreshes_menu(monkeypatch):
+    handler = CallbackHandler()
+    sub = (
+        42,
+        12345,
+        "https://www.trendyol.com/test/product-p-42",
+        "discount",
+        199.0,
+        "Test product",
+        None,
+        None,
+        None,
+        None,
+        60,
+        None,
+        None,
+    )
+    active_state = {"value": False}
+    set_active = MagicMock(return_value=True)
+
+    def fake_get_active(_sub_id):
+        return active_state["value"]
+
+    def fake_set_active(_sub_id, active):
+        active_state["value"] = active
+        return set_active(_sub_id, active)
+
+    monkeypatch.setattr(callback_module, "get_subscription", lambda sub_id: sub)
+    monkeypatch.setattr(callback_module, "get_subscription_active", fake_get_active)
+    monkeypatch.setattr(callback_module, "set_subscription_active", fake_set_active)
+    monkeypatch.setattr(callback_module, "action_event", lambda *args, **kwargs: None)
+
+    cq = MagicMock()
+    cq.data = "settings_toggle_active:42"
+    cq.from_user.id = 12345
+    cq.answer = AsyncMock()
+    cq.message.edit_text = AsyncMock()
+
+    await handler.handle_main_callback(cq)
+
+    set_active.assert_called_once_with(42, True)
+    cq.message.edit_text.assert_awaited_once()
+    assert cq.answer.await_args.args[0] == handler.t(12345, "subscription_resumed")
 
 
 @pytest.mark.asyncio

@@ -160,6 +160,7 @@ def init_db(run_maintenance: bool = True):
                 'check_fail_count': "ALTER TABLE subscriptions ADD COLUMN check_fail_count INTEGER DEFAULT 0",
                 'last_check_error': "ALTER TABLE subscriptions ADD COLUMN last_check_error TEXT",
                 'last_check_error_at': "ALTER TABLE subscriptions ADD COLUMN last_check_error_at INTEGER",
+                'is_active': "ALTER TABLE subscriptions ADD COLUMN is_active INTEGER DEFAULT 1",
             }
             
             for col_name, alter_sql in missing_columns.items():
@@ -256,6 +257,7 @@ def init_db(run_maintenance: bool = True):
             check_fail_count INTEGER DEFAULT 0,
             last_check_error TEXT,
             last_check_error_at INTEGER,
+            is_active INTEGER DEFAULT 1,
             created_at INTEGER DEFAULT (CAST(strftime('%s', 'now') AS INTEGER)),
             updated_at INTEGER DEFAULT (CAST(strftime('%s', 'now') AS INTEGER)),
             FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
@@ -280,6 +282,10 @@ def init_db(run_maintenance: bool = True):
                                                                
         cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_subscriptions_notify_time ON subscriptions(last_notify_time, notify_interval)
+        """)
+
+        cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_subscriptions_active_notify ON subscriptions(is_active, last_notify_time, notify_interval)
         """)
         
                                                     
@@ -328,6 +334,7 @@ def init_db(run_maintenance: bool = True):
             "check_fail_count": "ALTER TABLE subscriptions ADD COLUMN check_fail_count INTEGER DEFAULT 0",
             "last_check_error": "ALTER TABLE subscriptions ADD COLUMN last_check_error TEXT",
             "last_check_error_at": "ALTER TABLE subscriptions ADD COLUMN last_check_error_at INTEGER",
+            "is_active": "ALTER TABLE subscriptions ADD COLUMN is_active INTEGER DEFAULT 1",
         }
         for col_name, alter_sql in check_failure_columns.items():
             try:
@@ -378,6 +385,7 @@ def init_db(run_maintenance: bool = True):
                 ("idx_subscriptions_url", "CREATE INDEX idx_subscriptions_url ON subscriptions(url)"),
                 ("idx_subscriptions_mode", "CREATE INDEX idx_subscriptions_mode ON subscriptions(notify_mode)"),
                 ("idx_subscriptions_notify_time", "CREATE INDEX idx_subscriptions_notify_time ON subscriptions(last_notify_time)"),
+                ("idx_subscriptions_active_notify", "CREATE INDEX idx_subscriptions_active_notify ON subscriptions(is_active, last_notify_time, notify_interval)"),
                 ("idx_subscriptions_url_mode", "CREATE INDEX idx_subscriptions_url_mode ON subscriptions(url, notify_mode)"),
                 ("idx_subscriptions_check_failures", "CREATE INDEX idx_subscriptions_check_failures ON subscriptions(check_fail_count, last_check_error_at)"),
                 ("idx_price_history_ts", "CREATE INDEX idx_price_history_ts ON price_history(ts DESC)"),
@@ -636,6 +644,41 @@ def get_subscription_tags(sub_id: int) -> List[str]:
         return [t for t in (row[0] or "").split(',') if t]
 
 
+def get_subscription_active(sub_id: int) -> bool:
+    """Return whether a subscription participates in background checks."""
+    with sqlite3.connect(DB) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT COALESCE(is_active, 1) FROM subscriptions WHERE id = ?", (sub_id,))
+        row = cur.fetchone()
+    if row is None:
+        return True
+    return bool(int(row[0] or 0))
+
+
+def set_subscription_active(sub_id: int, active: bool) -> bool:
+    """Pause or resume background checks for a subscription."""
+    with sqlite3.connect(DB) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE subscriptions SET is_active = ?, updated_at = ? WHERE id = ?",
+            (1 if active else 0, int(time.time()), sub_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def get_subscription_active_map_for_user(user_id: int) -> Dict[int, bool]:
+    """Return active-state map for all subscriptions of one user."""
+    with sqlite3.connect(DB) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, COALESCE(is_active, 1) FROM subscriptions WHERE user_id = ?",
+            (user_id,),
+        )
+        rows = cur.fetchall()
+    return {int(sub_id): bool(active) for sub_id, active in rows}
+
+
 def get_user_subscriptions_by_tag(user_id: int, tag: str) -> List[Tuple]:
     """Return subscriptions for user that have the given tag (exact match in comma-separated tags)."""
     with sqlite3.connect(DB) as conn:
@@ -681,15 +724,16 @@ def export_user_subscriptions(user_id: int) -> List[dict]:
             'notify_interval': notify_interval,
             'last_notify_time': last_notify_time,
             'price_alert': price_alert,
-            'tags': (tags or "")
+            'tags': (tags or ""),
+            'is_active': 1 if get_subscription_active(sub_id) else 0,
         })
     return out
 
 def get_subscriptions_count() -> int:
-    """Return total number of subscriptions."""
+    """Return number of subscriptions that participate in background checks."""
     with sqlite3.connect(DB) as conn:
         cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM subscriptions")
+        cur.execute("SELECT COUNT(*) FROM subscriptions WHERE COALESCE(is_active, 1) = 1")
         row = cur.fetchone()
     return int(row[0]) if row and row[0] is not None else 0
 
@@ -707,6 +751,7 @@ def iter_all_subscriptions(batch_size: int = 1000) -> Iterator[Tuple[int, int, s
             SELECT id, user_id, url, notify_mode, last_price, product_title, product_image,
                    min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert
             FROM subscriptions
+            WHERE COALESCE(is_active, 1) = 1
             ORDER BY COALESCE(last_notify_time, 0) ASC
         """)
         while True:

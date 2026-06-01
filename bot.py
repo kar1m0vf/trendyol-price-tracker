@@ -46,6 +46,9 @@ from database import (
     record_subscription_check_failure,
     clear_subscription_check_failure,
     get_subscription_check_failures_for_user,
+    get_subscription_active,
+    get_subscription_active_map_for_user,
+    set_subscription_active,
     set_subscription_tags,
     save_price_points_batch,
     get_bot_text,
@@ -646,6 +649,7 @@ def get_notify_inline_kb(user_id: int, sub_id: Optional[int] = None) -> InlineKe
 def subscription_controls_kb_for_user(user_id: int, sub_id: int) -> InlineKeyboardMarkup:
     mode_label_hourly = t(user_id, "btn_mode_hourly")
     mode_label_discount = t(user_id, "btn_mode_discount")
+    is_active = True
     try:
         sub = get_subscription(sub_id)
         logger.debug("subscription_controls_kb_for_user: sub=%r", sub)
@@ -663,6 +667,13 @@ def subscription_controls_kb_for_user(user_id: int, sub_id: int) -> InlineKeyboa
     except Exception:
         logger.exception("Error building subscription controls kb for sub_id=%s", sub_id)
 
+    try:
+        is_active = get_subscription_active(sub_id)
+    except Exception:
+        logger.exception("Error reading active state for sub_id=%s", sub_id)
+
+    toggle_key = "btn_pause_subscription" if is_active else "btn_resume_subscription"
+
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text=mode_label_discount, callback_data=f"mode:{sub_id}:discount"),
@@ -671,6 +682,9 @@ def subscription_controls_kb_for_user(user_id: int, sub_id: int) -> InlineKeyboa
         [
             InlineKeyboardButton(text=t(user_id, "btn_refresh_price"), callback_data=f"refresh_price:{sub_id}"),
             InlineKeyboardButton(text=t(user_id, "btn_subscription_settings"), callback_data=f"sub_settings:{sub_id}")
+        ],
+        [
+            InlineKeyboardButton(text=t(user_id, toggle_key), callback_data=f"toggle_active:{sub_id}")
         ],
         [
             InlineKeyboardButton(text=t(user_id, "btn_history"), callback_data=f"history:{sub_id}"),
@@ -848,7 +862,15 @@ def _format_next_notify_timestamp(ts: int) -> str:
     return dt.strftime("%d.%m %H:%M")
 
 
-def _next_notification_for_subscription_card(user_id: int, data: Dict[str, Any]) -> str:
+def _next_notification_for_subscription_card(
+    user_id: int,
+    data: Dict[str, Any],
+    *,
+    is_active: bool = True,
+) -> str:
+    if not is_active:
+        return t(user_id, "next_notify_paused")
+
     if data["mode"] != "hourly":
         return get_next_notification_time(
             data["mode"],
@@ -1154,7 +1176,12 @@ def _subscription_status_for_display(
     user_id: int,
     data: Dict[str, Any],
     failure_state: Optional[Dict[str, Any]] = None,
+    *,
+    is_active: bool = True,
 ) -> Tuple[str, str]:
+    if not is_active:
+        return "\u23f8\ufe0f", t(user_id, "status_paused")
+
     fail_count = 0
     if failure_state:
         try:
@@ -1177,6 +1204,22 @@ def _subscription_failure_map_for_user(user_id: int) -> Dict[int, Dict[str, Any]
         return {}
 
 
+def _subscription_active_for_display(sub_id: int) -> bool:
+    try:
+        return get_subscription_active(sub_id)
+    except Exception as e:
+        logger.exception("Could not load active state for subscription %s: %s", sub_id, e)
+        return True
+
+
+def _subscription_active_map_for_user(user_id: int) -> Dict[int, bool]:
+    try:
+        return get_subscription_active_map_for_user(user_id)
+    except Exception as e:
+        logger.exception("Could not load subscription active states for user %s: %s", user_id, e)
+        return {}
+
+
 def format_subscription_card(user_id: int, sub: Tuple[Any, ...]) -> str:
     data = _subscription_fields(sub)
     sub_id = data["sub_id"]
@@ -1186,8 +1229,14 @@ def format_subscription_card(user_id: int, sub: Tuple[Any, ...]) -> str:
     price_text = html.escape(_format_price_for_user(user_id, data["last_price"]))
     mode_text = html.escape(_mode_text_for_user(user_id, data["mode"]))
     failure_state = _subscription_failure_map_for_user(user_id).get(sub_id)
-    status_icon, status_text = _subscription_status_for_display(user_id, data, failure_state)
-    next_notify = html.escape(_next_notification_for_subscription_card(user_id, data))
+    is_active = _subscription_active_for_display(sub_id)
+    status_icon, status_text = _subscription_status_for_display(
+        user_id,
+        data,
+        failure_state,
+        is_active=is_active,
+    )
+    next_notify = html.escape(_next_notification_for_subscription_card(user_id, data, is_active=is_active))
 
     lines = [
         f"{status_icon} <b>{html.escape(status_text)}</b> | <code>{public_label}</code>",
@@ -1232,6 +1281,7 @@ def build_subscriptions_overview(
     button_rows = []
     shown = 0
     failure_map = _subscription_failure_map_for_user(user_id)
+    active_map = _subscription_active_map_for_user(user_id)
 
     for index, sub in enumerate(subs, start=1):
         data = _subscription_fields(sub)
@@ -1242,13 +1292,21 @@ def build_subscriptions_overview(
         price_text = html.escape(_format_price_for_user(user_id, data["last_price"]))
         mode_text = html.escape(_mode_text_for_user(user_id, data["mode"]))
         failure_state = failure_map.get(sub_id)
-        status_icon, _status_text = _subscription_status_for_display(user_id, data, failure_state)
+        is_active = active_map.get(sub_id, True)
+        status_icon, status_text = _subscription_status_for_display(
+            user_id,
+            data,
+            failure_state,
+            is_active=is_active,
+        )
 
         line = (
             f"{status_icon} <code>№ {index}</code> "
             f"<b>{title_html}</b>\n"
             f"   💰 {price_text} · 🔔 {mode_text}"
         )
+        if not is_active:
+            line += f" \u00b7 \u23f8\ufe0f {html.escape(status_text)}"
         if data["price_alert"] is not None:
             line += f" · 🎯 {html.escape(_format_price_for_user(user_id, data['price_alert']))}"
 
@@ -2049,7 +2107,7 @@ async def cmd_export(message: types.Message):
 
         cols = [
             'id','user_id','url','mode','last_price','product_title','product_image',
-            'min_price','max_price','notify_percent','notify_interval','last_notify_time','price_alert','tags'
+            'min_price','max_price','notify_percent','notify_interval','last_notify_time','price_alert','tags','is_active'
         ]
 
         csv_buffer = io.StringIO(newline="")
@@ -3462,6 +3520,8 @@ IMPORT_FIELDS = {
     "notify_interval",
     "price_alert",
     "tags",
+    "is_active",
+    "active",
 }
 
 
@@ -3502,6 +3562,18 @@ def _import_int(value: Any, default: int = 60) -> int:
         return max(15, int(float(text.replace(",", "."))))
     except (TypeError, ValueError):
         return default
+
+
+def _import_bool(value: Any, default: bool = True) -> bool:
+    text = _import_blank_to_none(value)
+    if text is None:
+        return default
+    normalized = text.strip().lower()
+    if normalized in {"1", "true", "yes", "y", "active", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "paused", "inactive", "off"}:
+        return False
+    return default
 
 
 def _parse_import_rows(filename: str, payload: bytes) -> List[Dict[str, Any]]:
@@ -3594,6 +3666,9 @@ def _import_subscription_rows(user_id: int, rows: List[Dict[str, Any]]) -> Dict[
             tags_text = _import_blank_to_none(_import_row_value(row, "tags"))
             if tags_text:
                 set_subscription_tags(sub_id, [tag.strip() for tag in tags_text.split(",")])
+
+            if not _import_bool(_import_row_value(row, "is_active", "active"), default=True):
+                set_subscription_active(sub_id, False)
 
             existing_urls.add(url_key)
             result["added"] += 1

@@ -131,6 +131,7 @@ def test_import_subscription_rows_adds_new_and_skips_duplicates(monkeypatch):
     save_price_point = MagicMock()
     update_settings = MagicMock()
     set_tags = MagicMock()
+    set_active = MagicMock()
 
     monkeypatch.setattr(bot, "get_user_subscriptions", lambda _user_id: [existing])
     monkeypatch.setattr(bot, "add_subscription", add_subscription)
@@ -138,6 +139,7 @@ def test_import_subscription_rows_adds_new_and_skips_duplicates(monkeypatch):
     monkeypatch.setattr(bot, "save_price_point", save_price_point)
     monkeypatch.setattr(bot, "update_subscription_settings", update_settings)
     monkeypatch.setattr(bot, "set_subscription_tags", set_tags)
+    monkeypatch.setattr(bot, "set_subscription_active", set_active)
 
     rows = [
         {
@@ -152,6 +154,7 @@ def test_import_subscription_rows_adds_new_and_skips_duplicates(monkeypatch):
             "notify_interval": "30",
             "price_alert": "180",
             "tags": "shoes, sale",
+            "is_active": "0",
         },
         {"url": "https://www.trendyol.com/brand/existing-product-p-1"},
         {"url": "https://example.com/not-trendyol"},
@@ -181,6 +184,7 @@ def test_import_subscription_rows_adds_new_and_skips_duplicates(monkeypatch):
     save_price_point.assert_called_once_with(77, 199.5)
     update_settings.assert_called_once_with(77, price_alert=180.0)
     set_tags.assert_called_once_with(77, ["shoes", "sale"])
+    set_active.assert_called_once_with(77, False)
 
 
 @pytest.mark.asyncio

@@ -34,6 +34,8 @@ def test_subscription_controls_use_unsubscribe_inline_key_and_callback(monkeypat
         "btn_price_alert": "PRICE_ALERT",
         "btn_refresh_price": "REFRESH",
         "btn_subscription_settings": "SETTINGS",
+        "btn_pause_subscription": "PAUSE",
+        "btn_resume_subscription": "RESUME",
         "btn_unsubscribe_inline": "UNSUB_INLINE",
         "btn_compare": "COMPARE",
     }
@@ -50,6 +52,7 @@ def test_subscription_controls_use_unsubscribe_inline_key_and_callback(monkeypat
         "get_subscription",
         lambda _sub_id: (55, 101, "https://www.trendyol.com/p/1", "hourly"),
     )
+    monkeypatch.setattr(database, "get_subscription_active", lambda _sub_id: True)
 
     kb = keyboards.subscription_controls_kb_for_user(user_id=101, sub_id=55)
 
@@ -59,9 +62,11 @@ def test_subscription_controls_use_unsubscribe_inline_key_and_callback(monkeypat
     assert kb.inline_keyboard[1][0].callback_data == "refresh_price:55"
     assert kb.inline_keyboard[1][1].text == "SETTINGS"
     assert kb.inline_keyboard[1][1].callback_data == "sub_settings:55"
-    assert kb.inline_keyboard[2][1].text == "PRICE_ALERT"
-    assert kb.inline_keyboard[2][1].callback_data == "alert_edit:55"
-    assert kb.inline_keyboard[3][0].text == "COMPARE"
-    assert kb.inline_keyboard[3][0].callback_data == "compare:55"
-    assert kb.inline_keyboard[3][1].text == "UNSUB_INLINE"
-    assert kb.inline_keyboard[3][1].callback_data == "unsubscribe:55"
+    assert kb.inline_keyboard[2][0].text == "PAUSE"
+    assert kb.inline_keyboard[2][0].callback_data == "toggle_active:55"
+    assert kb.inline_keyboard[3][1].text == "PRICE_ALERT"
+    assert kb.inline_keyboard[3][1].callback_data == "alert_edit:55"
+    assert kb.inline_keyboard[4][0].text == "COMPARE"
+    assert kb.inline_keyboard[4][0].callback_data == "compare:55"
+    assert kb.inline_keyboard[4][1].text == "UNSUB_INLINE"
+    assert kb.inline_keyboard[4][1].callback_data == "unsubscribe:55"

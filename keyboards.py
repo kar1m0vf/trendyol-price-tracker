@@ -76,10 +76,11 @@ def subscription_controls_kb_for_user(
     user_id: int, sub_id: int
 ) -> InlineKeyboardMarkup:
     """Return per-subscription controls keyboard."""
-    from database import get_subscription
+    from database import get_subscription, get_subscription_active
 
     mode_label_hourly = translate_func(user_id, "btn_mode_hourly")
     mode_label_discount = translate_func(user_id, "btn_mode_discount")
+    is_active = True
 
     try:
         sub = get_subscription(sub_id)
@@ -103,6 +104,17 @@ def subscription_controls_kb_for_user(
             exc,
         )
 
+    try:
+        is_active = get_subscription_active(sub_id)
+    except Exception as exc:
+        logger.exception(
+            "Failed to read active state for subscription %s: %s",
+            sub_id,
+            exc,
+        )
+
+    toggle_key = "btn_pause_subscription" if is_active else "btn_resume_subscription"
+
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -122,6 +134,12 @@ def subscription_controls_kb_for_user(
                     text=translate_func(user_id, "btn_subscription_settings"),
                     callback_data=f"sub_settings:{sub_id}",
                 ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=translate_func(user_id, toggle_key),
+                    callback_data=f"toggle_active:{sub_id}",
+                )
             ],
             [
                 InlineKeyboardButton(

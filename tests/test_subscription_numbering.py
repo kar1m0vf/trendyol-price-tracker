@@ -84,6 +84,26 @@ def test_subscription_card_marks_failed_price_check_as_unavailable(monkeypatch):
     assert bot.t(12345, "status_active") not in text
 
 
+def test_subscription_overview_marks_paused_subscription(monkeypatch):
+    sub = _sub(120, title="Paused product", last_price=100.0)
+    monkeypatch.setattr(bot, "get_subscription_active_map_for_user", lambda user_id: {120: False})
+
+    text, _keyboard = bot.build_subscriptions_overview(12345, [sub])
+
+    assert bot.t(12345, "status_paused") in text
+
+
+def test_subscription_card_marks_paused_subscription(monkeypatch):
+    sub = _sub(120, title="Paused product", last_price=100.0)
+    monkeypatch.setattr(bot, "get_user_subscriptions", lambda user_id: [sub])
+    monkeypatch.setattr(bot, "get_subscription_active", lambda sub_id: False)
+
+    text = bot.format_subscription_card(12345, sub)
+
+    assert bot.t(12345, "status_paused") in text
+    assert bot.t(12345, "next_notify_paused") in text
+
+
 def test_subscription_card_uses_scheduler_time_for_due_hourly(monkeypatch):
     now = int(time.time())
     next_check = now + 600

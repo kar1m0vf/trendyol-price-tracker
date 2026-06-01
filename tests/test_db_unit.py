@@ -76,6 +76,30 @@ def test_subscription_order_stays_stable_after_price_updates(temp_db_path, monke
 
     assert [sub[0] for sub in subs] == [second_id, first_id]
 
+
+def test_paused_subscription_is_skipped_by_background_iterator(temp_db_path):
+    user_id = 12345
+    active_id = database.add_subscription(
+        user_id,
+        "https://www.trendyol.com/test-product-active",
+        product_title="Active product",
+    )
+    paused_id = database.add_subscription(
+        user_id,
+        "https://www.trendyol.com/test-product-paused",
+        product_title="Paused product",
+    )
+
+    assert database.get_subscription_active(paused_id) is True
+    assert database.set_subscription_active(paused_id, False) is True
+    assert database.get_subscription_active(paused_id) is False
+
+    active_sub_ids = [row[0] for row in database.iter_all_subscriptions()]
+
+    assert active_id in active_sub_ids
+    assert paused_id not in active_sub_ids
+    assert database.get_subscriptions_count() == 1
+
 def test_price_history_functions_empty(temp_db_path):
                                                                        
     assert database.get_price_history(9999999) == []
