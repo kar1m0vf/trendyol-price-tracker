@@ -40,6 +40,7 @@ DEFAULT_NOTIFY_MODE = os.getenv("DEFAULT_NOTIFY_MODE", "discount")
 ADMIN_IDS = _parse_admin_ids(os.getenv("ADMIN_IDS", ""))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 DATABASE_PATH = os.getenv("DATABASE_PATH", "trendyol_bot.db")
+BACKUP_DIR = os.getenv("BACKUP_DIR", "backups")
 # Kept for compatibility with older diagnostics/tests. The bot now always uses
 # the package-based handler registration path.
 USE_NEW_HANDLERS = True

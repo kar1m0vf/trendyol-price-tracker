@@ -1,9 +1,9 @@
 # Deploy Smoke Checklist
 
-Owner/internal checklist. This document does not grant permission to deploy a
+Owner/internal checklist. This document does not grant permission to operate a
 copy of the bot; it exists so the project owner can validate the live service.
 
-Run this before and right after deployment.
+Run this before and right after owner-controlled runtime changes.
 
 ## 1. Pre-Deploy Local Checks
 
@@ -86,7 +86,7 @@ Expected:
 ## 7. Backup and DB Health
 
 Check:
-1. `backups/` contains fresh DB backups.
+1. `BACKUP_DIR` contains fresh DB backups.
 2. DB file is writable.
 3. Log does not show SQLite lock storms.
 

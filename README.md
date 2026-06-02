@@ -3,8 +3,6 @@
 A Telegram service for tracking Trendyol product prices, managing personal watchlists, storing price history, and sending practical price-change notifications.
 
 Live bot: [@trendyolpw_bot](https://t.me/trendyolpw_bot)
-Source repository: <https://github.com/kar1m0vf/trendyol-price-tracker>
-
 The project is built as a real service rather than a one-off script: it has Telegram workflows, persistent user state, background jobs, admin controls, localization, diagnostics, and tests. The source is visible, but the bot is not distributed as a reusable package or a ready-made third-party deployment.
 
 ## Problem

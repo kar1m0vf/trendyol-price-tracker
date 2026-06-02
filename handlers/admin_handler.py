@@ -18,7 +18,7 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from analytics import Analytics
-from config import ADMIN_IDS, DATABASE_PATH
+from config import ADMIN_IDS, BACKUP_DIR, DATABASE_PATH
 from database import (
     create_sqlite_backup,
     get_broken_subscriptions,
@@ -1367,8 +1367,8 @@ def _prune_old_backups(backups_dir: Path, keep_last: int) -> int:
 async def _create_database_backup(trigger: str) -> Dict[str, Any]:
     """Create backup and apply retention policy."""
     timestamp = int(time.time())
-    backups_dir = Path("backups")
-    backups_dir.mkdir(exist_ok=True)
+    backups_dir = Path(BACKUP_DIR)
+    backups_dir.mkdir(parents=True, exist_ok=True)
 
     backup_path = backups_dir / f"db_backup_{timestamp}.db"
     await asyncio.to_thread(create_sqlite_backup, str(backup_path))

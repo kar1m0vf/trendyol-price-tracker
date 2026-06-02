@@ -69,7 +69,9 @@ artifacts/
 
 # Private owner docs
 docs/guides/OPERATIONS.md
+docs/guides/DEPLOYMENT.md
 docs/private/
+deploy/
 
 # Local owner launch/debug helpers
 start_bot.bat
