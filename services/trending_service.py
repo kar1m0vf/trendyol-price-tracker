@@ -2,7 +2,8 @@
 
 import html
 import re
-from typing import List, Optional, Set, Tuple
+import time
+from typing import Dict, List, Optional, Set, Tuple
 
 from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -12,6 +13,8 @@ from localization import t
 TrendItem = Tuple[str, Optional[float], str]
 
 TREND_SEARCH_AWAIT: Set[int] = set()
+TRENDING_RESULT_CACHE_TTL_SECONDS = 10 * 60
+TRENDING_RESULT_CACHE: Dict[str, Tuple[float, List[TrendItem]]] = {}
 
 _TRENDING_TITLE_NOISE_RE = re.compile(
     r"(?:h[\u0131iI\u0130]zl[\u0131iI\u0130]\s*bak[\u0131iI\u0130][\u015fs\u015eS]|hizli\s*bakis|quick\s*view)",
@@ -34,6 +37,31 @@ _TRENDING_TITLE_PRICE_SUFFIX_RE = re.compile(
 )
 _TRENDING_TITLE_DISCOUNT_SUFFIX_RE = re.compile(r"\s+-?%\d+(?:[.,]\d+)?\s*$")
 _TRENDING_TITLE_STOCK_SUFFIX_RE = re.compile(r"(?:\s+\bVar\b)+\s*$", re.IGNORECASE)
+
+
+def trending_cache_key(scope: str, value: str = "") -> str:
+    normalized_scope = re.sub(r"\s+", "_", str(scope or "").strip().lower())
+    normalized_value = re.sub(r"\s+", " ", str(value or "").strip().lower())
+    return f"{normalized_scope}:{normalized_value}" if normalized_value else normalized_scope
+
+
+def get_cached_trending_items(cache_key: str) -> Optional[List[TrendItem]]:
+    cached = TRENDING_RESULT_CACHE.get(cache_key)
+    if cached is None:
+        return None
+
+    created_at, items = cached
+    if time.time() - created_at > TRENDING_RESULT_CACHE_TTL_SECONDS:
+        TRENDING_RESULT_CACHE.pop(cache_key, None)
+        return None
+
+    return list(items)
+
+
+def set_cached_trending_items(cache_key: str, items: List[TrendItem]) -> None:
+    if not items:
+        return
+    TRENDING_RESULT_CACHE[cache_key] = (time.time(), list(items))
 
 
 def clean_trending_title(title: Optional[str], url: str = "") -> str:

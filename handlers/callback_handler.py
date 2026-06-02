@@ -28,6 +28,9 @@ from scraper import get_product_info_async
 from services.trending_service import (
     TREND_SEARCH_AWAIT,
     format_trending_items,
+    get_cached_trending_items,
+    set_cached_trending_items,
+    trending_cache_key,
     trending_categories_kb,
     trending_menu_kb,
     trending_results_kb,
@@ -120,10 +123,42 @@ class CallbackHandler(BaseHandler):
 
 
             if data.startswith("trend:"):
+                parts = data.split(":")
+                if (len(parts) >= 2 and parts[1] == "all") or (len(parts) >= 3 and parts[1] == "cat"):
+                    from bot import check_heavy_command_rate_limit
+
+                    cache_key = (
+                        trending_cache_key("all")
+                        if parts[1] == "all"
+                        else trending_cache_key("cat", parts[2])
+                    )
+                    refresh_callback = "trend:all" if parts[1] == "all" else f"trend:cat:{parts[2]}"
+                    rate_limit_key = "trending_all" if parts[1] == "all" else f"trending_cat:{parts[2]}"
+                    retry_after = check_heavy_command_rate_limit(user_id, rate_limit_key)
+                    if retry_after:
+                        cached_items = get_cached_trending_items(cache_key)
+                        if cached_items:
+                            await cq.answer()
+                            await self.replace_status_message(
+                                cq.message,
+                                self.t(user_id, "trending_header") + "\n\n" + format_trending_items(user_id, cached_items),
+                                fallback_target=user_id,
+                                reply_markup=trending_results_kb(
+                                    user_id,
+                                    cached_items,
+                                    refresh_callback=refresh_callback,
+                                ),
+                                parse_mode="HTML",
+                            )
+                            return
+                        await cq.answer(
+                            self.t(user_id, "heavy_command_rate_limited", seconds=retry_after),
+                            show_alert=True,
+                        )
+                        return
                 await cq.answer()
                 status_message = None
                 try:
-                    parts = data.split(":")
 
                     if len(parts) >= 2 and parts[1] == "menu":
                         await cq.message.edit_text(
@@ -151,6 +186,7 @@ class CallbackHandler(BaseHandler):
                                 reply_markup=trending_menu_kb(user_id),
                             )
                             return
+                        set_cached_trending_items(trending_cache_key("all"), items)
                         header = self.t(user_id, "trending_header")
                         await self.replace_status_message(
                             status_message,
@@ -194,6 +230,7 @@ class CallbackHandler(BaseHandler):
                                 reply_markup=trending_categories_kb(user_id),
                             )
                             return
+                        set_cached_trending_items(trending_cache_key("cat", cat_key), items)
                         await self.replace_status_message(
                             status_message,
                             self.t(user_id, "trending_header") + "\n\n" + format_trending_items(user_id, items),
@@ -221,6 +258,15 @@ class CallbackHandler(BaseHandler):
 
 
             if data.startswith("compare:"):
+                from bot import check_heavy_command_rate_limit
+
+                retry_after = check_heavy_command_rate_limit(user_id, "compare")
+                if retry_after:
+                    await cq.answer(
+                        self.t(user_id, "heavy_command_rate_limited", seconds=retry_after),
+                        show_alert=True,
+                    )
+                    return
                 await cq.answer(self.t(user_id, "status_loading_compare"))
                 status_message = await self.send_status_message(
                     user_id,

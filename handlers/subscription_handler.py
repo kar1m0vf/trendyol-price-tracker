@@ -11,12 +11,16 @@ from database import (
     add_user_if_not_exists, add_subscription, update_last_price,
     update_subscription_meta, save_user_profile
 )
-from config import DEFAULT_NOTIFY_MODE
+from config import ADMIN_IDS, DEFAULT_NOTIFY_MODE, MAX_SUBSCRIPTIONS_PER_USER
 from localization import LOCALES
 from logging_utils import action_event, actor_label, short_value
 from scraper import get_product_info_async
 from keyboards import get_main_kb, subscription_controls_kb_for_user
 import logging
+
+
+def is_subscription_limit_reached(user_id: int, current_count: int) -> bool:
+    return user_id not in ADMIN_IDS and current_count >= MAX_SUBSCRIPTIONS_PER_USER
 
 
 class SubscriptionHandler(BaseHandler):
@@ -168,6 +172,23 @@ class SubscriptionHandler(BaseHandler):
                     action_event("USER", "tried duplicate subscription", user=actor_label(message.from_user), sub_id=sid)
                     await message.answer(self.t(user_id, "already_subscribed"))
                     return
+
+            if is_subscription_limit_reached(user_id, len(subs)):
+                action_event(
+                    "USER",
+                    "subscription limit reached",
+                    user=actor_label(message.from_user),
+                    current=len(subs),
+                    limit=MAX_SUBSCRIPTIONS_PER_USER,
+                )
+                await message.answer(
+                    self.t(
+                        user_id,
+                        "subscription_limit_reached",
+                        limit=MAX_SUBSCRIPTIONS_PER_USER,
+                    )
+                )
+                return
 
             status_message = await self.send_status_message(
                 message,

@@ -51,6 +51,10 @@ The same message includes buttons:
 
 Tapping a product button opens the selected product card in the same message. Internal database IDs are not shown to regular users.
 
+The service can enforce a configurable product limit for regular users. If the
+limit is reached, the user is asked to remove an older product from `/mysubs`
+before adding a new one.
+
 ## Product Numbers In Commands
 
 Commands that target a specific product use the number from `/mysubs`:
@@ -165,6 +169,10 @@ Supported flows:
 - text search.
 
 If an external source is temporarily unavailable, the bot tries to return a fallback response instead of leaving the user without feedback.
+
+External-data actions such as trends, comparison, recommendations, and history
+can have a short cooldown. This keeps the bot responsive when users repeat
+heavy requests quickly.
 
 ## Recommendations
 

@@ -76,6 +76,8 @@
     "onboarding_skipped": "Okay, you can start anytime!\n\nUse the buttons below or send /help for help.",
     "cmd_history_usage": "Usage: /history <product number|url>",
     "already_subscribed": "You are already tracking this product.",
+    "subscription_limit_reached": "You have reached the product limit: {limit}. Remove an old product from /mysubs before adding a new one.",
+    "heavy_command_rate_limited": "Too many heavy requests. Try again in {seconds} sec.",
     "not_product_url": "This doesn't look like a Trendyol product page URL.",
     "invalid_language": "Invalid language code.",
     "provide_subscription_id": "Provide a product number from your list.",

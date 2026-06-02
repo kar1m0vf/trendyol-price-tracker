@@ -70,6 +70,8 @@
     "onboarding_skipped": "Tamam, istediğiniz zaman başlayabilirsiniz!\n\nAşağıdaki butonları kullanın veya yardım için /help gönderin.",
     "cmd_history_usage": "Kullanım: /history <ürün numarası|url>",
     "already_subscribed": "Bu ürünü zaten takip ediyorsunuz.",
+    "subscription_limit_reached": "Ürün limitine ulaştınız: {limit}. Yeni ürün eklemek için /mysubs listesinden eski bir ürünü silin.",
+    "heavy_command_rate_limited": "Çok sık istek gönderiyorsunuz. {seconds} sn. sonra tekrar deneyin.",
     "not_product_url": "Bu bir Trendyol ürün sayfası bağlantısı gibi görünmüyor.",
     "invalid_language": "Geçersiz dil kodu.",
     "provide_subscription_id": "Lütfen listedeki ürün numarasını belirtin.",

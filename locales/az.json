@@ -71,6 +71,8 @@
   "onboarding_skipped": "Tamam, istədiyiniz vaxt başlaya bilərsiniz!\n\nAşağıdakı düymələrdən istifadə edin və ya kömək üçün /help göndərin.",
   "cmd_history_usage": "İstifadə: /history <məhsul nömrəsi|url>",
   "already_subscribed": "Bu məhsulu artıq izləyirsiniz.",
+  "subscription_limit_reached": "Məhsul limitinə çatdınız: {limit}. Yeni məhsul əlavə etmək üçün /mysubs siyahısından köhnə məhsullardan birini silin.",
+  "heavy_command_rate_limited": "Çox tez-tez sorğu göndərirsiniz. {seconds} saniyədən sonra yenidən cəhd edin.",
   "not_product_url": "Bu Trendyol məhsul səhifəsinin linki kimi görünmür.",
   "invalid_language": "Yanlış dil kodu.",
   "provide_subscription_id": "Zəhmət olmasa siyahıdakı məhsul nömrəsini göstərin.",

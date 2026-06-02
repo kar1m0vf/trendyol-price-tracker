@@ -10,6 +10,9 @@ from scraper import get_trending_by_search_top3_async
 from services.trending_service import (
     TREND_SEARCH_AWAIT,
     format_trending_items,
+    get_cached_trending_items,
+    set_cached_trending_items,
+    trending_cache_key,
     trending_menu_kb,
     trending_results_kb,
 )
@@ -66,6 +69,30 @@ class TrendingHandler(BaseHandler):
             await message.answer(self.t(user_id, "trending_enter_query"))
             return
 
+        from bot import check_heavy_command_rate_limit
+
+        cache_key = trending_cache_key("search", query)
+        retry_after = check_heavy_command_rate_limit(user_id, "trending_search")
+        if retry_after:
+            cached_items = get_cached_trending_items(cache_key)
+            if cached_items:
+                TREND_SEARCH_AWAIT.discard(user_id)
+                action_event(
+                    "USER",
+                    "served cached trend search",
+                    user=actor_label(message.from_user),
+                    query=query[:80],
+                    results=len(cached_items),
+                )
+                await message.answer(
+                    self.t(user_id, "trending_header") + "\n\n" + format_trending_items(user_id, cached_items),
+                    reply_markup=trending_results_kb(user_id, cached_items),
+                    parse_mode="HTML",
+                )
+                return
+            await message.answer(self.t(user_id, "heavy_command_rate_limited", seconds=retry_after))
+            return
+
         TREND_SEARCH_AWAIT.discard(user_id)
         status_message = None
         try:
@@ -82,6 +109,7 @@ class TrendingHandler(BaseHandler):
                 )
                 return
 
+            set_cached_trending_items(cache_key, items)
             action_event(
                 "USER",
                 "searched trends",

@@ -105,6 +105,35 @@ async def test_trending_callback_edits_message_with_result_keyboard():
 
 
 @pytest.mark.asyncio
+async def test_trending_callback_repeat_uses_cached_result_without_rate_error():
+    from handlers.callback_handler import CallbackHandler
+
+    cq = MagicMock()
+    cq.data = "trend:all"
+    cq.from_user.id = 12345
+    cq.answer = AsyncMock()
+    cq.message = MagicMock()
+    cq.message.edit_text = AsyncMock()
+
+    handler = CallbackHandler()
+    handler._bot = MagicMock()
+    items = [("Phone", 45000.0, "https://trendyol.com/phone-p-1")]
+    fetch_trends = AsyncMock(return_value=items)
+
+    with patch("scraper.get_trending_all_top3_async", new=fetch_trends):
+        await handler.handle_main_callback(cq)
+        cq.message.edit_text.reset_mock()
+        await handler.handle_main_callback(cq)
+
+    assert fetch_trends.await_count == 1
+    assert cq.message.edit_text.await_count >= 1
+    assert cq.answer.await_args_list[-1].kwargs.get("show_alert") is not True
+    _args, kwargs = cq.message.edit_text.await_args
+    assert kwargs["parse_mode"] == "HTML"
+    assert kwargs["reply_markup"].inline_keyboard[0][0].url == "https://trendyol.com/phone-p-1"
+
+
+@pytest.mark.asyncio
 async def test_trending_handler_consumes_search_state():
     from handlers.trending_handler import TrendingHandler
     from services.trending_service import TREND_SEARCH_AWAIT
@@ -162,3 +191,40 @@ async def test_trending_search_state_ignores_product_links():
         assert await handler._is_trending_search_text(msg) is False
     finally:
         TREND_SEARCH_AWAIT.discard(12345)
+
+
+@pytest.mark.asyncio
+async def test_trending_search_repeat_uses_cached_result_without_fetching_again():
+    from handlers.trending_handler import TrendingHandler
+    from services.trending_service import TREND_SEARCH_AWAIT
+
+    msg = MagicMock()
+    msg.text = "phone"
+    msg.from_user.id = 12345
+    msg.from_user.username = "user"
+    msg.from_user.first_name = "User"
+    msg.answer = AsyncMock()
+
+    status_message = MagicMock()
+    status_message.edit_text = AsyncMock()
+
+    handler = TrendingHandler()
+    handler.send_status_message = AsyncMock(return_value=status_message)
+
+    items = [("Phone", 45000.0, "https://trendyol.com/phone-p-1")]
+    fetch_trends = AsyncMock(return_value=items)
+
+    with patch("handlers.trending_handler.get_trending_by_search_top3_async", new=fetch_trends):
+        TREND_SEARCH_AWAIT.add(12345)
+        await handler.handle_trending_search_text(msg)
+
+        TREND_SEARCH_AWAIT.add(12345)
+        msg.answer.reset_mock()
+        await handler.handle_trending_search_text(msg)
+
+    assert fetch_trends.await_count == 1
+    assert 12345 not in TREND_SEARCH_AWAIT
+    msg.answer.assert_awaited_once()
+    _args, kwargs = msg.answer.await_args
+    assert kwargs["parse_mode"] == "HTML"
+    assert kwargs["reply_markup"].inline_keyboard[0][0].url == "https://trendyol.com/phone-p-1"

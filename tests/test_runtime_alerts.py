@@ -71,3 +71,33 @@ async def test_scheduled_check_all_does_not_alert_on_completed_result(monkeypatc
 
     assert result["status"] == "completed"
     send_alert.assert_not_awaited()
+
+
+def test_heavy_command_rate_limit_blocks_repeated_user_call(monkeypatch):
+    import bot
+
+    bot.heavy_command_last_used.clear()
+    monkeypatch.setattr(bot, "ADMIN_IDS", [])
+    monkeypatch.setattr(bot, "HEAVY_COMMAND_COOLDOWN_SECONDS", 20)
+    monkeypatch.setattr(bot.time, "time", lambda: 100.0)
+
+    assert bot.check_heavy_command_rate_limit(123, "history") == 0
+    assert bot.check_heavy_command_rate_limit(123, "history") == 20
+
+    monkeypatch.setattr(bot.time, "time", lambda: 119.2)
+    assert bot.check_heavy_command_rate_limit(123, "history") == 1
+
+    monkeypatch.setattr(bot.time, "time", lambda: 120.0)
+    assert bot.check_heavy_command_rate_limit(123, "history") == 0
+
+
+def test_heavy_command_rate_limit_skips_admins(monkeypatch):
+    import bot
+
+    bot.heavy_command_last_used.clear()
+    monkeypatch.setattr(bot, "ADMIN_IDS", [123])
+    monkeypatch.setattr(bot, "HEAVY_COMMAND_COOLDOWN_SECONDS", 20)
+    monkeypatch.setattr(bot.time, "time", lambda: 100.0)
+
+    assert bot.check_heavy_command_rate_limit(123, "history") == 0
+    assert bot.check_heavy_command_rate_limit(123, "history") == 0

@@ -25,6 +25,7 @@ from config import (
     BACKUP_DIR,
     BOT_TOKEN,
     DATABASE_PATH,
+    HEAVY_COMMAND_COOLDOWN_SECONDS,
     USE_NEW_HANDLERS,
     _check_bot_token,
 )
@@ -244,6 +245,28 @@ router = Router(name="telegrambot")
 notification_service: Optional[NotificationService] = None
 _database_initialized = False
 _middleware_configured = False
+heavy_command_last_used: Dict[Tuple[int, str], float] = {}
+
+
+def is_admin_user(user_id: int) -> bool:
+    return user_id in ADMIN_IDS
+
+
+def check_heavy_command_rate_limit(user_id: int, command_key: str) -> int:
+    """Return retry-after seconds for heavy user commands, or 0 when allowed."""
+    if is_admin_user(user_id) or HEAVY_COMMAND_COOLDOWN_SECONDS <= 0:
+        return 0
+
+    now = time.time()
+    cache_key = (user_id, command_key)
+    last_used = heavy_command_last_used.get(cache_key)
+    if last_used is not None:
+        deadline = last_used + HEAVY_COMMAND_COOLDOWN_SECONDS
+        if deadline > now:
+            return max(1, int(deadline - now + 0.999))
+
+    heavy_command_last_used[cache_key] = now
+    return 0
 
 
 def create_app(
@@ -1654,6 +1677,7 @@ async def cmd_mysubs_cmd_old(message: types.Message):
 
 @router.message(Command("history"))
 async def cmd_history(message: types.Message):
+    user_id = message.from_user.id
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) < 2:
         await message.answer(t(message.from_user.id, "cmd_history_usage"))
@@ -1665,6 +1689,10 @@ async def cmd_history(message: types.Message):
         sub, _public_number = resolve_user_subscription_ref(message.from_user.id, arg)
         if not sub:
             await message.answer(t(message.from_user.id, "no_subs"))
+            return
+        retry_after = check_heavy_command_rate_limit(user_id, "history")
+        if retry_after:
+            await message.answer(t(user_id, "heavy_command_rate_limited", seconds=retry_after))
             return
         sid = sub[0]
 
@@ -1768,6 +1796,10 @@ async def cmd_history(message: types.Message):
         return
     if not is_trendyol_product_url(url):
         await message.answer(t(message.from_user.id, "not_product_url"))
+        return
+    retry_after = check_heavy_command_rate_limit(user_id, "history")
+    if retry_after:
+        await message.answer(t(user_id, "heavy_command_rate_limited", seconds=retry_after))
         return
 
     status_message = await _send_progress_message(
@@ -2226,6 +2258,7 @@ async def cmd_export(message: types.Message):
 @router.message(Command("history_export"))
 async def cmd_history_export(message: types.Message):
     try:
+        user_id = message.from_user.id
         parts = (message.text or "").split()
         if len(parts) < 2 or not parts[1].isdigit():
             await message.answer(t(message.from_user.id, "history_export_usage"))
@@ -2234,6 +2267,10 @@ async def cmd_history_export(message: types.Message):
         sub, _public_number = resolve_user_subscription_ref(message.from_user.id, parts[1])
         if not sub:
             await message.answer(t(message.from_user.id, "no_subs"))
+            return
+        retry_after = check_heavy_command_rate_limit(user_id, "history_export")
+        if retry_after:
+            await message.answer(t(user_id, "heavy_command_rate_limited", seconds=retry_after))
             return
         sub_id = sub[0]
         fmt = "csv"
@@ -2304,6 +2341,7 @@ async def cmd_history_export(message: types.Message):
 async def cmd_history_plot(message: types.Message):
     status_message = None
     try:
+        user_id = message.from_user.id
         parts = (message.text or "").split()
         if len(parts) < 2 or not parts[1].isdigit():
             await message.answer(t(message.from_user.id, "history_plot_usage"))
@@ -2312,6 +2350,10 @@ async def cmd_history_plot(message: types.Message):
         sub, _public_number = resolve_user_subscription_ref(message.from_user.id, parts[1])
         if not sub:
             await message.answer(t(message.from_user.id, "no_subs"))
+            return
+        retry_after = check_heavy_command_rate_limit(user_id, "history_plot")
+        if retry_after:
+            await message.answer(t(user_id, "heavy_command_rate_limited", seconds=retry_after))
             return
         sub_id = sub[0]
         days = None
@@ -2388,6 +2430,10 @@ async def cmd_compare(message: types.Message):
             if not sub:
                 await message.answer(t(user_id, "no_subs_found_id"))
                 return
+            retry_after = check_heavy_command_rate_limit(user_id, "compare")
+            if retry_after:
+                await message.answer(t(user_id, "heavy_command_rate_limited", seconds=retry_after))
+                return
             sub_id = sub[0]
 
             status_message = await _send_progress_message(
@@ -2440,6 +2486,10 @@ async def _compare_products_by_urls(message: types.Message, url1: str, url2: str
 
     if not (is_trendyol_product_url(url1) and is_trendyol_product_url(url2)):
         await message.answer(t(user_id, "not_product_url"))
+        return
+    retry_after = check_heavy_command_rate_limit(user_id, "compare")
+    if retry_after:
+        await message.answer(t(user_id, "heavy_command_rate_limited", seconds=retry_after))
         return
 
     status_message = await _send_progress_message(
@@ -3909,6 +3959,10 @@ async def cmd_recommend(message: types.Message):
     """Show personalized product recommendations"""
     user_id = message.from_user.id
     add_user_if_not_exists(user_id)
+    retry_after = check_heavy_command_rate_limit(user_id, "recommend")
+    if retry_after:
+        await message.answer(t(user_id, "heavy_command_rate_limited", seconds=retry_after))
+        return
 
     status_message = await _send_progress_message(
         message,
