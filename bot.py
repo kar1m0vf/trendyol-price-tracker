@@ -20,7 +20,14 @@ from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton
 )
 
-from config import BOT_TOKEN, _check_bot_token, USE_NEW_HANDLERS, DATABASE_PATH
+from config import (
+    ADMIN_IDS,
+    BACKUP_DIR,
+    BOT_TOKEN,
+    DATABASE_PATH,
+    USE_NEW_HANDLERS,
+    _check_bot_token,
+)
 from utils import get_next_notification_time
 import aiogram
 from logging_utils import action_event, actor_label, configure_logging, short_value
@@ -183,6 +190,21 @@ def _get_env_int(
     return value
 
 
+def _get_env_bool(name: str, default: bool) -> bool:
+    """Read boolean env var with validation and safe fallback."""
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    normalized = raw_value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+
+    logger.warning("Invalid boolean env %s=%r; using default=%s", name, raw_value, default)
+    return default
+
+
 
 CHECK_ALL_INTERVAL_MINUTES = _get_env_int(
     "CHECK_ALL_INTERVAL_MINUTES",
@@ -204,6 +226,13 @@ DB_BACKUP_KEEP_FILES = _get_env_int(
 )
 DB_BACKUP_HOUR = _get_env_int("DB_BACKUP_HOUR", 3, min_value=0, max_value=23)
 DB_BACKUP_MINUTE = _get_env_int("DB_BACKUP_MINUTE", 0, min_value=0, max_value=59)
+ADMIN_RUNTIME_ALERTS = _get_env_bool("ADMIN_RUNTIME_ALERTS", True)
+ADMIN_ALERT_COOLDOWN_MINUTES = _get_env_int(
+    "ADMIN_ALERT_COOLDOWN_MINUTES",
+    30,
+    min_value=1,
+    max_value=24 * 60,
+)
 
 
 CHECK_ALL_JOB_ID = "check_all_interval"
@@ -265,6 +294,62 @@ def _get_runtime_bot() -> Bot:
     return bot
 
 
+def _remember_check_all_result(result: Dict[str, Any]) -> None:
+    """Remember the latest price-check summary for /health and admin alerts."""
+    global last_check_all_result, last_check_all_finished_at
+    last_check_all_result = dict(result)
+    last_check_all_finished_at = int(time.time())
+
+
+def _format_timestamp(ts: Optional[int]) -> str:
+    if not ts:
+        return "never"
+    try:
+        return datetime.fromtimestamp(int(ts)).strftime("%d.%m.%Y %H:%M:%S")
+    except Exception:
+        return "unknown"
+
+
+async def send_admin_runtime_alert(
+    alert_key: str,
+    title: str,
+    body_html: str,
+    *,
+    force: bool = False,
+) -> bool:
+    """Send throttled runtime alerts to configured admins."""
+    if not ADMIN_RUNTIME_ALERTS or not ADMIN_IDS:
+        return False
+
+    now = time.time()
+    cooldown_sec = ADMIN_ALERT_COOLDOWN_MINUTES * 60
+    last_sent = runtime_alert_last_sent.get(alert_key, 0)
+    if not force and now - last_sent < cooldown_sec:
+        logger.info("Runtime alert suppressed by cooldown: %s", alert_key)
+        return False
+
+    runtime_alert_last_sent[alert_key] = now
+    text = f"<b>{html.escape(title)}</b>\n\n{body_html}"
+    sent = 0
+    for admin_id in ADMIN_IDS:
+        try:
+            await _get_runtime_bot().send_message(
+                admin_id,
+                text,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+            sent += 1
+        except Exception as exc:
+            logger.warning("Failed to send runtime alert %s to admin %s: %s", alert_key, admin_id, exc)
+
+    if sent:
+        action_event("ADMIN_ALERT", "runtime alert sent", key=alert_key, admins=sent)
+        return True
+
+    return False
+
+
 try:
     from config import DEFAULT_NOTIFY_MODE
 except Exception:
@@ -292,6 +377,9 @@ onboarding_state = {}
 scheduler_lock = asyncio.Lock()
 scheduler_start_lock = asyncio.Lock()
 check_all_lock = asyncio.Lock()
+runtime_alert_last_sent: Dict[str, float] = {}
+last_check_all_result: Dict[str, Any] = {}
+last_check_all_finished_at = 0
 
 
 def handle_blocked_user(user_id: int):
@@ -3042,13 +3130,16 @@ async def check_all(trigger: str = "scheduler") -> Dict[str, Any]:
     if check_all_lock.locked():
         logger.warning("check_all skipped: already running (trigger=%s)", trigger)
         action_event("JOB", "price check skipped", trigger=trigger, reason="already_running")
-        return {"status": "skipped", "trigger": trigger, "reason": "already_running"}
+        result = {"status": "skipped", "trigger": trigger, "reason": "already_running"}
+        _remember_check_all_result(result)
+        return result
 
     async with check_all_lock:
         started_at = time.time()
         try:
             result = await _check_all_impl(trigger=trigger)
             result["duration_sec"] = round(time.time() - started_at, 2)
+            _remember_check_all_result(result)
             action_event(
                 "JOB",
                 "price check finished",
@@ -3063,12 +3154,34 @@ async def check_all(trigger: str = "scheduler") -> Dict[str, Any]:
             return result
         except Exception as e:
             logger.exception("check_all failed (trigger=%s): %s", trigger, e)
-            return {
+            result = {
                 "status": "failed",
                 "trigger": trigger,
                 "reason": str(e),
                 "duration_sec": round(time.time() - started_at, 2),
             }
+            _remember_check_all_result(result)
+            return result
+
+
+async def scheduled_check_all() -> Dict[str, Any]:
+    """Run scheduled price checks and alert admins on critical failures."""
+    result = await check_all(trigger="scheduler")
+    if result.get("status") == "failed":
+        reason = html.escape(str(result.get("reason") or "unknown"))
+        duration = html.escape(str(result.get("duration_sec", "unknown")))
+        await send_admin_runtime_alert(
+            "scheduled_check_all_failed",
+            "⚠️ Scheduled price check failed",
+            (
+                "The scheduled price-check job finished with status "
+                "<code>failed</code>.\n\n"
+                f"Reason: <code>{reason}</code>\n"
+                f"Duration: <code>{duration}s</code>\n"
+                f"Database: <code>{html.escape(DATABASE_PATH)}</code>"
+            ),
+        )
+    return result
 
 async def start_scheduler_async(delay: float = 1.0):
     """Асинхронно стартует планировщик после того, как event loop запущен.
@@ -3098,7 +3211,7 @@ async def start_scheduler_async(delay: float = 1.0):
 
         try:
             scheduler.add_job(
-                check_all,
+                scheduled_check_all,
                 "interval",
                 id=CHECK_ALL_JOB_ID,
                 minutes=CHECK_ALL_INTERVAL_MINUTES,
@@ -3885,6 +3998,22 @@ async def cmd_health(message: types.Message):
 
         health_text += f"\n⏰ Последняя проверка: {datetime.fromtimestamp(last_health_check).strftime('%H:%M:%S') if last_health_check else 'никогда'}"
         health_text += f"\n📊 Активных задач: {len(asyncio.all_tasks())}"
+        next_check_ts = _get_scheduler_next_check_timestamp()
+        last_job_status = last_check_all_result.get("status", "none")
+        health_text += "\n\n<b>Runtime</b>"
+        health_text += f"\nLast price check: <code>{html.escape(_format_timestamp(last_check_all_finished_at))}</code>"
+        health_text += f"\nNext price check: <code>{html.escape(_format_timestamp(next_check_ts))}</code>"
+        health_text += f"\nLast job status: <code>{html.escape(str(last_job_status))}</code>"
+        if last_check_all_result:
+            health_text += (
+                "\nLast job summary: "
+                f"<code>total={html.escape(str(last_check_all_result.get('total', '-')))}, "
+                f"processed={html.escape(str(last_check_all_result.get('processed', '-')))}, "
+                f"failed={html.escape(str(last_check_all_result.get('failed', '-')))}, "
+                f"duration={html.escape(str(last_check_all_result.get('duration_sec', '-')))}s</code>"
+            )
+        health_text += f"\nDatabase: <code>{html.escape(DATABASE_PATH)}</code>"
+        health_text += f"\nBackups: <code>{html.escape(BACKUP_DIR)}</code>"
 
         await message.answer(health_text, parse_mode="HTML")
 
@@ -4100,6 +4229,18 @@ async def main():
 
     logger.info("Bot polling started")
     action_event("START", "bot polling started")
+    await send_admin_runtime_alert(
+        "bot_started",
+        "✅ Bot runtime started",
+        (
+            "Polling is starting and the scheduler has been initialized.\n\n"
+            f"Check interval: <code>{CHECK_ALL_INTERVAL_MINUTES} min</code>\n"
+            f"Backup time: <code>{DB_BACKUP_HOUR:02d}:{DB_BACKUP_MINUTE:02d}</code>\n"
+            f"Database: <code>{html.escape(DATABASE_PATH)}</code>\n"
+            f"Backups: <code>{html.escape(BACKUP_DIR)}</code>"
+        ),
+        force=True,
+    )
     try:
         await dispatcher.start_polling(runtime_bot)
     finally:

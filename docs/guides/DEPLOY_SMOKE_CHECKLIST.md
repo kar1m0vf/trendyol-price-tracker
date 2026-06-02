@@ -29,6 +29,9 @@ Expected startup signals in logs:
 - handlers registered;
 - scheduler started.
 
+If `ADMIN_RUNTIME_ALERTS=1`, the configured admins should also receive a
+Telegram startup alert.
+
 ## 3. Telegram Basic Commands
 
 In Telegram:
@@ -36,11 +39,14 @@ In Telegram:
 2. Send `/help`
 3. Send `/settings`
 4. Send `/language`
+5. As admin, send `/health`
 
 Expected:
 - bot replies without timeout/errors;
 - UI buttons are visible;
 - language changes are applied.
+- `/health` shows database, scheduler, latest price-check, next price-check,
+  and backup path information.
 
 ## 4. Subscription And Export Flow
 
