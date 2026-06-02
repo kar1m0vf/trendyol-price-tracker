@@ -69,6 +69,7 @@ Read the full product flow in [User Guide](docs/guides/USER_GUIDE.md).
 - Manual cleanup.
 - Manual and scheduled database backups.
 - Recommendation catalog management.
+- Broken subscription diagnostics with recheck, pause, and delete actions.
 - Runtime health check.
 
 ### Localization
@@ -87,7 +88,7 @@ Read the full product flow in [User Guide](docs/guides/USER_GUIDE.md).
 | Concurrency | Scheduler lock, task batching, network fetch semaphore, grouped notifications |
 | Notifications | Safe send helpers, image fallback, grouped updates, chart delivery |
 | Scraping | Trendyol product extraction, trends, category/search flows, history helpers |
-| Admin tools | Stats, users, broadcasts, reports, cleanup, backups, recommendations |
+| Admin tools | Stats, users, broadcasts, reports, cleanup, backups, recommendations, broken subscription diagnostics |
 | Quality | pytest suite, readiness check, deploy smoke check, locale key validation |
 | Security posture | `.env` configuration, ignored runtime data, token validation, no production data in repo |
 
@@ -124,6 +125,7 @@ Detailed system notes are in [Architecture](docs/ARCHITECTURE.md).
 | `/health` | Admin health check |
 | `/runcheck` | Admin manual price check run |
 | `/admin` | Admin panel |
+| `/bad_subs` | Admin diagnostics for subscriptions with failed price checks |
 
 Product numbers come from `/mysubs` and keep the same stable order in price notifications.
 Internal database IDs are intentionally hidden from regular users.
@@ -188,7 +190,7 @@ The project includes checks for:
 - scraper parsing helpers;
 - notification flow.
 
-Latest recorded local verification: `191 passed, 3 skipped`. Re-run `python -m pytest -q` before release or deployment.
+Latest recorded local verification: `233 passed, 3 skipped`.
 
 ## Documentation
 

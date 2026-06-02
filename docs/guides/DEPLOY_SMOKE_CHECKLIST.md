@@ -40,6 +40,7 @@ In Telegram:
 3. Send `/settings`
 4. Send `/language`
 5. As admin, send `/health`
+6. As admin, send `/bad_subs`
 
 Expected:
 - bot replies without timeout/errors;
@@ -47,6 +48,8 @@ Expected:
 - language changes are applied.
 - `/health` shows database, scheduler, latest price-check, next price-check,
   and backup path information.
+- `/bad_subs` opens the broken-subscription diagnostics list or a clear empty
+  state.
 
 ## 4. Subscription And Export Flow
 

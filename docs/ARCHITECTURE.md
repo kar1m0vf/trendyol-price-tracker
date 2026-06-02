@@ -56,7 +56,7 @@ Some command helpers still live in `bot.py` while the handler package migration 
 | `handlers/analytics_handler.py` | `/stats`, `/all_list`, `/top_drops` |
 | `handlers/trending_handler.py` | Trend menu entry point and trend search text input |
 | `handlers/callback_handler.py` | Inline product controls, history, compare, alerts, trends, admin callbacks |
-| `handlers/admin_handler.py` | Admin menu, stats, users, broadcast, reports, cleanup, backups, recommendations |
+| `handlers/admin_handler.py` | Admin menu, stats, users, broadcast, reports, cleanup, backups, recommendations, broken subscription diagnostics |
 
 ## Database Layer
 

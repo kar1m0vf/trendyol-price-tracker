@@ -563,7 +563,8 @@ async def admin_broken_subscriptions(message: types.Message):
         subscriptions=len(rows),
     )
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    keyboard_rows = []
+    base_keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_broken_subs")],
         [InlineKeyboardButton(text="🏠 Главное меню", callback_data="admin_main_menu")],
     ])
@@ -572,7 +573,7 @@ async def admin_broken_subscriptions(message: types.Message):
         await _edit_or_answer(
             message,
             "✅ <b>Битые товары</b>\n\nПодписок с неудачными проверками цены сейчас нет.",
-            reply_markup=keyboard,
+            reply_markup=base_keyboard,
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
@@ -614,7 +615,20 @@ async def admin_broken_subscriptions(message: types.Message):
             break
 
         lines.append(block)
+        if index <= 10:
+            button_title = _short_admin_text(title, 22)
+            keyboard_rows.append([
+                InlineKeyboardButton(
+                    text=f"{index}. #{sub_id} {button_title}",
+                    callback_data=f"admin_bad_sub:{sub_id}",
+                )
+            ])
 
+    keyboard_rows.extend([
+        [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_broken_subs")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="admin_main_menu")],
+    ])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
     await _edit_or_answer(
         message,
         "\n\n".join(lines),
@@ -1928,3 +1942,4 @@ class AdminHandler(BaseHandler):
 
     def register(self, dp):
         dp.message.register(cmd_admin, Command("admin"))
+        dp.message.register(admin_broken_subscriptions, Command("bad_subs"))

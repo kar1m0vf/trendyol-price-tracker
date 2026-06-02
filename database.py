@@ -818,7 +818,7 @@ def clear_subscription_check_failure(sub_id: int) -> None:
 
 
 def get_broken_subscriptions(limit: int = 50, min_fail_count: int = 1) -> List[Dict[str, Any]]:
-    """Return subscriptions with recent consecutive price-check failures."""
+    """Return active subscriptions with recent consecutive price-check failures."""
     safe_limit = max(1, min(int(limit or 50), 500))
     safe_min_fail_count = max(1, int(min_fail_count or 1))
     with sqlite3.connect(DB) as conn:
@@ -834,6 +834,7 @@ def get_broken_subscriptions(limit: int = 50, min_fail_count: int = 1) -> List[D
                 s.last_price,
                 s.product_title,
                 s.product_image,
+                COALESCE(s.is_active, 1) AS is_active,
                 COALESCE(s.check_fail_count, 0) AS check_fail_count,
                 s.last_check_error,
                 s.last_check_error_at,
@@ -843,6 +844,7 @@ def get_broken_subscriptions(limit: int = 50, min_fail_count: int = 1) -> List[D
             FROM subscriptions s
             LEFT JOIN users u ON u.user_id = s.user_id
             WHERE COALESCE(s.check_fail_count, 0) >= ?
+              AND COALESCE(s.is_active, 1) = 1
             ORDER BY COALESCE(s.check_fail_count, 0) DESC,
                      COALESCE(s.last_check_error_at, 0) DESC,
                      s.id DESC
@@ -852,6 +854,38 @@ def get_broken_subscriptions(limit: int = 50, min_fail_count: int = 1) -> List[D
         )
         rows = cur.fetchall()
     return [dict(row) for row in rows]
+
+
+def get_subscription_failure_details(sub_id: int) -> Optional[Dict[str, Any]]:
+    """Return one subscription with current failure metadata and user profile."""
+    with sqlite3.connect(DB) as conn:
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                s.id,
+                s.user_id,
+                s.url,
+                s.notify_mode,
+                s.last_price,
+                s.product_title,
+                s.product_image,
+                COALESCE(s.is_active, 1) AS is_active,
+                COALESCE(s.check_fail_count, 0) AS check_fail_count,
+                s.last_check_error,
+                s.last_check_error_at,
+                u.username,
+                u.first_name,
+                u.last_name
+            FROM subscriptions s
+            LEFT JOIN users u ON u.user_id = s.user_id
+            WHERE s.id = ?
+            """,
+            (int(sub_id),),
+        )
+        row = cur.fetchone()
+    return dict(row) if row else None
 
 
 def get_subscription_check_failures_for_user(

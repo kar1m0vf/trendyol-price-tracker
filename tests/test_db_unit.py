@@ -132,3 +132,23 @@ def test_subscription_check_failure_tracking(temp_db_path):
     assert database.get_broken_subscriptions() == []
     assert database.get_subscription_check_failures_for_user(user_id) == {}
 
+
+def test_paused_failed_subscription_is_hidden_from_admin_broken_list(temp_db_path):
+    user_id = 12345
+    sub_id = database.add_subscription(
+        user_id,
+        "https://www.trendyol.com/test-broken-paused-p-1",
+        product_title="Paused Broken Test",
+    )
+
+    database.record_subscription_check_failure(sub_id, "price_not_found", ts=111)
+
+    assert [row["id"] for row in database.get_broken_subscriptions(limit=10)] == [sub_id]
+    assert database.set_subscription_active(sub_id, False) is True
+    assert database.get_broken_subscriptions(limit=10) == []
+
+    details = database.get_subscription_failure_details(sub_id)
+    assert details["id"] == sub_id
+    assert details["is_active"] == 0
+    assert details["check_fail_count"] == 1
+

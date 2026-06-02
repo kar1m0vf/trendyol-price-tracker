@@ -201,8 +201,40 @@ async def test_admin_broken_subscriptions_lists_failures_and_escapes_html():
     assert "fail: <b>3</b>" in text
     markup = msg.edit_text.await_args.kwargs["reply_markup"]
     callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+    assert "admin_bad_sub:7" in callbacks
     assert "admin_broken_subs" in callbacks
     assert "admin_main_menu" in callbacks
+
+
+def _broken_subscription_row(**overrides):
+    row = {
+        "id": 7,
+        "user_id": 12345,
+        "url": "https://example.com/product-p-7",
+        "notify_mode": "discount",
+        "last_price": 1200,
+        "product_title": "Sneaker <script>",
+        "product_image": None,
+        "is_active": 1,
+        "check_fail_count": 3,
+        "last_check_error": "price_not_found <html>",
+        "last_check_error_at": 1000,
+        "username": "buyer",
+        "first_name": "Test",
+        "last_name": None,
+    }
+    row.update(overrides)
+    return row
+
+
+def _callback(data: str):
+    cq = MagicMock()
+    cq.from_user.id = ADMIN_ID
+    cq.data = data
+    cq.answer = AsyncMock()
+    cq.message = MagicMock()
+    cq.message.edit_text = AsyncMock()
+    return cq
 
 
 @pytest.mark.asyncio
@@ -219,6 +251,100 @@ async def test_admin_broken_subscriptions_callback_opens_screen():
 
     assert handled is True
     broken_screen.assert_awaited_once_with(cq.message)
+
+
+@pytest.mark.asyncio
+async def test_admin_bad_subscription_details_escapes_html_and_shows_actions():
+    from handlers import callback_handler
+    from handlers.callback_handler import CallbackHandler
+
+    cq = _callback("admin_bad_sub:7")
+    handler = CallbackHandler()
+
+    with patch("config.ADMIN_IDS", [ADMIN_ID]):
+        with patch.object(callback_handler, "get_subscription_failure_details", return_value=_broken_subscription_row()):
+            handled = await handler._handle_admin_callback(cq, cq.data, ADMIN_ID)
+
+    assert handled is True
+    cq.message.edit_text.assert_awaited_once()
+    text = cq.message.edit_text.await_args.args[0]
+    assert "Sneaker &lt;script&gt;" in text
+    assert "price_not_found &lt;html&gt;" in text
+    markup = cq.message.edit_text.await_args.kwargs["reply_markup"]
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+    assert "admin_bad_recheck:7" in callbacks
+    assert "admin_bad_pause:7" in callbacks
+    assert "admin_bad_delete:7" in callbacks
+
+
+@pytest.mark.asyncio
+async def test_admin_bad_subscription_pause_sets_inactive():
+    from handlers import callback_handler
+    from handlers.callback_handler import CallbackHandler
+
+    cq = _callback("admin_bad_pause:7")
+    handler = CallbackHandler()
+
+    with patch("config.ADMIN_IDS", [ADMIN_ID]):
+        with patch.object(callback_handler, "get_subscription_failure_details", return_value=_broken_subscription_row()):
+            with patch.object(callback_handler, "set_subscription_active", return_value=True) as set_active:
+                with patch.object(callback_handler, "action_event"):
+                    handled = await handler._handle_admin_callback(cq, cq.data, ADMIN_ID)
+
+    assert handled is True
+    set_active.assert_called_once_with(7, False)
+    cq.message.edit_text.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_admin_bad_subscription_delete_requires_confirm_then_removes():
+    from handlers import callback_handler
+    from handlers.callback_handler import CallbackHandler
+
+    handler = CallbackHandler()
+    prompt_cq = _callback("admin_bad_delete:7")
+    confirm_cq = _callback("admin_bad_delete_confirm:7")
+
+    with patch("config.ADMIN_IDS", [ADMIN_ID]):
+        with patch.object(callback_handler, "get_subscription_failure_details", return_value=_broken_subscription_row()):
+            handled_prompt = await handler._handle_admin_callback(prompt_cq, prompt_cq.data, ADMIN_ID)
+        with patch.object(callback_handler, "remove_subscription", return_value=True) as remove_subscription:
+            with patch.object(callback_handler, "action_event"):
+                handled_confirm = await handler._handle_admin_callback(confirm_cq, confirm_cq.data, ADMIN_ID)
+
+    assert handled_prompt is True
+    prompt_markup = prompt_cq.message.edit_text.await_args.kwargs["reply_markup"]
+    prompt_callbacks = [button.callback_data for row in prompt_markup.inline_keyboard for button in row]
+    assert "admin_bad_delete_confirm:7" in prompt_callbacks
+    assert handled_confirm is True
+    remove_subscription.assert_called_once_with(7)
+    assert "Sub: <code>7</code>" in confirm_cq.message.edit_text.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_admin_bad_subscription_recheck_success_clears_failure():
+    from handlers import callback_handler
+    from handlers.callback_handler import CallbackHandler
+
+    cq = _callback("admin_bad_recheck:7")
+    handler = CallbackHandler()
+
+    with patch("config.ADMIN_IDS", [ADMIN_ID]):
+        with patch.object(callback_handler, "get_subscription_failure_details", return_value=_broken_subscription_row()):
+            with patch.object(callback_handler, "get_product_info_async", new_callable=AsyncMock, return_value=(999.0, "Fresh title", None)):
+                with patch.object(callback_handler, "update_subscription_meta") as update_meta:
+                    with patch.object(callback_handler, "update_last_price") as update_last_price:
+                        with patch.object(callback_handler, "add_price_point") as add_price_point:
+                            with patch.object(callback_handler, "clear_subscription_check_failure") as clear_failure:
+                                with patch.object(callback_handler, "action_event"):
+                                    handled = await handler._handle_admin_callback(cq, cq.data, ADMIN_ID)
+
+    assert handled is True
+    update_meta.assert_called_once_with(7, "Fresh title", None)
+    update_last_price.assert_called_once_with(7, 999.0)
+    add_price_point.assert_called_once_with(7, "https://example.com/product-p-7", 999.0, source="admin_recheck")
+    clear_failure.assert_called_once_with(7)
+    assert "999 TL" in cq.message.edit_text.await_args.args[0]
 
 
 @pytest.mark.asyncio

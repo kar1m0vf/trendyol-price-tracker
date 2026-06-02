@@ -38,6 +38,7 @@ REQUIRED_COMMANDS = {
     "about",
     "ping",
     "health",
+    "bad_subs",
 }
 
 

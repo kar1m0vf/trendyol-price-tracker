@@ -18,7 +18,7 @@ from database import (
     get_user_language, get_bot_text, get_recommended_products,
     remove_recommended_product, record_subscription_check_failure,
     clear_subscription_check_failure, get_subscription_active,
-    set_subscription_active
+    get_subscription_failure_details, set_subscription_active
 )
 from keyboards import subscription_controls_kb_for_user, get_main_kb
 from logging_utils import action_event, actor_label
@@ -39,6 +39,10 @@ import sqlite3
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_html(value) -> str:
+    return html.escape("" if value is None else str(value), quote=False)
 
 
 class CallbackHandler(BaseHandler):
@@ -1470,6 +1474,194 @@ class CallbackHandler(BaseHandler):
             disable_web_page_preview=True,
         )
 
+    @staticmethod
+    def _short_admin_value(value, limit: int = 90) -> str:
+        text = re.sub(r"\s+", " ", str(value or "").strip())
+        if len(text) <= limit:
+            return text
+        return text[: max(0, limit - 3)].rstrip() + "..."
+
+    @staticmethod
+    def _format_admin_ts(ts_value) -> str:
+        if not ts_value:
+            return "-"
+        try:
+            return datetime.fromtimestamp(int(ts_value)).strftime("%d.%m.%Y %H:%M")
+        except Exception:
+            return "-"
+
+    @staticmethod
+    def _format_admin_price(price) -> str:
+        if price is None:
+            return "-"
+        try:
+            return f"{float(price):.0f} TL"
+        except (TypeError, ValueError):
+            return "-"
+
+    def _admin_bad_subscription_keyboard(self, sub_id: int, *, confirm_delete: bool = False) -> InlineKeyboardMarkup:
+        if confirm_delete:
+            return InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="✅ Удалить", callback_data=f"admin_bad_delete_confirm:{sub_id}"),
+                    InlineKeyboardButton(text="🚫 Отмена", callback_data=f"admin_bad_sub:{sub_id}"),
+                ],
+                [InlineKeyboardButton(text="⚠️ К списку", callback_data="admin_broken_subs")],
+            ])
+
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🔁 Проверить", callback_data=f"admin_bad_recheck:{sub_id}"),
+                InlineKeyboardButton(text="⏸ Пауза", callback_data=f"admin_bad_pause:{sub_id}"),
+            ],
+            [
+                InlineKeyboardButton(text="🗑 Удалить", callback_data=f"admin_bad_delete:{sub_id}"),
+                InlineKeyboardButton(text="⚠️ К списку", callback_data="admin_broken_subs"),
+            ],
+        ])
+
+    def _format_admin_bad_subscription_text(self, row, *, notice: str = "") -> str:
+        sub_id = int(row.get("id") or 0)
+        owner_id = int(row.get("user_id") or 0)
+        title = self._short_admin_value(row.get("product_title") or row.get("url"), 120)
+        url = self._short_admin_value(row.get("url"), 180)
+        username = row.get("username")
+        first_name = row.get("first_name")
+        last_name = row.get("last_name")
+        display_name = " ".join(part for part in [first_name, last_name] if part).strip()
+        if username:
+            user_text = f"{display_name} (@{username})" if display_name else f"@{username}"
+        else:
+            user_text = display_name or f"ID {owner_id}"
+        fail_count = int(row.get("check_fail_count") or 0)
+        last_error = self._short_admin_value(row.get("last_check_error") or "-", 120)
+        last_error_at = self._format_admin_ts(row.get("last_check_error_at"))
+        last_price = self._format_admin_price(row.get("last_price"))
+        active = bool(int(row.get("is_active") if row.get("is_active") is not None else 1))
+        status = "активна" if active else "на паузе"
+
+        notice_block = f"{notice}\n\n" if notice else ""
+        return (
+            f"{notice_block}⚠️ <b>Проблемная подписка</b>\n\n"
+            f"🆔 <b>Sub:</b> <code>{sub_id}</code>\n"
+            f"👤 <b>User:</b> {_safe_html(user_text)} | <code>{owner_id}</code>\n"
+            f"📌 <b>Статус:</b> {_safe_html(status)}\n"
+            f"📦 <b>{_safe_html(title)}</b>\n"
+            f"💰 <b>Last price:</b> {_safe_html(last_price)}\n"
+            f"❌ <b>Failures:</b> <b>{fail_count}</b>\n"
+            f"🧾 <b>Reason:</b> <code>{_safe_html(last_error)}</code>\n"
+            f"🕒 <b>Last error:</b> {_safe_html(last_error_at)}\n\n"
+            f"🔗 <code>{_safe_html(url)}</code>"
+        )
+
+    async def _handle_admin_bad_subscription_details(self, cq: CallbackQuery, sub_id: int, *, notice: str = "") -> None:
+        row = get_subscription_failure_details(sub_id)
+        if not row:
+            await cq.answer("Подписка не найдена", show_alert=True)
+            return
+        await cq.message.edit_text(
+            self._format_admin_bad_subscription_text(row, notice=notice),
+            reply_markup=self._admin_bad_subscription_keyboard(sub_id),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+
+    async def _handle_admin_bad_subscription_recheck(self, cq: CallbackQuery, sub_id: int, admin_user_id: int) -> None:
+        row = get_subscription_failure_details(sub_id)
+        if not row:
+            await cq.answer("Подписка не найдена", show_alert=True)
+            return
+
+        url = str(row.get("url") or "")
+        await cq.answer("Проверяю...")
+        try:
+            price, title, image = await get_product_info_async(url)
+        except Exception as exc:
+            reason = f"admin_recheck_error:{type(exc).__name__}"
+            record_subscription_check_failure(sub_id, reason)
+            action_event("ADMIN", "bad subscription recheck failed", admin=admin_user_id, sub_id=sub_id, reason=reason)
+            await self._handle_admin_bad_subscription_details(
+                cq,
+                sub_id,
+                notice=f"❌ <b>Повторная проверка не прошла:</b> <code>{_safe_html(type(exc).__name__)}</code>",
+            )
+            return
+
+        if price is None:
+            record_subscription_check_failure(sub_id, "admin_recheck_price_not_found")
+            action_event("ADMIN", "bad subscription recheck found no price", admin=admin_user_id, sub_id=sub_id)
+            await self._handle_admin_bad_subscription_details(
+                cq,
+                sub_id,
+                notice="❌ <b>Повторная проверка не нашла цену.</b>",
+            )
+            return
+
+        if title or image:
+            update_subscription_meta(sub_id, title, image)
+        update_last_price(sub_id, float(price))
+        try:
+            add_price_point(sub_id, url, float(price), source="admin_recheck")
+        except Exception:
+            logger.debug("Could not save admin recheck price point for sub %s", sub_id, exc_info=True)
+        clear_subscription_check_failure(sub_id)
+        action_event("ADMIN", "bad subscription recovered", admin=admin_user_id, sub_id=sub_id, price=f"{float(price):.0f} TL")
+
+        await cq.message.edit_text(
+            "✅ <b>Повторная проверка успешна</b>\n\n"
+            f"Sub: <code>{sub_id}</code>\n"
+            f"Цена: <b>{float(price):.0f} TL</b>\n\n"
+            "Ошибка проверки очищена.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⚠️ К списку", callback_data="admin_broken_subs")],
+                [InlineKeyboardButton(text="🏠 Админ-панель", callback_data="admin_main_menu")],
+            ]),
+            parse_mode="HTML",
+        )
+
+    async def _handle_admin_bad_subscription_pause(self, cq: CallbackQuery, sub_id: int, admin_user_id: int) -> None:
+        if not get_subscription_failure_details(sub_id):
+            await cq.answer("Подписка не найдена", show_alert=True)
+            return
+        if not set_subscription_active(sub_id, False):
+            await cq.answer(self.t(admin_user_id, "error_generic"), show_alert=True)
+            return
+        action_event("ADMIN", "paused bad subscription", admin=admin_user_id, sub_id=sub_id)
+        await self._handle_admin_bad_subscription_details(
+            cq,
+            sub_id,
+            notice="⏸ <b>Подписка поставлена на паузу.</b>",
+        )
+
+    async def _handle_admin_bad_subscription_delete_prompt(self, cq: CallbackQuery, sub_id: int) -> None:
+        row = get_subscription_failure_details(sub_id)
+        if not row:
+            await cq.answer("Подписка не найдена", show_alert=True)
+            return
+        await cq.message.edit_text(
+            self._format_admin_bad_subscription_text(
+                row,
+                notice="🗑 <b>Удалить эту подписку?</b>\nДействие нельзя отменить.",
+            ),
+            reply_markup=self._admin_bad_subscription_keyboard(sub_id, confirm_delete=True),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+
+    async def _handle_admin_bad_subscription_delete_confirm(self, cq: CallbackQuery, sub_id: int, admin_user_id: int) -> None:
+        if not remove_subscription(sub_id):
+            await cq.answer("Подписка не найдена", show_alert=True)
+            return
+        action_event("ADMIN", "deleted bad subscription", admin=admin_user_id, sub_id=sub_id)
+        await cq.message.edit_text(
+            f"🗑 <b>Подписка удалена</b>\n\nSub: <code>{sub_id}</code>",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⚠️ К списку", callback_data="admin_broken_subs")],
+                [InlineKeyboardButton(text="🏠 Админ-панель", callback_data="admin_main_menu")],
+            ]),
+            parse_mode="HTML",
+        )
+
     async def _handle_admin_callback(self, cq: CallbackQuery, data: str, user_id: int) -> bool:
         if not await self._ensure_admin(cq, user_id):
             return True
@@ -1564,6 +1756,35 @@ class CallbackHandler(BaseHandler):
                 from handlers.admin_handler import admin_broken_subscriptions
 
                 await admin_broken_subscriptions(cq.message)
+                return True
+
+            if data.startswith("admin_bad_sub:"):
+                await cq.answer()
+                sub_id = int(data.split(":", 1)[1])
+                await self._handle_admin_bad_subscription_details(cq, sub_id)
+                return True
+
+            if data.startswith("admin_bad_recheck:"):
+                sub_id = int(data.split(":", 1)[1])
+                await self._handle_admin_bad_subscription_recheck(cq, sub_id, user_id)
+                return True
+
+            if data.startswith("admin_bad_pause:"):
+                await cq.answer()
+                sub_id = int(data.split(":", 1)[1])
+                await self._handle_admin_bad_subscription_pause(cq, sub_id, user_id)
+                return True
+
+            if data.startswith("admin_bad_delete_confirm:"):
+                await cq.answer()
+                sub_id = int(data.split(":", 1)[1])
+                await self._handle_admin_bad_subscription_delete_confirm(cq, sub_id, user_id)
+                return True
+
+            if data.startswith("admin_bad_delete:"):
+                await cq.answer()
+                sub_id = int(data.split(":", 1)[1])
+                await self._handle_admin_bad_subscription_delete_prompt(cq, sub_id)
                 return True
 
             if data == "admin_recommend":
