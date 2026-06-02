@@ -4,8 +4,15 @@ import logging
 
 from aiogram import types
 from aiogram.filters import Command
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from database import add_user_if_not_exists, get_user_profile, save_user_profile, set_user_language
+from database import (
+    add_user_if_not_exists,
+    delete_user_data,
+    get_user_profile,
+    save_user_profile,
+    set_user_language,
+)
 from keyboards import (
     get_fallback_inline_kb,
     get_help_inline_kb,
@@ -13,7 +20,7 @@ from keyboards import (
     get_onboarding_inline_kb,
 )
 from logging_utils import action_event, actor_label
-from localization import LOCALES, update_language_cache
+from localization import LOCALES, clear_language_cache, update_language_cache
 from user_texts import format_start_text
 from .base import BaseHandler
 
@@ -78,6 +85,71 @@ class BasicHandler(BaseHandler):
         await message.answer(
             self.t(user_id, "help_text"),
             reply_markup=get_help_inline_kb(user_id),
+        )
+
+    async def handle_terms(self, message: types.Message):
+        """Show user-facing terms of use."""
+        user_id = message.from_user.id
+        await message.answer(
+            self.t(user_id, "terms_text"),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+
+    async def handle_privacy(self, message: types.Message):
+        """Show user-facing privacy information."""
+        user_id = message.from_user.id
+        await message.answer(
+            self.t(user_id, "privacy_text"),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+
+    async def handle_support(self, message: types.Message):
+        """Show support instructions."""
+        user_id = message.from_user.id
+        await message.answer(
+            self.t(user_id, "support_text"),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+
+    async def handle_delete_me(self, message: types.Message):
+        """Delete user-owned bot data after explicit confirmation."""
+        user_id = message.from_user.id
+        args = (message.text or "").split(maxsplit=1)
+        confirmed = len(args) > 1 and args[1].strip().lower() == "confirm"
+        if not confirmed:
+            await message.answer(
+                self.t(user_id, "delete_me_confirm_text"),
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+            return
+
+        done_template = self.t(user_id, "delete_me_done")
+        try:
+            deleted = delete_user_data(user_id)
+        except Exception as exc:
+            logger.exception("Failed to delete user data for user=%s: %s", user_id, exc)
+            await message.answer(self.t(user_id, "error_generic"))
+            return
+
+        clear_language_cache(user_id)
+        action_event(
+            "USER",
+            "deleted own bot data",
+            user=actor_label(message.from_user),
+            subscriptions=deleted.get("subscriptions", 0),
+            price_history=deleted.get("price_history", 0),
+        )
+        await message.answer(
+            done_template.format(
+                subscriptions=deleted.get("subscriptions", 0),
+                price_history=deleted.get("price_history", 0),
+            ),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
         )
 
     async def handle_language_command(self, message: types.Message):
@@ -155,6 +227,10 @@ class BasicHandler(BaseHandler):
         """Register all handlers."""
         dp.message.register(self.handle_start, Command("start"))
         dp.message.register(self.handle_help, Command("help"))
+        dp.message.register(self.handle_terms, Command("terms"))
+        dp.message.register(self.handle_privacy, Command("privacy"))
+        dp.message.register(self.handle_support, Command("support"))
+        dp.message.register(self.handle_delete_me, Command("delete_me"))
         dp.message.register(self.handle_language_command, Command("language"))
 
         async def is_language_button(message):

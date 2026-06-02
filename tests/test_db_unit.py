@@ -106,6 +106,43 @@ def test_price_history_functions_empty(temp_db_path):
     assert database.get_last_price_point(9999999) is None
 
 
+def test_delete_user_data_removes_profile_subscriptions_and_history(temp_db_path):
+    user_id = 12345
+    other_user_id = 67890
+    database.add_user_if_not_exists(user_id, language="en")
+    database.add_user_if_not_exists(other_user_id, language="ru")
+
+    first_id = database.add_subscription(
+        user_id,
+        "https://www.trendyol.com/delete-me-a-p-1",
+        product_title="Delete me A",
+    )
+    second_id = database.add_subscription(
+        user_id,
+        "https://www.trendyol.com/delete-me-b-p-2",
+        product_title="Delete me B",
+    )
+    other_id = database.add_subscription(
+        other_user_id,
+        "https://www.trendyol.com/keep-me-p-3",
+        product_title="Keep me",
+    )
+    database.add_price_point(first_id, "https://www.trendyol.com/delete-me-a-p-1", 100.0, 1000)
+    database.add_price_point(second_id, "https://www.trendyol.com/delete-me-b-p-2", 200.0, 2000)
+    database.add_price_point(other_id, "https://www.trendyol.com/keep-me-p-3", 300.0, 3000)
+
+    deleted = database.delete_user_data(user_id)
+
+    assert deleted == {"users": 1, "subscriptions": 2, "price_history": 2}
+    assert database.get_user_profile(user_id) is None
+    assert database.get_user_subscriptions(user_id) == []
+    assert database.get_price_history(first_id) == []
+    assert database.get_price_history(second_id) == []
+    assert database.get_user_profile(other_user_id) is not None
+    assert len(database.get_user_subscriptions(other_user_id)) == 1
+    assert len(database.get_price_history(other_id)) == 1
+
+
 def test_subscription_check_failure_tracking(temp_db_path):
     user_id = 12345
     url = "https://www.trendyol.com/test-product-p-1"

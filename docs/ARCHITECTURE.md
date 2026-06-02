@@ -51,7 +51,7 @@ Some command helpers still live in `bot.py` while the handler package migration 
 
 | Module | Responsibility |
 | --- | --- |
-| `handlers/basic.py` | `/start`, `/help`, `/language`, language/help buttons |
+| `handlers/basic.py` | `/start`, `/help`, `/language`, `/terms`, `/privacy`, `/support`, `/delete_me`, language/help buttons |
 | `handlers/subscription_handler.py` | `/mysubs`, `/unsubscribe`, watchlist buttons, Trendyol URL handling |
 | `handlers/analytics_handler.py` | `/stats`, `/all_list`, `/top_drops` |
 | `handlers/trending_handler.py` | Trend menu entry point and trend search text input |
@@ -66,7 +66,7 @@ Some command helpers still live in `bot.py` while the handler package migration 
 - schema initialization;
 - lightweight migrations;
 - subscriptions;
-- users and language preferences;
+- users, language preferences, and user-owned data deletion;
 - price history;
 - recommendations;
 - custom bot texts;

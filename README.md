@@ -121,6 +121,10 @@ Detailed system notes are in [Architecture](docs/ARCHITECTURE.md).
 | `/import` | Import subscriptions from CSV/JSON export |
 | `/report` | Send a report to admins |
 | `/about` | Bot information |
+| `/terms` | Terms of use and service disclaimer |
+| `/privacy` | Stored data and privacy summary |
+| `/support` | Support and safe report instructions |
+| `/delete_me` | Delete the user's bot profile, subscriptions, and local price history |
 | `/ping` | Response check |
 | `/health` | Admin health check |
 | `/runcheck` | Admin manual price check run |
@@ -176,6 +180,7 @@ Key paths:
 - The production Trendyol scraper is not part of the public source.
 - `trendyol_bot.db`, `logs/`, `backups/`, and production configuration are runtime artifacts and are not part of the public source.
 - User export payloads are generated for direct delivery and should not be committed if saved manually.
+- Users can request deletion of their bot profile, subscriptions, and related local price history through `/delete_me`.
 - If a Telegram bot token is ever exposed, it must be revoked and regenerated through `@BotFather`.
 
 ## Verification

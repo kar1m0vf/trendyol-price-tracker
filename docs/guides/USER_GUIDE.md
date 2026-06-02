@@ -226,6 +226,25 @@ Command:
 
 After this command, the user can write a message. The bot forwards the report to admins.
 
+## Terms, Privacy, And Data Deletion
+
+Commands:
+
+```text
+/terms
+/privacy
+/support
+/delete_me
+```
+
+`/terms` explains that the bot is an independent Trendyol price-tracking assistant, not an official Trendyol service, and that users should check the final price on Trendyol before buying.
+
+`/privacy` summarizes the data needed for price tracking: Telegram user id, public Telegram profile fields, language, saved product links, alert settings, and local price history for the user's subscriptions. The bot does not ask for Trendyol account passwords, payment card details, addresses, or private Trendyol account data.
+
+`/support` points users to `/report` and reminds them not to send sensitive personal data.
+
+`/delete_me` asks for explicit confirmation. After `/delete_me confirm`, the bot deletes the user's bot profile, saved products, notification settings, and related local price history.
+
 ## Language
 
 Command:

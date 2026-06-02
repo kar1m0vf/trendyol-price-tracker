@@ -113,6 +113,88 @@ async def test_basic_help_full_shows_full_text_without_button():
     message.answer.assert_awaited_once_with("HELP_FULL_TEXT")
 
 
+@pytest.mark.parametrize(
+    ("method_name", "key", "expected"),
+    [
+        ("handle_terms", "terms_text", "TERMS_TEXT"),
+        ("handle_privacy", "privacy_text", "PRIVACY_TEXT"),
+        ("handle_support", "support_text", "SUPPORT_TEXT"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_basic_legal_commands_send_html(method_name, key, expected):
+    handler = BasicHandler()
+    handler.t = lambda _uid, requested_key, **_kwargs: {key: expected}[requested_key]
+
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=1004),
+        text=f"/{method_name.removeprefix('handle_')}",
+        answer=AsyncMock(),
+    )
+
+    await getattr(handler, method_name)(message)
+
+    message.answer.assert_awaited_once_with(
+        expected,
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_basic_delete_me_requires_confirmation(monkeypatch):
+    handler = BasicHandler()
+    handler.t = lambda _uid, key, **_kwargs: {"delete_me_confirm_text": "CONFIRM_DELETE"}[key]
+    delete_mock = MagicMock()
+    monkeypatch.setattr(basic_module, "delete_user_data", delete_mock)
+
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=1005),
+        text="/delete_me",
+        answer=AsyncMock(),
+    )
+
+    await handler.handle_delete_me(message)
+
+    delete_mock.assert_not_called()
+    message.answer.assert_awaited_once_with(
+        "CONFIRM_DELETE",
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_basic_delete_me_confirm_deletes_data(monkeypatch):
+    handler = BasicHandler()
+    handler.t = lambda _uid, key, **_kwargs: {
+        "delete_me_done": "DONE {subscriptions} {price_history}",
+        "error_generic": "ERROR",
+    }[key]
+    delete_mock = MagicMock(
+        return_value={"users": 1, "subscriptions": 2, "price_history": 5}
+    )
+    clear_cache_mock = MagicMock()
+    monkeypatch.setattr(basic_module, "delete_user_data", delete_mock)
+    monkeypatch.setattr(basic_module, "clear_language_cache", clear_cache_mock)
+
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=1006, username="karim", first_name="Karim"),
+        text="/delete_me confirm",
+        answer=AsyncMock(),
+    )
+
+    await handler.handle_delete_me(message)
+
+    delete_mock.assert_called_once_with(1006)
+    clear_cache_mock.assert_called_once_with(1006)
+    message.answer.assert_awaited_once_with(
+        "DONE 2 5",
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+
+
 @pytest.mark.asyncio
 async def test_basic_fallback_guides_unrecognized_text(monkeypatch):
     handler = BasicHandler()

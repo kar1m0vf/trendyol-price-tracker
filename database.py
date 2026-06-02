@@ -603,6 +603,43 @@ def remove_subscriptions_by_user(user_id: int) -> int:
         logger.exception("Error removing subscriptions for user %s: %s", user_id, e)
         return 0
 
+def delete_user_data(user_id: int) -> Dict[str, int]:
+    """Delete one user's profile, subscriptions, and related local history."""
+    safe_user_id = int(user_id)
+
+    with DatabaseConnection() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM subscriptions WHERE user_id = ?", (safe_user_id,))
+        subscription_ids = [int(row[0]) for row in cur.fetchall()]
+
+        deleted_history = 0
+        if subscription_ids:
+            placeholders = ",".join("?" for _ in subscription_ids)
+            cur.execute(
+                f"DELETE FROM price_history WHERE subscription_id IN ({placeholders})",
+                subscription_ids,
+            )
+            deleted_history = max(cur.rowcount, 0)
+
+        cur.execute("DELETE FROM subscriptions WHERE user_id = ?", (safe_user_id,))
+        deleted_subscriptions = max(cur.rowcount, 0)
+
+        cur.execute("DELETE FROM users WHERE user_id = ?", (safe_user_id,))
+        deleted_users = max(cur.rowcount, 0)
+
+    logger.info(
+        "Deleted user data user=%s users=%s subscriptions=%s price_history=%s",
+        safe_user_id,
+        deleted_users,
+        deleted_subscriptions,
+        deleted_history,
+    )
+    return {
+        "users": deleted_users,
+        "subscriptions": deleted_subscriptions,
+        "price_history": deleted_history,
+    }
+
 def get_user_subscriptions(user_id: int) -> List[Tuple]:
     """Returns rows in canonical order:
     (id, user_id, url, notify_mode, last_price, product_title, product_image,

@@ -1954,7 +1954,7 @@ async def cmd_price_alert(message: types.Message):
 async def cmd_about(message: types.Message):
     user_id = message.from_user.id
     await message.answer(
-        t(user_id, "about_text"),
+        f"{t(user_id, 'about_text')}\n\n{t(user_id, 'independent_disclaimer')}",
         reply_markup=get_about_inline_kb(user_id),
     )
 
@@ -4240,6 +4240,10 @@ async def set_commands_menu():
         BotCommand(command="stats", description="📊 Statistics"),
         BotCommand(command="export", description="📤 Export data"),
         BotCommand(command="about", description="ℹ️ About the bot"),
+        BotCommand(command="terms", description="📄 Terms of use"),
+        BotCommand(command="privacy", description="🔐 Privacy"),
+        BotCommand(command="support", description="🛟 Support"),
+        BotCommand(command="delete_me", description="🗑 Delete my data"),
         BotCommand(command="ping", description="🏓 Check bot response"),
         BotCommand(command="health", description="💚 Bot health status"),
         BotCommand(command="import", description="📥 Import data"),
