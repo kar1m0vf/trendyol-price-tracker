@@ -83,7 +83,7 @@
   "invalid_language": "Yanlış dil kodu.",
   "provide_subscription_id": "Zəhmət olmasa siyahıdakı məhsul nömrəsini göstərin.",
   "provide_mode": "Zəhmət olmasa rejimi göstərin: hourly və ya discount.",
-  "ping_pong": "pong",
+  "ping_pong": "🏓 Pong! Bot aktivdir. Komandalar və düymələr hazırdır.",
   "about_text": "ℹ️ Bot haqqında\n\nTrendyol Price Tracker Trendyol məhsullarını izləməyə kömək edir: məhsullarınızı saxlayır, qiymətləri yoxlayır, qiymət tarixçəsini qoruyur və endirim və ya hədəf qiymət bildirişləri göndərir.\n\nNə edə bilərsiniz:\n• linklə məhsul əlavə etmək\n• qiymət düşəndə bildiriş almaq\n• hədəf qiymət təyin etmək\n• qiymət tarixçəsinə baxmaq\n• abunəlikləri ixrac və idxal etmək\n\nMənbə kodu GitHub-da açıqdır. Repozitoriyanı açmaq üçün aşağıdakı düymədən istifadə edin.",
   "trending_unavailable": "Hazırda trendlərə tam çıxışımız yoxdur. Çıxış olduqda sizə xəbər verəcəyik.",
   "settings_usage": "Bildiriş parametrləri üçün əmr:\n/settings quiet <başlanğıc> <son> — səssiz saatları konfiqurasiya et (0-23)\n/settings price <məhsul nömrəsi> min:<qiymət> max:<qiymət> percent:<faiz> — qiymət bildirişlərini konfiqurasiya et\n/settings interval <məhsul nömrəsi> <dəqiqə> — bildiriş intervalı (min 15 dəqiqə)",

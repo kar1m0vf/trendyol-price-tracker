@@ -82,7 +82,7 @@
     "invalid_language": "Geçersiz dil kodu.",
     "provide_subscription_id": "Lütfen listedeki ürün numarasını belirtin.",
     "provide_mode": "Lütfen modu belirtin: hourly veya discount.",
-    "ping_pong": "pong",
+    "ping_pong": "🏓 Pong! Bot çevrimiçi. Komutlar ve düğmeler hazır.",
     "about_text": "ℹ️ Bot hakkında\n\nTrendyol Price Tracker Trendyol ürünlerini takip etmeye yardımcı olur: ürün listenizi kaydeder, fiyatları kontrol eder, fiyat geçmişini tutar ve indirim veya hedef fiyat uyarıları gönderir.\n\nNeler yapabilirsiniz:\n• linkle ürün eklemek\n• fiyat düşüşü bildirimi almak\n• hedef fiyat belirlemek\n• fiyat geçmişini görmek\n• abonelikleri dışa ve içe aktarmak\n\nKaynak kod GitHub'da açıktır. Depoyu açmak için aşağıdaki düğmeyi kullanın.",
     "trending_btn_all": "🌍 Tümü",
     "trending_btn_category": "📂 Kategori",

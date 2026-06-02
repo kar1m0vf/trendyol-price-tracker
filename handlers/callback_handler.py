@@ -1758,6 +1758,13 @@ class CallbackHandler(BaseHandler):
                 await admin_broken_subscriptions(cq.message)
                 return True
 
+            if data == "admin_health":
+                await cq.answer(self.t(user_id, "loading"))
+                from bot import cmd_health
+
+                await cmd_health(cq.message)
+                return True
+
             if data.startswith("admin_bad_sub:"):
                 await cq.answer()
                 sub_id = int(data.split(":", 1)[1])

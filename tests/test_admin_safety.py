@@ -254,6 +254,22 @@ async def test_admin_broken_subscriptions_callback_opens_screen():
 
 
 @pytest.mark.asyncio
+async def test_admin_health_callback_runs_health_command():
+    from handlers.callback_handler import CallbackHandler
+
+    cq = _callback("admin_health")
+    handler = CallbackHandler()
+    handler.t = lambda _uid, key, **_kwargs: {"loading": "LOADING"}[key]
+
+    with patch("bot.cmd_health", new_callable=AsyncMock) as health_command:
+        handled = await handler._handle_admin_callback(cq, "admin_health", ADMIN_ID)
+
+    assert handled is True
+    cq.answer.assert_awaited_once_with("LOADING")
+    health_command.assert_awaited_once_with(cq.message)
+
+
+@pytest.mark.asyncio
 async def test_admin_bad_subscription_details_escapes_html_and_shows_actions():
     from handlers import callback_handler
     from handlers.callback_handler import CallbackHandler
@@ -361,6 +377,9 @@ async def test_admin_main_menu_greets_admin_by_name():
     text = msg.answer.await_args.args[0]
     assert "Karim Admin (@karim)" in text
     assert f"<code>{ADMIN_ID}</code>" in text
+    markup = msg.answer.await_args.kwargs["reply_markup"]
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+    assert "admin_health" in callbacks
 
 
 @pytest.mark.asyncio

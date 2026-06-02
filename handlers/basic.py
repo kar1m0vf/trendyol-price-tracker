@@ -215,6 +215,11 @@ class BasicHandler(BaseHandler):
         """Handle help button press."""
         await self.handle_help(message)
 
+    async def handle_ping_text(self, message: types.Message):
+        """Answer to a plain text ping."""
+        user_id = message.from_user.id
+        await message.answer(self.t(user_id, "ping_pong"))
+
     async def handle_unrecognized_text(self, message: types.Message):
         """Guide users when a plain text message did not match any workflow."""
         user_id = message.from_user.id
@@ -260,6 +265,13 @@ class BasicHandler(BaseHandler):
                 return False
 
         dp.message.register(self.handle_help_button, is_help_button)
+
+        async def is_ping_text(message):
+            if not message.text:
+                return False
+            return message.text.strip().lower() == "ping"
+
+        dp.message.register(self.handle_ping_text, is_ping_text)
 
     def register_fallback(self, dp):
         """Register the last-resort text handler after feature handlers."""

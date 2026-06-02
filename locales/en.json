@@ -88,7 +88,7 @@
     "invalid_language": "Invalid language code.",
     "provide_subscription_id": "Provide a product number from your list.",
     "provide_mode": "Provide mode: hourly or discount.",
-    "ping_pong": "pong",
+    "ping_pong": "🏓 Pong! Bot is online. Commands and buttons are ready.",
     "about_text": "ℹ️ About the bot\n\nTrendyol Price Tracker helps track Trendyol products: it saves your watchlist, checks prices, keeps price history, and sends alerts for discounts or target prices.\n\nWhat you can do:\n• add products by link\n• receive price-drop notifications\n• set a target price\n• view price history\n• export and import subscriptions\n\nThe source code is available on GitHub. Use the button below to open the repository.",
     "settings_usage": "Command for notification settings:\n/settings quiet <start> <end> — configure quiet hours (0-23)\n/settings price <product number> min:<price> max:<price> percent:<percent> — configure price alerts\n/settings interval <product number> <minutes> — notification interval (min 15 minutes)",
     "quiet_hours_usage": "Usage: /settings quiet <start> <end>\nExample: /settings quiet 23 7 — quiet hours from 23:00 to 7:00",

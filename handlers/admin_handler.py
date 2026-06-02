@@ -450,7 +450,8 @@ async def admin_main_menu(message: types.Message):
     ])
 
     keyboard.inline_keyboard.insert(2, [
-        InlineKeyboardButton(text="⚠️ Битые товары", callback_data="admin_broken_subs")
+        InlineKeyboardButton(text="⚠️ Битые товары", callback_data="admin_broken_subs"),
+        InlineKeyboardButton(text="💚 Health", callback_data="admin_health"),
     ])
 
     greeting_name = _safe_html(_admin_greeting_name(message, user_id))

@@ -125,8 +125,8 @@ Detailed system notes are in [Architecture](docs/ARCHITECTURE.md).
 | `/privacy` | Stored data and privacy summary |
 | `/support` | Support and safe report instructions |
 | `/delete_me` | Delete the user's bot profile, subscriptions, and local price history |
-| `/ping` | Response check |
-| `/health` | Admin health check |
+| `/ping` or `ping` | Response check |
+| `/health` | Admin-only health check |
 | `/runcheck` | Admin manual price check run |
 | `/admin` | Admin panel |
 | `/bad_subs` | Admin diagnostics for subscriptions with failed price checks |

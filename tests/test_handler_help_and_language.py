@@ -196,6 +196,22 @@ async def test_basic_delete_me_confirm_deletes_data(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_basic_plain_text_ping_answers_pong():
+    handler = BasicHandler()
+    handler.t = lambda _uid, key, **_kwargs: {"ping_pong": "PONG_TEXT"}[key]
+
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=1007),
+        text="ping",
+        answer=AsyncMock(),
+    )
+
+    await handler.handle_ping_text(message)
+
+    message.answer.assert_awaited_once_with("PONG_TEXT")
+
+
+@pytest.mark.asyncio
 async def test_basic_fallback_guides_unrecognized_text(monkeypatch):
     handler = BasicHandler()
     handler.t = lambda _uid, key, **_kwargs: {"fallback_text": "SEND_LINK_HINT"}[key]
