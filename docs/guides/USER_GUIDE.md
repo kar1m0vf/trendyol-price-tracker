@@ -212,6 +212,9 @@ Users can run `/import` and then attach the file, or send the file with `/import
 in the document caption. Existing tracked products are skipped as duplicates;
 valid new Trendyol product rows are added with their saved mode, alert settings,
 interval, pause state, last known price, title, image, and tags where present.
+If the service product limit is reached during import, the bot adds the first
+valid new products in file order until the remaining slots are filled. Later
+valid new rows are reported as skipped by the product limit.
 
 ## User Reports
 

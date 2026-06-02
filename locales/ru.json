@@ -197,7 +197,7 @@
     "import_file_too_large": "Файл слишком большой. Лимит: {limit_mb} МБ.",
     "import_unsupported_format": "Неподдерживаемый формат файла. Отправьте CSV или JSON экспорт из /export.",
     "import_parse_error": "Не удалось прочитать файл. Проверьте, что это корректный CSV или JSON экспорт.",
-    "import_result": "📥 Импорт завершен\n\nСтрок: {total}\nДобавлено: {added}\nДубли пропущены: {duplicates}\nНекорректные строки: {invalid}\nОшибки: {failed}",
+    "import_result": "📥 Импорт завершен\n\nСтрок: {total}\nДобавлено: {added}\nДубли пропущены: {duplicates}\nНекорректные строки: {invalid}\nПропущено из-за лимита: {limit_skipped}\nОшибки: {failed}",
     "cmd_compare_usage": "СРАВНЕНИЕ ЦЕН ТОВАРОВ",
     "compare_loading": "🔄 Получаю информацию о товарах...",
     "compare_error_no_price": "❌ Не удалось получить цены для сравнения товаров.",

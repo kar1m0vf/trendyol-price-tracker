@@ -202,7 +202,7 @@
     "import_file_too_large": "The file is too large. Limit: {limit_mb} MB.",
     "import_unsupported_format": "Unsupported file format. Send a CSV or JSON export from /export.",
     "import_parse_error": "Could not read the file. Check that it is a valid CSV or JSON export.",
-    "import_result": "📥 Import finished\n\nRows: {total}\nAdded: {added}\nSkipped duplicates: {duplicates}\nInvalid rows: {invalid}\nErrors: {failed}",
+    "import_result": "📥 Import finished\n\nRows: {total}\nAdded: {added}\nSkipped duplicates: {duplicates}\nInvalid rows: {invalid}\nSkipped by product limit: {limit_skipped}\nErrors: {failed}",
     "cmd_compare_usage": "COMPARE PRODUCT PRICES",
     "compare_loading": "🔄 Getting product information...",
     "compare_error_no_price": "❌ Failed to get prices for product comparison.",

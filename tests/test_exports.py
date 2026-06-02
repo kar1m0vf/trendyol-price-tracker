@@ -11,7 +11,7 @@ def _fake_t(_user_id, key, **kwargs):
         "history_export_ready": "history {filename}",
         "import_help": "IMPORT",
         "import_instruction": "SEND_FILE",
-        "import_result": "import {added}/{duplicates}/{invalid}/{failed}",
+        "import_result": "import {added}/{duplicates}/{invalid}/{limit_skipped}/{failed}",
     }.get(key, key)
     return text.format(**kwargs) if kwargs else text
 
@@ -167,6 +167,7 @@ def test_import_subscription_rows_adds_new_and_skips_duplicates(monkeypatch):
         "added": 1,
         "duplicates": 1,
         "invalid": 1,
+        "limit_skipped": 0,
         "failed": 0,
     }
     add_subscription.assert_called_once_with(
@@ -222,6 +223,7 @@ async def test_handle_import_document_reports_success(monkeypatch):
         "added": 1,
         "duplicates": 0,
         "invalid": 0,
+        "limit_skipped": 0,
         "failed": 0,
     }
 
@@ -234,4 +236,4 @@ async def test_handle_import_document_reports_success(monkeypatch):
 
     await bot._handle_import_document(message)
 
-    message.answer.assert_awaited_once_with("import 1/0/0/0")
+    message.answer.assert_awaited_once_with("import 1/0/0/0/0")

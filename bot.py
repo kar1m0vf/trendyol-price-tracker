@@ -26,6 +26,7 @@ from config import (
     BOT_TOKEN,
     DATABASE_PATH,
     HEAVY_COMMAND_COOLDOWN_SECONDS,
+    MAX_SUBSCRIPTIONS_PER_USER,
     USE_NEW_HANDLERS,
     _check_bot_token,
 )
@@ -3776,14 +3777,19 @@ def _import_subscription_rows(user_id: int, rows: List[Dict[str, Any]]) -> Dict[
         "added": 0,
         "duplicates": 0,
         "invalid": 0,
+        "limit_skipped": 0,
         "failed": 0,
     }
 
+    existing_subs = get_user_subscriptions(user_id)
     existing_urls = {
         normalize_url(sub[2]).lower()
-        for sub in get_user_subscriptions(user_id)
+        for sub in existing_subs
         if len(sub) > 2 and sub[2]
     }
+    available_slots = None
+    if not is_admin_user(user_id):
+        available_slots = max(0, MAX_SUBSCRIPTIONS_PER_USER - len(existing_subs))
 
     for row in rows:
         try:
@@ -3796,6 +3802,10 @@ def _import_subscription_rows(user_id: int, rows: List[Dict[str, Any]]) -> Dict[
 
             if url_key in existing_urls:
                 result["duplicates"] += 1
+                continue
+
+            if available_slots is not None and result["added"] >= available_slots:
+                result["limit_skipped"] += 1
                 continue
 
             mode = (_import_blank_to_none(_import_row_value(row, "mode", "notify_mode")) or DEFAULT_NOTIFY_MODE).lower()
@@ -3888,6 +3898,7 @@ async def _handle_import_document(message: types.Message) -> None:
             added=result["added"],
             duplicates=result["duplicates"],
             invalid=result["invalid"],
+            limit_skipped=result.get("limit_skipped", 0),
             failed=result["failed"],
         )
     except ValueError as exc:

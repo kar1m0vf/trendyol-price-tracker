@@ -190,7 +190,7 @@
     "import_file_too_large": "Fayl çox böyükdür. Limit: {limit_mb} MB.",
     "import_unsupported_format": "Fayl formatı dəstəklənmir. /export-dan CSV və ya JSON ixracı göndərin.",
     "import_parse_error": "Faylı oxumaq mümkün olmadı. Düzgün CSV və ya JSON ixracı olduğunu yoxlayın.",
-    "import_result": "📥 İdxal tamamlandı\n\nSətir: {total}\nƏlavə edildi: {added}\nDublikat keçildi: {duplicates}\nYanlış sətir: {invalid}\nXəta: {failed}",
+    "import_result": "📥 İdxal tamamlandı\n\nSətir: {total}\nƏlavə edildi: {added}\nDublikat keçildi: {duplicates}\nYanlış sətir: {invalid}\nMəhsul limitinə görə keçildi: {limit_skipped}\nXəta: {failed}",
     "cmd_compare_usage": "MƏHSULLARIN QİYƏTLƏRİNİ MÜQAYISƏ ET",
     "compare_loading": "🔄 Məhsul məlumatları alınır...",
     "compare_error_no_price": "❌ Məhsul qiymətlərini müqayisə etmək mümkün olmadı.",
