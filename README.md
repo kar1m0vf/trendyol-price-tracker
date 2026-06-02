@@ -3,7 +3,7 @@
 A Telegram service for tracking Trendyol product prices, managing personal watchlists, storing price history, and sending practical price-change notifications.
 
 Live bot: [@trendyolpw_bot](https://t.me/trendyolpw_bot)
-The project is built as a real service rather than a one-off script: it has Telegram workflows, persistent user state, background jobs, admin controls, localization, diagnostics, and tests. The source is visible, but the bot is not distributed as a reusable package or a ready-made third-party deployment.
+The project is built as a real service rather than a one-off script: it has Telegram workflows, persistent user state, background jobs, admin controls, localization, diagnostics, and tests. The source is visible for portfolio review, but the bot is not distributed as a reusable package or a ready-made third-party deployment. The production Trendyol scraper and owner environment template are private runtime assets and are not part of the public repository.
 
 ## Problem
 
@@ -87,9 +87,9 @@ Read the full product flow in [User Guide](docs/guides/USER_GUIDE.md).
 | Scheduler | APScheduler jobs for price checks and daily backups |
 | Concurrency | Scheduler lock, task batching, network fetch semaphore, grouped notifications |
 | Notifications | Safe send helpers, image fallback, grouped updates, chart delivery |
-| Scraping | Trendyol product extraction, trends, category/search flows, history helpers |
+| Scraping | Private Trendyol data extraction module used by the owner runtime |
 | Admin tools | Stats, users, broadcasts, reports, cleanup, backups, recommendations, broken subscription diagnostics |
-| Quality | pytest suite, readiness check, deploy smoke check, locale key validation |
+| Quality | Owner-runtime pytest suite, readiness check, deploy smoke check, public locale key validation |
 | Security posture | `.env` configuration, ignored runtime data, token validation, no production data in repo |
 
 Detailed system notes are in [Architecture](docs/ARCHITECTURE.md).
@@ -149,7 +149,7 @@ aiogram Dispatcher / Router
 bot.py runtime helpers
     |
     +--> database.py
-    +--> scraper.py
+    +--> private Trendyol scraper module
     +--> services/notification_service.py
     +--> localization.py / locales/
     |
@@ -162,7 +162,7 @@ Key paths:
 - `bot.py` - runtime factory, polling entry point, scheduler jobs, common helpers.
 - `handlers/` - aiogram handlers for user, analytics, callback, and admin flows.
 - `database.py` - SQLite schema, migrations, subscriptions, price history, recommendations, backups.
-- `scraper.py` - Trendyol data extraction and trend/history helpers.
+- Private Trendyol scraper module - owner runtime dependency for product extraction, trends, and history helpers. The implementation is not distributed in the public portfolio source.
 - `services/notification_service.py` - notifications and charts.
 - `locales/` - translation files.
 - `tools/diagnostics/deploy_smoke_check.py` - deploy smoke validation.
@@ -171,7 +171,9 @@ Key paths:
 ## Data And Security
 
 - `.env` is private and ignored by git.
+- `.env.example` is also private in the portfolio repository because the public source is not intended as a self-hosting package.
 - `BOT_TOKEN` must only live in environment variables or `.env`.
+- The production Trendyol scraper is not part of the public source.
 - `trendyol_bot.db`, `logs/`, `backups/`, and production configuration are runtime artifacts and are not part of the public source.
 - User export payloads are generated for direct delivery and should not be committed if saved manually.
 - If a Telegram bot token is ever exposed, it must be revoked and regenerated through `@BotFather`.
@@ -190,7 +192,7 @@ The project includes checks for:
 - scraper parsing helpers;
 - notification flow.
 
-Latest recorded local verification: `233 passed, 3 skipped`.
+Latest recorded owner-runtime verification: `233 passed, 3 skipped`. The public portfolio source does not include every private runtime asset required to run the production bot.
 
 ## Documentation
 

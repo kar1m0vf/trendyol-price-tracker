@@ -25,7 +25,7 @@ aiogram Dispatcher / Router
 runtime helpers in bot.py
     |
     +--> database.py
-    +--> scraper.py
+    +--> private Trendyol scraper module
     +--> services/notification_service.py
     +--> localization.py / locales/
     |
@@ -87,7 +87,7 @@ Indexes are focused on common runtime queries: subscriptions by user, price hist
 
 ## Scraper Layer
 
-`scraper.py` is responsible for external product data:
+The private Trendyol scraper module is responsible for external product data in the owner runtime:
 
 - current price;
 - product title;
@@ -96,7 +96,7 @@ Indexes are focused on common runtime queries: subscriptions by user, price hist
 - category/search trend flows;
 - external price history helpers where available.
 
-It is called by subscription creation, scheduled price checks, history flows, comparison, and trending flows.
+It is called by subscription creation, scheduled price checks, history flows, comparison, and trending flows. The implementation is not distributed in the public portfolio source.
 
 ## Notification Layer
 

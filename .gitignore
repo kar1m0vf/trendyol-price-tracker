@@ -1,7 +1,10 @@
 # Environment
 .env
 .env.*
-!.env.example
+
+# Owner-private runtime assets
+.env.example
+scraper.py
 
 # Python
 __pycache__/

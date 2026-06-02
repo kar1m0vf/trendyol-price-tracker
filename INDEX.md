@@ -15,8 +15,8 @@ This repository contains the source code and documentation for the Trendyol Pric
 
 | File | Purpose |
 | --- | --- |
-| [check_bot_ready.py](check_bot_ready.py) | Runtime readiness check |
-| [deploy_smoke_check.py](tools/diagnostics/deploy_smoke_check.py) | Deploy smoke check |
+| [check_bot_ready.py](check_bot_ready.py) | Owner-runtime readiness check |
+| [deploy_smoke_check.py](tools/diagnostics/deploy_smoke_check.py) | Owner-runtime deploy smoke check |
 | [check_locales.py](check_locales.py) | Localization key consistency |
 | [Deploy Smoke Checklist](docs/guides/DEPLOY_SMOKE_CHECKLIST.md) | Owner/internal post-deploy checklist |
 
@@ -27,7 +27,7 @@ This repository contains the source code and documentation for the Trendyol Pric
 | [bot.py](bot.py) | Entry point, runtime, scheduler, common helpers |
 | [handlers/](handlers) | aiogram handler package |
 | [database.py](database.py) | SQLite schema, migrations, subscriptions, history, recommendations |
-| [scraper.py](scraper.py) | Trendyol data collection and parsing |
+| Private scraper module | Trendyol data collection and parsing, not distributed in the public portfolio source |
 | [services/notification_service.py](services/notification_service.py) | Notifications and chart delivery |
 | [locales/](locales) | RU/EN/AZ/TR localization |
 | [tests/](tests) | pytest test suite |

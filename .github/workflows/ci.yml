@@ -1,4 +1,4 @@
-name: CI
+name: Portfolio Checks
 
 on:
   push:
@@ -7,11 +7,8 @@ on:
     branches: [ main, master ]
 
 jobs:
-  test:
+  sanity:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: [3.11]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -19,15 +16,8 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.11"
 
-      - name: Install dependencies
+      - name: Check locale files
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Run tests
-        run: |
-          python -m pytest -q
-        env:
-          TZ: Europe/Moscow
+          python check_locales.py
