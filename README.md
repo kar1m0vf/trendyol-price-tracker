@@ -50,6 +50,7 @@ Read the full product flow in [User Guide](docs/guides/USER_GUIDE.md).
 - Let users pause and resume per-product alerts without deleting the product or losing history.
 - Group multiple price updates into one notification when needed.
 - Support internal free/premium access tiers with different product limits.
+- Show users their current access tier, product usage, premium expiry, and request path through `/premium`.
 
 ### Price Intelligence
 
@@ -131,6 +132,7 @@ Detailed system notes are in [Architecture](docs/ARCHITECTURE.md).
 | `/terms` | Terms of use and service disclaimer |
 | `/privacy` | Stored data and privacy summary |
 | `/support` | Support and safe report instructions |
+| `/premium` | Access tier, product limit, and premium request entry point |
 | `/delete_me` | Delete the user's bot profile, subscriptions, and local price history |
 | `/ping` or `ping` | Response check |
 | `/health` | Admin-only health check |
@@ -205,7 +207,7 @@ The project includes checks for:
 - scraper parsing helpers;
 - notification flow.
 
-Latest recorded owner-runtime verification: `252 passed, 3 skipped`. The public portfolio source does not include every private runtime asset required to run the production bot.
+Latest recorded owner-runtime verification: `256 passed, 3 skipped`. The public portfolio source does not include every private runtime asset required to run the production bot.
 
 ## Documentation
 

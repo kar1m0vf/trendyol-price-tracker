@@ -741,7 +741,8 @@ def get_main_kb(user_id: int) -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text=t(user_id, "btn_subscribe")), KeyboardButton(text=t(user_id, "btn_subs"))],
             [KeyboardButton(text=t(user_id, "btn_trending")), KeyboardButton(text=t(user_id, "btn_recommend"))],
-            [KeyboardButton(text=t(user_id, "btn_language")), KeyboardButton(text=t(user_id, "btn_help"))]
+            [KeyboardButton(text=t(user_id, "btn_language")), KeyboardButton(text=t(user_id, "btn_help"))],
+            [KeyboardButton(text=t(user_id, "btn_premium"))]
         ],
         resize_keyboard=True
     )
@@ -2756,6 +2757,9 @@ async def handle_report_text(message: types.Message):
         await message.answer(t(user_id, "report_too_short"))
         return
 
+    if state_data.get("source") == "premium_request":
+        report_text = f"[Premium request]\n{report_text}"
+
     await submit_user_report(user_id, report_text, message)
     del report_state[user_id]
 
@@ -4243,6 +4247,7 @@ async def set_commands_menu():
         BotCommand(command="language", description="🌐 Change language"),
         BotCommand(command="about", description="ℹ️ About the bot"),
         BotCommand(command="support", description="🛟 Support"),
+        BotCommand(command="premium", description="⭐ Premium status"),
         BotCommand(command="terms", description="📄 Terms of use"),
         BotCommand(command="privacy", description="🔐 Privacy"),
         BotCommand(command="ping", description="🏓 Check bot response"),

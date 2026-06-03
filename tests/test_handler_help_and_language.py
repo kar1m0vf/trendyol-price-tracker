@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -142,6 +143,56 @@ async def test_basic_legal_commands_send_html(method_name, key, expected):
 
 
 @pytest.mark.asyncio
+async def test_basic_premium_shows_status_and_limits(monkeypatch):
+    handler = BasicHandler()
+
+    def fake_t(_uid, key, **kwargs):
+        values = {
+            "premium_status_free": "FREE_STATUS",
+            "premium_usage_limited": "USAGE {count}/{limit}",
+            "premium_next_step_request": "REQUEST_NEXT_STEP",
+            "premium_text": (
+                "TEXT {status} {usage} {free_limit} {premium_limit} {next_step}"
+            ),
+            "error_generic": "ERROR",
+        }
+        return values[key].format(**kwargs)
+
+    handler.t = fake_t
+    premium_kb = MagicMock(return_value="PREMIUM_KB")
+    monkeypatch.setattr(
+        basic_module,
+        "get_effective_user_access",
+        lambda _user_id: {
+            "is_premium": False,
+            "is_expired": False,
+            "premium_until": None,
+        },
+    )
+    monkeypatch.setattr(basic_module, "get_subscription_limit_for_user", lambda _user_id: 50)
+    monkeypatch.setattr(basic_module, "get_user_subscriptions", lambda _user_id: [1, 2, 3])
+    monkeypatch.setattr(basic_module, "MAX_SUBSCRIPTIONS_PER_USER", 50)
+    monkeypatch.setattr(basic_module, "PREMIUM_MAX_SUBSCRIPTIONS_PER_USER", 200)
+    monkeypatch.setattr(basic_module, "get_premium_inline_kb", premium_kb)
+
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=1008),
+        text="/premium",
+        answer=AsyncMock(),
+    )
+
+    await handler.handle_premium(message)
+
+    message.answer.assert_awaited_once_with(
+        "TEXT FREE_STATUS USAGE 3/50 50 200 REQUEST_NEXT_STEP",
+        reply_markup="PREMIUM_KB",
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+    premium_kb.assert_called_once_with(1008, is_premium=False)
+
+
+@pytest.mark.asyncio
 async def test_basic_delete_me_requires_confirmation(monkeypatch):
     handler = BasicHandler()
     handler.t = lambda _uid, key, **_kwargs: {"delete_me_confirm_text": "CONFIRM_DELETE"}[key]
@@ -278,6 +329,36 @@ async def test_callback_onboarding_add_prompts_for_link():
     cq.message.answer.assert_awaited_once()
     assert cq.message.answer.await_args.args[0] == "SEND_LINK"
     assert "reply_markup" in cq.message.answer.await_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_callback_premium_request_starts_report_state(monkeypatch):
+    handler = CallbackHandler()
+    handler.t = lambda _uid, key, **_kwargs: {
+        "premium_request_prompt": "PREMIUM_REQUEST_PROMPT",
+        "error_generic": "ERROR",
+    }[key]
+    fake_bot_module = SimpleNamespace(report_state={})
+    monkeypatch.setitem(sys.modules, "bot", fake_bot_module)
+
+    cq = SimpleNamespace(
+        data="premium:request",
+        from_user=SimpleNamespace(id=42),
+        answer=AsyncMock(),
+        message=SimpleNamespace(answer=AsyncMock()),
+    )
+
+    await handler.handle_main_callback(cq)
+
+    cq.answer.assert_awaited_once()
+    assert fake_bot_module.report_state[42] == {
+        "step": "waiting_text",
+        "source": "premium_request",
+    }
+    cq.message.answer.assert_awaited_once_with(
+        "PREMIUM_REQUEST_PROMPT",
+        parse_mode="HTML",
+    )
 
 
 @pytest.mark.asyncio

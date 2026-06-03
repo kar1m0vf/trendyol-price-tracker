@@ -43,6 +43,7 @@ async def test_set_commands_menu():
         BotCommand(command="language", description="🌐 Change language"),
         BotCommand(command="about", description="ℹ️ About the bot"),
         BotCommand(command="support", description="🛟 Support"),
+        BotCommand(command="premium", description="⭐ Premium status"),
         BotCommand(command="terms", description="📄 Terms of use"),
         BotCommand(command="privacy", description="🔐 Privacy"),
         BotCommand(command="ping", description="🏓 Check bot response"),

@@ -61,6 +61,17 @@ class CallbackHandler(BaseHandler):
                 return candidate
         return None
 
+    @staticmethod
+    def _set_report_state(user_id: int, state: dict) -> bool:
+        updated = False
+        for module_name in ("__main__", "bot"):
+            module = sys.modules.get(module_name)
+            report_state = getattr(module, "report_state", None) if module else None
+            if isinstance(report_state, dict):
+                report_state[user_id] = dict(state)
+                updated = True
+        return updated
+
     async def _send_callback_problem(self, cq: CallbackQuery, user_id: int, text: str = "") -> None:
         """Send a durable error message for callbacks that cannot finish."""
         message_text = text or self.t(user_id, "error_generic")
@@ -103,6 +114,20 @@ class CallbackHandler(BaseHandler):
                 await cq.answer()
                 action_event("USER", "opened subscriptions from button", user=actor_label(cq.from_user))
                 await self._show_subscriptions_overview(cq, user_id)
+                return
+
+            if data == "premium:request":
+                await cq.answer()
+                if not self._set_report_state(
+                    user_id,
+                    {"step": "waiting_text", "source": "premium_request"},
+                ):
+                    await self._send_callback_problem(cq, user_id)
+                    return
+                await cq.message.answer(
+                    self.t(user_id, "premium_request_prompt"),
+                    parse_mode="HTML",
+                )
                 return
 
 

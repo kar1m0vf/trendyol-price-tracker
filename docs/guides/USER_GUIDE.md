@@ -36,17 +36,17 @@ Command:
 The bot sends one compact watchlist message instead of separate messages for every product. Each product gets a user-facing number within that user's list:
 
 ```text
-№ 1  Robot vacuum ...
-№ 2  Face moisturizer ...
-№ 3  Sneakers ...
+No. 1  Robot vacuum ...
+No. 2  Face moisturizer ...
+No. 3  Sneakers ...
 ```
 
 The same message includes buttons:
 
 ```text
-№ 1 · Robot vacuum
-№ 2 · Face moisturizer
-№ 3 · Sneakers
+No. 1 · Robot vacuum
+No. 2 · Face moisturizer
+No. 3 · Sneakers
 ```
 
 Tapping a product button opens the selected product card in the same message. Internal database IDs are not shown to regular users.
@@ -55,6 +55,18 @@ The service can enforce configurable product limits. Free and premium users can
 have different limits. If the current limit is reached, the user is asked to
 remove an older product from `/mysubs` before adding a new one or contact
 support if they need a higher limit.
+
+## Premium Status
+
+Command:
+
+```text
+/premium
+```
+
+The bot shows the user's current access tier, product usage, product limit, and
+premium expiry when applicable. Free users can tap `Request Premium` from that
+screen to send a request to the administrator through the existing report flow.
 
 ## Product Numbers In Commands
 
@@ -68,7 +80,7 @@ Commands that target a specific product use the number from `/mysubs`:
 /unsubscribe 1
 ```
 
-If a product is displayed as `№ 1`, the user enters `1`. This is easier than exposing internal database IDs such as `120`.
+If a product is displayed as `No. 1`, the user enters `1`. This is easier than exposing internal database IDs such as `120`.
 Price notifications use the same product numbers, and background price checks do not renumber the watchlist.
 
 ## Notification Modes

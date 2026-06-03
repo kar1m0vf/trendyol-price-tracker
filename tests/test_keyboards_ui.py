@@ -10,6 +10,7 @@ def test_main_keyboard_uses_localized_labels_without_extra_prefix(monkeypatch):
         "btn_recommend": "A_RECOMMEND",
         "btn_language": "A_LANG",
         "btn_help": "A_HELP",
+        "btn_premium": "A_PREMIUM",
     }
     monkeypatch.setattr(
         keyboards,
@@ -24,6 +25,7 @@ def test_main_keyboard_uses_localized_labels_without_extra_prefix(monkeypatch):
         ["A_SUB", "A_SUBS"],
         ["A_TREND", "A_RECOMMEND"],
         ["A_LANG", "A_HELP"],
+        ["A_PREMIUM"],
     ]
 
 
@@ -113,6 +115,48 @@ def test_fallback_inline_keyboard_points_to_recovery_actions(monkeypatch):
     assert kb.inline_keyboard[0][1].callback_data == "subs:list"
     assert kb.inline_keyboard[1][0].text == "HELP"
     assert kb.inline_keyboard[1][0].callback_data == "help:full"
+
+
+def test_premium_inline_keyboard_offers_request_for_free_users(monkeypatch):
+    labels = {
+        "btn_subs": "PRODUCTS",
+        "btn_subscribe": "ADD",
+        "btn_request_premium": "REQUEST_PREMIUM",
+    }
+    monkeypatch.setattr(
+        keyboards,
+        "translate_func",
+        lambda _uid, key: labels[key],
+    )
+
+    kb = keyboards.get_premium_inline_kb(user_id=101, is_premium=False)
+
+    assert kb.inline_keyboard[0][0].text == "PRODUCTS"
+    assert kb.inline_keyboard[0][0].callback_data == "subs:list"
+    assert kb.inline_keyboard[0][1].text == "ADD"
+    assert kb.inline_keyboard[0][1].callback_data == "onboarding:add"
+    assert kb.inline_keyboard[1][0].text == "REQUEST_PREMIUM"
+    assert kb.inline_keyboard[1][0].callback_data == "premium:request"
+
+
+def test_premium_inline_keyboard_hides_request_for_active_premium(monkeypatch):
+    labels = {
+        "btn_subs": "PRODUCTS",
+        "btn_subscribe": "ADD",
+    }
+    monkeypatch.setattr(
+        keyboards,
+        "translate_func",
+        lambda _uid, key: labels[key],
+    )
+
+    kb = keyboards.get_premium_inline_kb(user_id=101, is_premium=True)
+
+    assert len(kb.inline_keyboard) == 1
+    assert [button.callback_data for button in kb.inline_keyboard[0]] == [
+        "subs:list",
+        "onboarding:add",
+    ]
 
 
 def test_subscription_controls_use_unsubscribe_inline_key_and_callback(monkeypatch):

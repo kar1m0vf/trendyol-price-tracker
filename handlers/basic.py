@@ -1,15 +1,19 @@
 """Basic handlers for start/help/language commands."""
 
 import logging
+from datetime import datetime
 
 from aiogram import types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from access_control import get_effective_user_access, get_subscription_limit_for_user
+from config import MAX_SUBSCRIPTIONS_PER_USER, PREMIUM_MAX_SUBSCRIPTIONS_PER_USER
 from database import (
     add_user_if_not_exists,
     delete_user_data,
     get_user_profile,
+    get_user_subscriptions,
     save_user_profile,
     set_user_language,
 )
@@ -18,6 +22,7 @@ from keyboards import (
     get_help_inline_kb,
     get_main_kb,
     get_onboarding_inline_kb,
+    get_premium_inline_kb,
 )
 from logging_utils import action_event, actor_label
 from localization import LOCALES, clear_language_cache, update_language_cache
@@ -25,6 +30,11 @@ from user_texts import format_start_text
 from .base import BaseHandler
 
 logger = logging.getLogger(__name__)
+
+
+def _format_access_date(ts: int) -> str:
+    """Return a compact date for user-facing premium expiry text."""
+    return datetime.fromtimestamp(int(ts)).strftime("%d.%m.%Y")
 
 
 class BasicHandler(BaseHandler):
@@ -110,6 +120,65 @@ class BasicHandler(BaseHandler):
         user_id = message.from_user.id
         await message.answer(
             self.t(user_id, "support_text"),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+
+    async def handle_premium(self, message: types.Message):
+        """Show the user's current internal premium status and limits."""
+        user_id = message.from_user.id
+
+        try:
+            access = get_effective_user_access(user_id)
+            limit = get_subscription_limit_for_user(user_id)
+            current_count = len(get_user_subscriptions(user_id))
+        except Exception as exc:
+            logger.exception("Failed to build premium status for user=%s: %s", user_id, exc)
+            await message.answer(self.t(user_id, "error_generic"))
+            return
+
+        has_premium_capacity = access["is_premium"] or limit is None
+
+        if limit is None:
+            status = self.t(user_id, "premium_status_admin")
+            next_step = self.t(user_id, "premium_next_step_admin")
+        elif access["is_premium"]:
+            if access["premium_until"]:
+                status = self.t(
+                    user_id,
+                    "premium_status_active_until",
+                    date=_format_access_date(access["premium_until"]),
+                )
+            else:
+                status = self.t(user_id, "premium_status_active_forever")
+            next_step = self.t(user_id, "premium_next_step_active")
+        elif access["is_expired"]:
+            status = self.t(
+                user_id,
+                "premium_status_expired",
+                date=_format_access_date(access["premium_until"]),
+            )
+            next_step = self.t(user_id, "premium_next_step_request")
+        else:
+            status = self.t(user_id, "premium_status_free")
+            next_step = self.t(user_id, "premium_next_step_request")
+
+        if limit is None:
+            usage = self.t(user_id, "premium_usage_unlimited", count=current_count)
+        else:
+            usage = self.t(user_id, "premium_usage_limited", count=current_count, limit=limit)
+
+        await message.answer(
+            self.t(
+                user_id,
+                "premium_text",
+                status=status,
+                usage=usage,
+                free_limit=MAX_SUBSCRIPTIONS_PER_USER,
+                premium_limit=PREMIUM_MAX_SUBSCRIPTIONS_PER_USER,
+                next_step=next_step,
+            ),
+            reply_markup=get_premium_inline_kb(user_id, is_premium=has_premium_capacity),
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
@@ -215,6 +284,10 @@ class BasicHandler(BaseHandler):
         """Handle help button press."""
         await self.handle_help(message)
 
+    async def handle_premium_button(self, message: types.Message):
+        """Handle premium button press."""
+        await self.handle_premium(message)
+
     async def handle_ping_text(self, message: types.Message):
         """Answer to a plain text ping."""
         user_id = message.from_user.id
@@ -235,6 +308,7 @@ class BasicHandler(BaseHandler):
         dp.message.register(self.handle_terms, Command("terms"))
         dp.message.register(self.handle_privacy, Command("privacy"))
         dp.message.register(self.handle_support, Command("support"))
+        dp.message.register(self.handle_premium, Command("premium"))
         dp.message.register(self.handle_delete_me, Command("delete_me"))
         dp.message.register(self.handle_language_command, Command("language"))
 
@@ -265,6 +339,20 @@ class BasicHandler(BaseHandler):
                 return False
 
         dp.message.register(self.handle_help_button, is_help_button)
+
+        async def is_premium_button(message):
+            if not message.text:
+                return False
+            try:
+                return any(
+                    locale.get("btn_premium") == message.text
+                    for locale in LOCALES.values()
+                )
+            except Exception as exc:
+                logger.exception("is_premium_button check failed: %s", exc)
+                return False
+
+        dp.message.register(self.handle_premium_button, is_premium_button)
 
         async def is_ping_text(message):
             if not message.text:

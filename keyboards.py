@@ -32,6 +32,9 @@ def get_main_kb(user_id: int) -> ReplyKeyboardMarkup:
                 KeyboardButton(text=translate_func(user_id, "btn_language")),
                 KeyboardButton(text=translate_func(user_id, "btn_help")),
             ],
+            [
+                KeyboardButton(text=translate_func(user_id, "btn_premium")),
+            ],
         ],
         resize_keyboard=True,
     )
@@ -131,6 +134,32 @@ def get_fallback_inline_kb(user_id: int) -> InlineKeyboardMarkup:
             ],
         ]
     )
+
+
+def get_premium_inline_kb(user_id: int, *, is_premium: bool = False) -> InlineKeyboardMarkup:
+    """Return actions for the user-facing premium status screen."""
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                text=translate_func(user_id, "btn_subs"),
+                callback_data="subs:list",
+            ),
+            InlineKeyboardButton(
+                text=translate_func(user_id, "btn_subscribe"),
+                callback_data="onboarding:add",
+            ),
+        ]
+    ]
+    if not is_premium:
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    text=translate_func(user_id, "btn_request_premium"),
+                    callback_data="premium:request",
+                )
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
 def get_notify_inline_kb(
