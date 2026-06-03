@@ -66,10 +66,10 @@ ADMIN_IDS = _parse_admin_ids(os.getenv("ADMIN_IDS", ""))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 DATABASE_PATH = os.getenv("DATABASE_PATH", "trendyol_bot.db")
 BACKUP_DIR = os.getenv("BACKUP_DIR", "backups")
-MAX_SUBSCRIPTIONS_PER_USER = _parse_int_env("MAX_SUBSCRIPTIONS_PER_USER", 50, min_value=1, max_value=10000)
+MAX_SUBSCRIPTIONS_PER_USER = _parse_int_env("MAX_SUBSCRIPTIONS_PER_USER", 15, min_value=1, max_value=10000)
 PREMIUM_MAX_SUBSCRIPTIONS_PER_USER = _parse_int_env(
     "PREMIUM_MAX_SUBSCRIPTIONS_PER_USER",
-    200,
+    100,
     min_value=1,
     max_value=10000,
 )

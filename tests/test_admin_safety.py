@@ -516,7 +516,7 @@ async def test_admin_user_details_callback_has_premium_button():
     with patch.object(database, "get_connection", return_value=FakeConnection()):
         with patch.object(database, "get_user_subscriptions", return_value=[]):
             with patch.object(admin_handler, "_get_runtime_bot", return_value=fake_bot):
-                with patch.object(admin_handler, "_format_bot_access", return_value="free; limit: 50"):
+                with patch.object(admin_handler, "_format_bot_access", return_value="free; limit: 15"):
                     await admin_handler.admin_user_details_callback(msg, target_user_id, ADMIN_ID)
 
     markup = msg.edit_text.await_args.kwargs["reply_markup"]
@@ -532,7 +532,7 @@ async def test_admin_premium_grant_with_days(monkeypatch):
     monkeypatch.setattr(admin_handler.time, "time", lambda: 1000)
 
     with patch.object(admin_handler, "grant_user_premium") as grant:
-        with patch.object(admin_handler, "_format_bot_access", return_value="premium до 01.01.2030; лимит: 200 товаров"):
+        with patch.object(admin_handler, "_format_bot_access", return_value="premium до 01.01.2030; лимит: 100 товаров"):
             await admin_handler.cmd_admin(msg)
 
     grant.assert_called_once_with(12345, premium_until=1000 + 30 * 86400)
@@ -546,7 +546,7 @@ async def test_admin_premium_revoke():
     msg = _message("/admin premium revoke 12345")
 
     with patch.object(admin_handler, "revoke_user_premium") as revoke:
-        with patch.object(admin_handler, "_format_bot_access", return_value="free; лимит: 50 товаров"):
+        with patch.object(admin_handler, "_format_bot_access", return_value="free; лимит: 15 товаров"):
             await admin_handler.cmd_admin(msg)
 
     revoke.assert_called_once_with(12345)

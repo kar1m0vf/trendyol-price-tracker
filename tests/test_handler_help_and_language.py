@@ -169,10 +169,10 @@ async def test_basic_premium_shows_status_and_limits(monkeypatch):
             "premium_until": None,
         },
     )
-    monkeypatch.setattr(basic_module, "get_subscription_limit_for_user", lambda _user_id: 50)
+    monkeypatch.setattr(basic_module, "get_subscription_limit_for_user", lambda _user_id: 15)
     monkeypatch.setattr(basic_module, "get_user_subscriptions", lambda _user_id: [1, 2, 3])
-    monkeypatch.setattr(basic_module, "MAX_SUBSCRIPTIONS_PER_USER", 50)
-    monkeypatch.setattr(basic_module, "PREMIUM_MAX_SUBSCRIPTIONS_PER_USER", 200)
+    monkeypatch.setattr(basic_module, "MAX_SUBSCRIPTIONS_PER_USER", 15)
+    monkeypatch.setattr(basic_module, "PREMIUM_MAX_SUBSCRIPTIONS_PER_USER", 100)
     monkeypatch.setattr(basic_module, "get_premium_inline_kb", premium_kb)
 
     message = SimpleNamespace(
@@ -184,7 +184,7 @@ async def test_basic_premium_shows_status_and_limits(monkeypatch):
     await handler.handle_premium(message)
 
     message.answer.assert_awaited_once_with(
-        "TEXT FREE_STATUS USAGE 3/50 50 200 REQUEST_NEXT_STEP",
+        "TEXT FREE_STATUS USAGE 3/15 15 100 REQUEST_NEXT_STEP",
         reply_markup="PREMIUM_KB",
         parse_mode="HTML",
         disable_web_page_preview=True,
