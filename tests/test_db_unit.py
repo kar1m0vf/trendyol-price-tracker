@@ -143,6 +143,28 @@ def test_delete_user_data_removes_profile_subscriptions_and_history(temp_db_path
     assert len(database.get_price_history(other_id)) == 1
 
 
+def test_user_access_grant_and_revoke_premium(temp_db_path):
+    user_id = 12345
+
+    assert database.get_user_access(user_id) == {
+        "access_tier": "free",
+        "premium_until": None,
+    }
+
+    assert database.grant_user_premium(user_id, premium_until=4102444800) == {
+        "access_tier": "premium",
+        "premium_until": 4102444800,
+    }
+    profile = database.get_user_profile(user_id)
+    assert profile["access_tier"] == "premium"
+    assert profile["premium_until"] == 4102444800
+
+    assert database.revoke_user_premium(user_id) == {
+        "access_tier": "free",
+        "premium_until": None,
+    }
+
+
 def test_subscription_check_failure_tracking(temp_db_path):
     user_id = 12345
     url = "https://www.trendyol.com/test-product-p-1"

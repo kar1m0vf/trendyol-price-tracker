@@ -36,8 +36,7 @@ def test_import_subscription_rows_respects_user_limit_and_file_order(monkeypatch
     added_urls = []
     add_subscription = MagicMock(side_effect=lambda _user_id, url, *_args, **_kwargs: added_urls.append(url) or len(added_urls))
 
-    monkeypatch.setattr(bot, "ADMIN_IDS", [])
-    monkeypatch.setattr(bot, "MAX_SUBSCRIPTIONS_PER_USER", 51)
+    monkeypatch.setattr(bot, "get_subscription_limit_for_user", lambda _user_id: 51)
     monkeypatch.setattr(bot, "get_user_subscriptions", lambda _user_id: existing)
     monkeypatch.setattr(bot, "add_subscription", add_subscription)
     monkeypatch.setattr(bot, "update_last_price", MagicMock())
@@ -80,8 +79,7 @@ def test_import_subscription_rows_allows_admin_over_limit(monkeypatch):
     ]
     add_subscription = MagicMock(side_effect=[101, 102])
 
-    monkeypatch.setattr(bot, "ADMIN_IDS", [user_id])
-    monkeypatch.setattr(bot, "MAX_SUBSCRIPTIONS_PER_USER", 50)
+    monkeypatch.setattr(bot, "get_subscription_limit_for_user", lambda _user_id: None)
     monkeypatch.setattr(bot, "get_user_subscriptions", lambda _user_id: existing)
     monkeypatch.setattr(bot, "add_subscription", add_subscription)
     monkeypatch.setattr(bot, "update_last_price", MagicMock())

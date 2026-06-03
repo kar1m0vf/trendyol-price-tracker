@@ -25,8 +25,11 @@ def _sub(sub_id: int, user_id: int, url: str):
 
 
 def test_subscription_limit_helper_respects_admin_bypass(monkeypatch):
-    monkeypatch.setattr(subscription_module, "ADMIN_IDS", [1])
-    monkeypatch.setattr(subscription_module, "MAX_SUBSCRIPTIONS_PER_USER", 2)
+    monkeypatch.setattr(
+        subscription_module,
+        "get_subscription_limit_for_user",
+        lambda user_id: None if user_id == 1 else 2,
+    )
 
     assert subscription_module.is_subscription_limit_reached(2, 1) is False
     assert subscription_module.is_subscription_limit_reached(2, 2) is True
@@ -44,8 +47,7 @@ async def test_handle_url_subscription_blocks_regular_user_at_limit(monkeypatch)
     )
     handler.send_status_message = AsyncMock()
 
-    monkeypatch.setattr(subscription_module, "ADMIN_IDS", [])
-    monkeypatch.setattr(subscription_module, "MAX_SUBSCRIPTIONS_PER_USER", 2)
+    monkeypatch.setattr(subscription_module, "get_subscription_limit_for_user", lambda _user_id: 2)
     monkeypatch.setattr(subscription_module, "add_user_if_not_exists", MagicMock())
     monkeypatch.setattr(subscription_module, "save_user_profile", MagicMock())
     monkeypatch.setattr(

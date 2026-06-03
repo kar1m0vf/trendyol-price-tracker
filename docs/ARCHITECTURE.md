@@ -66,7 +66,7 @@ Some command helpers still live in `bot.py` while the handler package migration 
 - schema initialization;
 - lightweight migrations;
 - subscriptions;
-- users, language preferences, and user-owned data deletion;
+- users, language preferences, internal access tiers, and user-owned data deletion;
 - price history;
 - recommendations;
 - custom bot texts;
@@ -77,7 +77,7 @@ Main tables:
 
 | Table | Purpose |
 | --- | --- |
-| `users` | Telegram user ID, language, quiet hours, created timestamp |
+| `users` | Telegram user ID, language, quiet hours, internal access tier, premium expiry, created timestamp |
 | `subscriptions` | Product URL, title, image, mode, pause state, price settings, notification state |
 | `price_history` | Price time series for tracked products |
 | `recommended_products` | Admin-managed recommendation catalog |

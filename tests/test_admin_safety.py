@@ -270,6 +270,81 @@ async def test_admin_health_callback_runs_health_command():
 
 
 @pytest.mark.asyncio
+async def test_admin_premium_callback_shows_help():
+    from handlers.callback_handler import CallbackHandler
+
+    cq = _callback("admin_premium")
+    handler = CallbackHandler()
+
+    handled = await handler._handle_admin_callback(cq, "admin_premium", ADMIN_ID)
+
+    assert handled is True
+    cq.message.edit_text.assert_awaited_once()
+    text = cq.message.edit_text.await_args.args[0]
+    assert "Premium access" in text
+    assert "/admin premium grant USER_ID" in text
+
+
+@pytest.mark.asyncio
+async def test_admin_user_premium_menu_callback_opens_duration_options():
+    from handlers.callback_handler import CallbackHandler
+
+    cq = _callback("admin_user_premium:12345")
+    handler = CallbackHandler()
+
+    with patch("handlers.admin_handler.admin_user_premium_menu", new_callable=AsyncMock) as menu:
+        handled = await handler._handle_admin_callback(cq, "admin_user_premium:12345", ADMIN_ID)
+
+    assert handled is True
+    cq.answer.assert_awaited_once()
+    menu.assert_awaited_once_with(cq.message, 12345)
+
+
+@pytest.mark.asyncio
+async def test_admin_user_premium_grant_callback_uses_selected_days():
+    from handlers.callback_handler import CallbackHandler
+
+    cq = _callback("admin_user_premium_grant:12345:30")
+    handler = CallbackHandler()
+
+    with patch("handlers.admin_handler.admin_user_premium_grant", new_callable=AsyncMock) as grant:
+        handled = await handler._handle_admin_callback(cq, cq.data, ADMIN_ID)
+
+    assert handled is True
+    cq.answer.assert_awaited_once_with("Premium updated")
+    grant.assert_awaited_once_with(cq.message, cq.from_user, 12345, 30)
+
+
+@pytest.mark.asyncio
+async def test_admin_user_premium_forever_callback_uses_no_expiry():
+    from handlers.callback_handler import CallbackHandler
+
+    cq = _callback("admin_user_premium_grant:12345:forever")
+    handler = CallbackHandler()
+
+    with patch("handlers.admin_handler.admin_user_premium_grant", new_callable=AsyncMock) as grant:
+        handled = await handler._handle_admin_callback(cq, cq.data, ADMIN_ID)
+
+    assert handled is True
+    grant.assert_awaited_once_with(cq.message, cq.from_user, 12345, None)
+
+
+@pytest.mark.asyncio
+async def test_admin_user_premium_revoke_callback():
+    from handlers.callback_handler import CallbackHandler
+
+    cq = _callback("admin_user_premium_revoke:12345")
+    handler = CallbackHandler()
+
+    with patch("handlers.admin_handler.admin_user_premium_revoke", new_callable=AsyncMock) as revoke:
+        handled = await handler._handle_admin_callback(cq, cq.data, ADMIN_ID)
+
+    assert handled is True
+    cq.answer.assert_awaited_once_with("Premium removed")
+    revoke.assert_awaited_once_with(cq.message, cq.from_user, 12345)
+
+
+@pytest.mark.asyncio
 async def test_admin_bad_subscription_details_escapes_html_and_shows_actions():
     from handlers import callback_handler
     from handlers.callback_handler import CallbackHandler
@@ -380,6 +455,102 @@ async def test_admin_main_menu_greets_admin_by_name():
     markup = msg.answer.await_args.kwargs["reply_markup"]
     callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
     assert "admin_health" in callbacks
+    assert "admin_premium" in callbacks
+
+
+@pytest.mark.asyncio
+async def test_admin_user_details_callback_has_premium_button():
+    from handlers import admin_handler
+    import database
+
+    target_user_id = 12345
+    msg = _message("/admin users 12345")
+
+    class FakeCursor:
+        def execute(self, *_args, **_kwargs):
+            return None
+
+        def fetchall(self):
+            return [
+                (0, "user_id"),
+                (1, "language"),
+                (2, "notify_quiet_hours_start"),
+                (3, "notify_quiet_hours_end"),
+                (4, "created_at"),
+                (5, "username"),
+                (6, "first_name"),
+                (7, "last_name"),
+                (8, "telegram_language_code"),
+                (9, "is_premium"),
+                (10, "last_seen_at"),
+            ]
+
+        def fetchone(self):
+            return (
+                target_user_id,
+                "ru",
+                23,
+                7,
+                1000,
+                "buyer",
+                "Test",
+                None,
+                "ru",
+                0,
+                2000,
+            )
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    fake_bot = MagicMock()
+    fake_bot.get_chat_member = AsyncMock(side_effect=RuntimeError("telegram unavailable"))
+
+    with patch.object(database, "get_connection", return_value=FakeConnection()):
+        with patch.object(database, "get_user_subscriptions", return_value=[]):
+            with patch.object(admin_handler, "_get_runtime_bot", return_value=fake_bot):
+                with patch.object(admin_handler, "_format_bot_access", return_value="free; limit: 50"):
+                    await admin_handler.admin_user_details_callback(msg, target_user_id, ADMIN_ID)
+
+    markup = msg.edit_text.await_args.kwargs["reply_markup"]
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+    assert f"admin_user_premium:{target_user_id}" in callbacks
+
+
+@pytest.mark.asyncio
+async def test_admin_premium_grant_with_days(monkeypatch):
+    from handlers import admin_handler
+
+    msg = _message("/admin premium grant 12345 30")
+    monkeypatch.setattr(admin_handler.time, "time", lambda: 1000)
+
+    with patch.object(admin_handler, "grant_user_premium") as grant:
+        with patch.object(admin_handler, "_format_bot_access", return_value="premium до 01.01.2030; лимит: 200 товаров"):
+            await admin_handler.cmd_admin(msg)
+
+    grant.assert_called_once_with(12345, premium_until=1000 + 30 * 86400)
+    assert "Premium выдан" in msg.answer.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_admin_premium_revoke():
+    from handlers import admin_handler
+
+    msg = _message("/admin premium revoke 12345")
+
+    with patch.object(admin_handler, "revoke_user_premium") as revoke:
+        with patch.object(admin_handler, "_format_bot_access", return_value="free; лимит: 50 товаров"):
+            await admin_handler.cmd_admin(msg)
+
+    revoke.assert_called_once_with(12345)
+    assert "Premium снят" in msg.answer.await_args.args[0]
 
 
 @pytest.mark.asyncio

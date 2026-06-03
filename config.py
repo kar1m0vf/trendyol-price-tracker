@@ -67,6 +67,12 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 DATABASE_PATH = os.getenv("DATABASE_PATH", "trendyol_bot.db")
 BACKUP_DIR = os.getenv("BACKUP_DIR", "backups")
 MAX_SUBSCRIPTIONS_PER_USER = _parse_int_env("MAX_SUBSCRIPTIONS_PER_USER", 50, min_value=1, max_value=10000)
+PREMIUM_MAX_SUBSCRIPTIONS_PER_USER = _parse_int_env(
+    "PREMIUM_MAX_SUBSCRIPTIONS_PER_USER",
+    200,
+    min_value=1,
+    max_value=10000,
+)
 HEAVY_COMMAND_COOLDOWN_SECONDS = _parse_int_env("HEAVY_COMMAND_COOLDOWN_SECONDS", 20, min_value=0, max_value=3600)
 # Kept for compatibility with older diagnostics/tests. The bot now always uses
 # the package-based handler registration path.

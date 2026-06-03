@@ -18,13 +18,22 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from analytics import Analytics
-from config import ADMIN_IDS, BACKUP_DIR, DATABASE_PATH
+from access_control import get_effective_user_access, get_subscription_limit_for_user
+from config import (
+    ADMIN_IDS,
+    BACKUP_DIR,
+    DATABASE_PATH,
+    MAX_SUBSCRIPTIONS_PER_USER,
+    PREMIUM_MAX_SUBSCRIPTIONS_PER_USER,
+)
 from database import (
     create_sqlite_backup,
+    grant_user_premium,
     get_broken_subscriptions,
     get_bot_text,
     get_user_language,
     get_user_subscriptions,
+    revoke_user_premium,
     set_bot_text,
 )
 from logging_utils import action_event, actor_label, short_value
@@ -156,7 +165,7 @@ def _user_profile_block(
         f"\n👨‍💼 <b>Имя:</b> {_safe_html(full_name)}"
         f"\n📱 <b>Username:</b> {_safe_html(username_text)}"
         f"\n🌐 <b>Язык Telegram:</b> {_safe_html(lang_text)}"
-        f"\n⭐ <b>Premium:</b> {_safe_html(premium_text)}"
+        f"\n⭐ <b>Telegram Premium:</b> {_safe_html(premium_text)}"
         f"\n🕒 <b>Последняя активность:</b> {_safe_html(last_seen_text)}"
         f"\n💾 <b>Источник профиля:</b> {_safe_html(source_label)}"
     )
@@ -190,6 +199,109 @@ def _format_dt(ts: Any, fmt: str = "%d.%m.%Y %H:%M") -> str:
         return datetime.fromtimestamp(int(ts)).strftime(fmt)
     except Exception:
         return "-"
+
+
+def _format_bot_access(user_id: int) -> str:
+    try:
+        access = get_effective_user_access(user_id)
+        limit = get_subscription_limit_for_user(user_id)
+    except Exception:
+        logger.debug("Could not format bot access for user=%s", user_id, exc_info=True)
+        return "unknown"
+
+    if access["is_premium"]:
+        if access["premium_until"]:
+            status = f"premium до {_format_dt(access['premium_until'])}"
+        else:
+            status = "premium бессрочно"
+    elif access["is_expired"]:
+        status = f"free (premium истек {_format_dt(access['premium_until'])})"
+    else:
+        status = "free"
+
+    limit_text = "без лимита" if limit is None else f"{limit} товаров"
+    return f"{status}; лимит: {limit_text}"
+
+
+def _admin_premium_help_text() -> str:
+    return (
+        "⭐ <b>Premium access</b>\n\n"
+        "Внутренний premium-статус бота не связан с Telegram Premium.\n\n"
+        f"Free limit: <b>{MAX_SUBSCRIPTIONS_PER_USER}</b> товаров\n"
+        f"Premium limit: <b>{PREMIUM_MAX_SUBSCRIPTIONS_PER_USER}</b> товаров\n\n"
+        "Команды:\n"
+        "<code>/admin premium status USER_ID</code>\n"
+        "<code>/admin premium grant USER_ID</code> - бессрочно\n"
+        "<code>/admin premium grant USER_ID DAYS</code> - на N дней\n"
+        "<code>/admin premium revoke USER_ID</code>"
+    )
+
+
+def _admin_premium_back_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🏠 Админ-панель", callback_data="admin_main_menu")]
+    ])
+
+
+def _admin_user_premium_text(target_user_id: int) -> str:
+    return (
+        "⭐ <b>Premium access</b>\n\n"
+        f"User: <code>{target_user_id}</code>\n"
+        f"Access: <b>{_safe_html(_format_bot_access(target_user_id))}</b>\n\n"
+        "Выберите срок premium-доступа или снимите premium."
+    )
+
+
+def _admin_user_premium_keyboard(target_user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="7 дней", callback_data=f"admin_user_premium_grant:{target_user_id}:7"),
+            InlineKeyboardButton(text="30 дней", callback_data=f"admin_user_premium_grant:{target_user_id}:30"),
+        ],
+        [
+            InlineKeyboardButton(text="90 дней", callback_data=f"admin_user_premium_grant:{target_user_id}:90"),
+            InlineKeyboardButton(text="Бессрочно", callback_data=f"admin_user_premium_grant:{target_user_id}:forever"),
+        ],
+        [
+            InlineKeyboardButton(text="Снять premium", callback_data=f"admin_user_premium_revoke:{target_user_id}"),
+        ],
+        [
+            InlineKeyboardButton(text="🔙 К пользователю", callback_data=f"user_details:{target_user_id}"),
+            InlineKeyboardButton(text="👥 К списку", callback_data="admin_users_refresh"),
+        ],
+    ])
+
+
+async def admin_user_premium_menu(message: types.Message, target_user_id: int) -> None:
+    await message.edit_text(
+        _admin_user_premium_text(target_user_id),
+        reply_markup=_admin_user_premium_keyboard(target_user_id),
+        parse_mode="HTML",
+    )
+
+
+async def admin_user_premium_grant(message: types.Message, admin_user, target_user_id: int, days: Optional[int]) -> None:
+    premium_until = None if days is None else int(time.time()) + days * 86400
+    grant_user_premium(target_user_id, premium_until=premium_until)
+    action_event(
+        "ADMIN",
+        "granted premium from user profile",
+        admin=actor_label(admin_user),
+        target_user=target_user_id,
+        days=days or "permanent",
+    )
+    await admin_user_premium_menu(message, target_user_id)
+
+
+async def admin_user_premium_revoke(message: types.Message, admin_user, target_user_id: int) -> None:
+    revoke_user_premium(target_user_id)
+    action_event(
+        "ADMIN",
+        "revoked premium from user profile",
+        admin=actor_label(admin_user),
+        target_user=target_user_id,
+    )
+    await admin_user_premium_menu(message, target_user_id)
 
 
 def _short_admin_text(value: Any, limit: int = 80) -> str:
@@ -445,8 +557,11 @@ async def admin_main_menu(message: types.Message):
         ],
         [
             InlineKeyboardButton(text="💾 Бэкап", callback_data="admin_backup"),
+            InlineKeyboardButton(text="⭐ Premium", callback_data="admin_premium")
+        ],
+        [
             InlineKeyboardButton(text="📚 Справка", callback_data="admin_help")
-        ]
+        ],
     ])
 
     keyboard.inline_keyboard.insert(2, [
@@ -508,12 +623,125 @@ async def cmd_admin(message: types.Message):
                 )
                 return
         await admin_recommend(message, args[2:] if len(args) > 2 else [])
+    elif command == "premium":
+        try:
+            args = shlex.split(tail)
+        except ValueError as e:
+            await message.answer(
+                f"❌ Не удалось разобрать команду: {_safe_html(e)}",
+                parse_mode="HTML",
+            )
+            return
+        await admin_premium(message, args)
     elif command == "blocked":
         await admin_check_blocked(message)
     elif command in {"broken", "broken_subs", "failures"}:
         await admin_broken_subscriptions(message)
     else:
         await message.answer(t(user_id, "admin_unknown_command"))
+
+async def admin_premium(message: types.Message, args: List[str]):
+    """Manage internal bot premium access."""
+    admin_user_id = _get_request_user_id(message)
+    if not is_admin(admin_user_id):
+        await message.answer(t(admin_user_id, "admin_access_denied"))
+        return
+
+    if not args:
+        await message.answer(
+            _admin_premium_help_text(),
+            reply_markup=_admin_premium_back_keyboard(),
+            parse_mode="HTML",
+        )
+        return
+
+    action = args[0].strip().lower()
+    if action in {"status", "info"}:
+        if len(args) < 2:
+            await message.answer("❌ Использование: <code>/admin premium status USER_ID</code>", parse_mode="HTML")
+            return
+        try:
+            target_user_id = int(args[1])
+        except ValueError:
+            await message.answer("❌ USER_ID должен быть числом.", parse_mode="HTML")
+            return
+        await message.answer(
+            f"⭐ <b>Premium status</b>\n\n"
+            f"User: <code>{target_user_id}</code>\n"
+            f"Access: <b>{_safe_html(_format_bot_access(target_user_id))}</b>",
+            parse_mode="HTML",
+        )
+        return
+
+    if action in {"grant", "add", "set"}:
+        if len(args) < 2:
+            await message.answer("❌ Использование: <code>/admin premium grant USER_ID [DAYS]</code>", parse_mode="HTML")
+            return
+        try:
+            target_user_id = int(args[1])
+        except ValueError:
+            await message.answer("❌ USER_ID должен быть числом.", parse_mode="HTML")
+            return
+
+        premium_until = None
+        days = None
+        if len(args) >= 3:
+            try:
+                days = int(args[2])
+            except ValueError:
+                await message.answer("❌ DAYS должен быть числом.", parse_mode="HTML")
+                return
+            if days <= 0:
+                await message.answer("❌ DAYS должен быть больше 0.", parse_mode="HTML")
+                return
+            premium_until = int(time.time()) + days * 86400
+
+        grant_user_premium(target_user_id, premium_until=premium_until)
+        action_event(
+            "ADMIN",
+            "granted premium",
+            admin=actor_label(message.from_user),
+            target_user=target_user_id,
+            days=days or "permanent",
+        )
+        await message.answer(
+            f"✅ Premium выдан.\n\n"
+            f"User: <code>{target_user_id}</code>\n"
+            f"Access: <b>{_safe_html(_format_bot_access(target_user_id))}</b>",
+            parse_mode="HTML",
+        )
+        return
+
+    if action in {"revoke", "remove", "free"}:
+        if len(args) < 2:
+            await message.answer("❌ Использование: <code>/admin premium revoke USER_ID</code>", parse_mode="HTML")
+            return
+        try:
+            target_user_id = int(args[1])
+        except ValueError:
+            await message.answer("❌ USER_ID должен быть числом.", parse_mode="HTML")
+            return
+
+        revoke_user_premium(target_user_id)
+        action_event(
+            "ADMIN",
+            "revoked premium",
+            admin=actor_label(message.from_user),
+            target_user=target_user_id,
+        )
+        await message.answer(
+            f"✅ Premium снят.\n\n"
+            f"User: <code>{target_user_id}</code>\n"
+            f"Access: <b>{_safe_html(_format_bot_access(target_user_id))}</b>",
+            parse_mode="HTML",
+        )
+        return
+
+    await message.answer(
+        _admin_premium_help_text(),
+        reply_markup=_admin_premium_back_keyboard(),
+        parse_mode="HTML",
+    )
 
 async def admin_stats(message: types.Message):
     """Show comprehensive bot statistics"""
@@ -926,6 +1154,7 @@ async def admin_user_details(message: types.Message, target_user_id: int):
                 user_text += f"📅 <b>{t(message.from_user.id, 'admin_user_registered')}:</b> {created_str}\n"
 
             user_text += f"📦 <b>{t(message.from_user.id, 'admin_user_subscriptions')}:</b> {len(subscriptions)}\n"
+            user_text += f"⭐ <b>Bot access:</b> {_safe_html(_format_bot_access(user_id))}\n"
 
             if quiet_start is not None and quiet_end is not None:
                 user_text += f"🔔 <b>{t(message.from_user.id, 'admin_user_quiet_hours')}:</b> {quiet_start:02d}:00 - {quiet_end:02d}:00\n"
@@ -1105,7 +1334,7 @@ async def admin_user_details_callback(message: types.Message, target_user_id: in
 👨‍💼 <b>Имя:</b> {full_name}
 📱 <b>Username:</b> {username}
 🌐 <b>Язык Telegram:</b> {telegram_lang}
-⭐ <b>Премиум:</b> {premium_status}
+⭐ <b>Telegram Premium:</b> {premium_status}
 💾 <b>Источник профиля:</b> Telegram API"""
 
             except Exception as e:
@@ -1120,6 +1349,7 @@ async def admin_user_details_callback(message: types.Message, target_user_id: in
             user_text += f"🆔 <b>ID:</b> <code>{user_id}</code>\n"
             user_text += f"🌐 <b>{t(admin_user_id, 'language')}:</b> {language.upper()}\n"
             user_text += f"📊 <b>{t(admin_user_id, 'admin_user_subscriptions')}:</b> {len(subscriptions)}\n"
+            user_text += f"⭐ <b>Bot access:</b> {_safe_html(_format_bot_access(user_id))}\n"
 
             if created_at > 0:
                 import time
@@ -1170,6 +1400,12 @@ async def admin_user_details_callback(message: types.Message, target_user_id: in
                 text=f"💬 {t(admin_user_id, 'admin_user_message')}",
                 url=f"tg://user?id={target_user_id}"
             ),
+            InlineKeyboardButton(
+                text="⭐ Premium",
+                callback_data=f"admin_user_premium:{target_user_id}",
+            ),
+        ])
+        keyboard.inline_keyboard.append([
             InlineKeyboardButton(
                 text=f"🔙 {t(admin_user_id, 'btn_back')}",
                 callback_data="admin_users_refresh"
@@ -1486,7 +1722,7 @@ async def submit_user_report(user_id: int, report_text: str, message: types.Mess
 👨‍💼 <b>Имя:</b> {full_name}
 📱 <b>Username:</b> {username}
 🌐 <b>Язык Telegram:</b> {telegram_lang}
-⭐ <b>Премиум:</b> {premium_status}
+⭐ <b>Telegram Premium:</b> {premium_status}
 📅 <b>Регистрация:</b> {created_date}"""
 
 

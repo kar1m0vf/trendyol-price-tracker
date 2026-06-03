@@ -1765,6 +1765,43 @@ class CallbackHandler(BaseHandler):
                 await cmd_health(cq.message)
                 return True
 
+            if data == "admin_premium":
+                await cq.answer()
+                from handlers.admin_handler import _admin_premium_back_keyboard, _admin_premium_help_text
+
+                await cq.message.edit_text(
+                    _admin_premium_help_text(),
+                    reply_markup=_admin_premium_back_keyboard(),
+                    parse_mode="HTML",
+                )
+                return True
+
+            if data.startswith("admin_user_premium:"):
+                await cq.answer()
+                from handlers.admin_handler import admin_user_premium_menu
+
+                target_user_id = int(data.split(":", 1)[1])
+                await admin_user_premium_menu(cq.message, target_user_id)
+                return True
+
+            if data.startswith("admin_user_premium_grant:"):
+                await cq.answer("Premium updated")
+                from handlers.admin_handler import admin_user_premium_grant
+
+                _prefix, target_text, days_text = data.split(":", 2)
+                target_user_id = int(target_text)
+                days = None if days_text == "forever" else int(days_text)
+                await admin_user_premium_grant(cq.message, cq.from_user, target_user_id, days)
+                return True
+
+            if data.startswith("admin_user_premium_revoke:"):
+                await cq.answer("Premium removed")
+                from handlers.admin_handler import admin_user_premium_revoke
+
+                target_user_id = int(data.split(":", 1)[1])
+                await admin_user_premium_revoke(cq.message, cq.from_user, target_user_id)
+                return True
+
             if data.startswith("admin_bad_sub:"):
                 await cq.answer()
                 sub_id = int(data.split(":", 1)[1])

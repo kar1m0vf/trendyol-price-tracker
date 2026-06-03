@@ -51,9 +51,10 @@ The same message includes buttons:
 
 Tapping a product button opens the selected product card in the same message. Internal database IDs are not shown to regular users.
 
-The service can enforce a configurable product limit for regular users. If the
-limit is reached, the user is asked to remove an older product from `/mysubs`
-before adding a new one.
+The service can enforce configurable product limits. Free and premium users can
+have different limits. If the current limit is reached, the user is asked to
+remove an older product from `/mysubs` before adding a new one or contact
+support if they need a higher limit.
 
 ## Product Numbers In Commands
 
@@ -213,8 +214,9 @@ in the document caption. Existing tracked products are skipped as duplicates;
 valid new Trendyol product rows are added with their saved mode, alert settings,
 interval, pause state, last known price, title, image, and tags where present.
 If the service product limit is reached during import, the bot adds the first
-valid new products in file order until the remaining slots are filled. Later
-valid new rows are reported as skipped by the product limit.
+valid new products in file order until the remaining slots for the user's
+current access tier are filled. Later valid new rows are reported as skipped by
+the product limit.
 
 ## User Reports
 

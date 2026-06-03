@@ -44,6 +44,7 @@ Read the full product flow in [User Guide](docs/guides/USER_GUIDE.md).
 - Let users change per-product mode, interval, and target price through inline settings buttons.
 - Let users pause and resume per-product alerts without deleting the product or losing history.
 - Group multiple price updates into one notification when needed.
+- Support internal free/premium access tiers with different product limits.
 
 ### Price Intelligence
 
@@ -70,6 +71,7 @@ Read the full product flow in [User Guide](docs/guides/USER_GUIDE.md).
 - Manual and scheduled database backups.
 - Recommendation catalog management.
 - Broken subscription diagnostics with recheck, pause, and delete actions.
+- Internal premium access management through admin commands.
 - Runtime health check.
 
 ### Localization
@@ -83,12 +85,12 @@ Read the full product flow in [User Guide](docs/guides/USER_GUIDE.md).
 | --- | --- |
 | Telegram runtime | aiogram 3 router/dispatcher stack with package-based handlers |
 | UX state | Inline callbacks, reply keyboards, in-place product cards, user-facing numbering |
-| Persistence | SQLite schema, migrations, indexes, price history, recommendations, custom texts |
+| Persistence | SQLite schema, migrations, indexes, price history, recommendations, custom texts, access tiers |
 | Scheduler | APScheduler jobs for price checks and daily backups |
 | Concurrency | Scheduler lock, task batching, network fetch semaphore, grouped notifications |
 | Notifications | Safe send helpers, image fallback, grouped updates, chart delivery |
 | Scraping | Private Trendyol data extraction module used by the owner runtime |
-| Admin tools | Stats, users, broadcasts, reports, cleanup, backups, recommendations, broken subscription diagnostics |
+| Admin tools | Stats, users, broadcasts, reports, cleanup, backups, recommendations, premium access, broken subscription diagnostics |
 | Quality | Owner-runtime pytest suite, readiness check, deploy smoke check, public locale key validation |
 | Security posture | `.env` configuration, ignored runtime data, token validation, no production data in repo |
 
@@ -129,6 +131,7 @@ Detailed system notes are in [Architecture](docs/ARCHITECTURE.md).
 | `/health` | Admin-only health check |
 | `/runcheck` | Admin manual price check run |
 | `/admin` | Admin panel |
+| `/admin premium ...` | Admin-managed free/premium access |
 | `/bad_subs` | Admin diagnostics for subscriptions with failed price checks |
 
 Product numbers come from `/mysubs` and keep the same stable order in price notifications.

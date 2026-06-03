@@ -26,10 +26,10 @@ from config import (
     BOT_TOKEN,
     DATABASE_PATH,
     HEAVY_COMMAND_COOLDOWN_SECONDS,
-    MAX_SUBSCRIPTIONS_PER_USER,
     USE_NEW_HANDLERS,
     _check_bot_token,
 )
+from access_control import get_subscription_limit_for_user
 from utils import get_next_notification_time
 import aiogram
 from logging_utils import action_event, actor_label, configure_logging, short_value
@@ -3787,9 +3787,10 @@ def _import_subscription_rows(user_id: int, rows: List[Dict[str, Any]]) -> Dict[
         for sub in existing_subs
         if len(sub) > 2 and sub[2]
     }
+    subscription_limit = get_subscription_limit_for_user(user_id)
     available_slots = None
-    if not is_admin_user(user_id):
-        available_slots = max(0, MAX_SUBSCRIPTIONS_PER_USER - len(existing_subs))
+    if subscription_limit is not None:
+        available_slots = max(0, subscription_limit - len(existing_subs))
 
     for row in rows:
         try:

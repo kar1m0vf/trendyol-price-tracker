@@ -190,6 +190,8 @@ def init_db(run_maintenance: bool = True):
                 'last_name': "ALTER TABLE users ADD COLUMN last_name TEXT",
                 'telegram_language_code': "ALTER TABLE users ADD COLUMN telegram_language_code TEXT",
                 'is_premium': "ALTER TABLE users ADD COLUMN is_premium INTEGER DEFAULT 0",
+                'access_tier': "ALTER TABLE users ADD COLUMN access_tier TEXT DEFAULT 'free'",
+                'premium_until': "ALTER TABLE users ADD COLUMN premium_until INTEGER",
                 'last_seen_at': f"ALTER TABLE users ADD COLUMN last_seen_at INTEGER DEFAULT {now_ts}",
             }
             for col_name, alter_sql in user_missing.items():
@@ -236,6 +238,8 @@ def init_db(run_maintenance: bool = True):
             last_name TEXT,
             telegram_language_code TEXT,
             is_premium INTEGER DEFAULT 0,
+            access_tier TEXT DEFAULT 'free',
+            premium_until INTEGER,
             last_seen_at INTEGER DEFAULT (strftime('%s', 'now'))
         )
         """)
@@ -468,6 +472,52 @@ def get_user_profile(user_id: int) -> Optional[Dict[str, Any]]:
             conn.row_factory = None
 
     return dict(row) if row else None
+
+def get_user_access(user_id: int) -> Dict[str, Any]:
+    """Return internal bot access fields for a user."""
+    profile = get_user_profile(user_id) or {}
+    access_tier = str(profile.get("access_tier") or "free").lower()
+    if access_tier not in {"free", "premium"}:
+        access_tier = "free"
+    return {
+        "access_tier": access_tier,
+        "premium_until": profile.get("premium_until"),
+    }
+
+def set_user_access(user_id: int, access_tier: str, premium_until: Optional[int] = None) -> Dict[str, Any]:
+    """Set internal bot access tier. Does not touch Telegram Premium flag."""
+    safe_user_id = int(user_id)
+    safe_tier = str(access_tier or "free").strip().lower()
+    if safe_tier not in {"free", "premium"}:
+        raise ValueError("access_tier must be 'free' or 'premium'")
+
+    safe_until = int(premium_until) if premium_until else None
+    with DatabaseConnection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT OR IGNORE INTO users (user_id, language, access_tier, premium_until) VALUES (?, ?, ?, ?)",
+            (safe_user_id, "ru", safe_tier, safe_until),
+        )
+        cur.execute(
+            "UPDATE users SET access_tier = ?, premium_until = ? WHERE user_id = ?",
+            (safe_tier, safe_until, safe_user_id),
+        )
+
+    logger.info(
+        "Updated user access user=%s access_tier=%s premium_until=%s",
+        safe_user_id,
+        safe_tier,
+        safe_until,
+    )
+    return get_user_access(safe_user_id)
+
+def grant_user_premium(user_id: int, premium_until: Optional[int] = None) -> Dict[str, Any]:
+    """Grant internal premium access, optionally until a unix timestamp."""
+    return set_user_access(user_id, "premium", premium_until=premium_until)
+
+def revoke_user_premium(user_id: int) -> Dict[str, Any]:
+    """Return a user to the internal free tier."""
+    return set_user_access(user_id, "free", premium_until=None)
 
 def set_user_language(user_id: int, language: str) -> None:
     with DatabaseConnection() as conn:
