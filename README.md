@@ -7,6 +7,7 @@
 An independent Telegram service by Faini Tech for tracking Trendyol product prices, managing personal watchlists, storing price history, and sending practical price-change notifications.
 
 Live bot: [@trendyolpw_bot](https://t.me/trendyolpw_bot)
+
 The project is built as a real service rather than a one-off script: it has Telegram workflows, persistent user state, background jobs, admin controls, localization, diagnostics, and tests. The source is visible for portfolio review, but the bot is not distributed as a reusable package or a ready-made third-party deployment. The production Trendyol scraper and owner environment template are private runtime assets and are not part of the public repository.
 
 ## Problem
@@ -43,7 +44,7 @@ Read the full product flow in [User Guide](docs/guides/USER_GUIDE.md).
 - Add products from Trendyol URLs.
 - Guide first-time users with a short `/start` explanation and quick-action buttons.
 - Track each user's own watchlist.
-- Show user-facing product numbers like `№ 1`, `№ 2`, `№ 3` instead of internal database IDs.
+- Show user-facing product numbers like `No. 1`, `No. 2`, `No. 3` instead of internal database IDs.
 - Support discount-only mode, hourly mode, target price alerts, min/max thresholds, percent-change alerts, custom notification intervals, and quiet hours.
 - Let users change per-product mode, interval, and target price through inline settings buttons.
 - Let users pause and resume per-product alerts without deleting the product or losing history.
@@ -107,8 +108,8 @@ Detailed system notes are in [Architecture](docs/ARCHITECTURE.md).
 | `/start` | First launch and main menu |
 | `/help` | User help |
 | `/mysubs` | Personal tracked products |
-| `/unsubscribe 1` | Remove product `№ 1` from the watchlist |
-| `/history 1` | Price history for product `№ 1` |
+| `/unsubscribe 1` | Remove product `No. 1` from the watchlist |
+| `/history 1` | Price history for product `No. 1` |
 | `/history_export 1 30 csv` | Export recent price history |
 | `/history_plot 1 30` | Generate a price history chart |
 | `/stats 1` | Price statistics |
@@ -117,7 +118,7 @@ Detailed system notes are in [Architecture](docs/ARCHITECTURE.md).
 | `/compare 1` | Compare a saved product |
 | `/compare <url1> <url2>` | Compare two product URLs |
 | `/setmode 1 discount` | Change notification mode |
-| `/price_alert 1 2500` | Notify when product `№ 1` reaches 2500 TL or lower |
+| `/price_alert 1 2500` | Notify when product `No. 1` reaches 2500 TL or lower |
 | `/settings quiet 23 7` | Configure quiet hours |
 | `/settings interval 1 60` | Configure a product notification interval |
 | `/settings price 1 min:1000 max:3000 percent:10` | Configure min/max and percent thresholds |
