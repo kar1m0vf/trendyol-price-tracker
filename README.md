@@ -1,6 +1,10 @@
-# Trendyol Price Tracker Bot
+# Price Tracker for Trendyol
 
-A Telegram service for tracking Trendyol product prices, managing personal watchlists, storing price history, and sending practical price-change notifications.
+<p align="center">
+  <img src="assets/brand/logo.png" alt="Price Tracker for Trendyol logo" width="260">
+</p>
+
+An independent Telegram service by Faini Tech for tracking Trendyol product prices, managing personal watchlists, storing price history, and sending practical price-change notifications.
 
 Live bot: [@trendyolpw_bot](https://t.me/trendyolpw_bot)
 The project is built as a real service rather than a one-off script: it has Telegram workflows, persistent user state, background jobs, admin controls, localization, diagnostics, and tests. The source is visible for portfolio review, but the bot is not distributed as a reusable package or a ready-made third-party deployment. The production Trendyol scraper and owner environment template are private runtime assets and are not part of the public repository.

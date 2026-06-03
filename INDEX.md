@@ -1,6 +1,6 @@
 # Project Documentation Index
 
-This repository contains the source code and documentation for the Trendyol Price Tracker Bot. It is not a public self-hosting package.
+This repository contains the source code and documentation for Price Tracker for Trendyol. It is not a public self-hosting package.
 
 ## Main Documentation
 
