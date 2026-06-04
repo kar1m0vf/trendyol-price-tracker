@@ -2,7 +2,7 @@ import pytest
 import asyncio
 import sys
 from types import SimpleNamespace
-from services.notification_service import NotificationService
+from services.notification_service import NotificationService, _history_plot_caption
 
 
 class DummyBot:
@@ -12,8 +12,17 @@ class DummyBot:
     async def send_message(self, user_id, text):
         self.sent.append(('msg', user_id, text))
 
-    async def send_photo(self, user_id, photo, caption=None):
-        self.sent.append(('photo', user_id, photo, caption))
+    async def send_photo(self, user_id, photo, caption=None, **kwargs):
+        self.sent.append(('photo', user_id, photo, caption, kwargs))
+
+
+def test_history_plot_caption_uses_full_url_without_truncation():
+    url = "https://www.trendyol.com/brand/product-name-with-long-slug-p-123456789?merchantId=555&boutiqueId=777"
+
+    caption = _history_plot_caption(url)
+
+    assert url in caption
+    assert "..." not in caption
 
 
 @pytest.mark.asyncio
@@ -97,3 +106,19 @@ async def test_send_history_plot_does_not_import_pyplot(monkeypatch):
     await svc.send_history_plot(123, "https://trendyol.com/p-1", hist)
 
     assert any(item[0] == 'photo' for item in bot.sent)
+
+
+@pytest.mark.asyncio
+async def test_send_history_plot_photo_caption_uses_full_url(monkeypatch):
+    bot = DummyBot()
+    svc = NotificationService(bot)
+    url = "https://www.trendyol.com/brand/product-name-with-long-slug-p-123456789?merchantId=555&boutiqueId=777"
+    hist = [("20.09.2025", 3000.0), ("21.09.2025", 2900.0)]
+
+    await svc.send_history_plot(123, url, hist)
+
+    photo_messages = [item for item in bot.sent if item[0] == "photo"]
+    assert photo_messages
+    caption = photo_messages[-1][3]
+    assert url in caption
+    assert "..." not in caption

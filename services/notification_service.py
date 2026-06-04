@@ -18,6 +18,14 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 
 logger = logging.getLogger(__name__)
 
+
+def _history_plot_caption(url: str) -> str:
+    clean_url = (url or "").strip()
+    if clean_url:
+        return f"📊 Price history\n{clean_url}"
+    return "📊 Price history"
+
+
 class NotificationService:
     """Service for sending notifications with proper error handling and fallbacks."""
 
@@ -176,7 +184,7 @@ class NotificationService:
                 prices = [p for _, p in non_datetime_data]
                 ax.plot(indices, prices, 'b-o', linewidth=2, markersize=4)
 
-            ax.set_title(f'Price History\n{url[:50]}...', fontsize=12, pad=20)
+            ax.set_title('Price History', fontsize=12, pad=20)
             ax.set_ylabel('Price (TL)', fontsize=10)
             ax.set_xlabel('Date', fontsize=10)
             ax.grid(True, alpha=0.3)
@@ -197,7 +205,7 @@ class NotificationService:
             await self.bot.send_photo(
                 user_id,
                 photo=image,
-                caption=f"📊 Price history for {url[:50]}..."
+                caption=_history_plot_caption(url)
             )
             return True
 
