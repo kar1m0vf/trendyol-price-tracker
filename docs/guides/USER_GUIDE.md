@@ -157,19 +157,35 @@ Commands:
 
 ## Price Comparison
 
-There are two comparison flows:
+There are several comparison flows.
+
+From a product card:
+
+1. Open `/mysubs`.
+2. Choose a product.
+3. Tap `Compare`.
+4. Send a second Trendyol product link or choose another product from the watchlist.
+
+The selected product is not shown again in the second-product picker, so the
+user does not accidentally compare a product with itself.
+
+From a command with a saved product:
 
 ```text
 /compare 1
 ```
 
-Compare a saved product using current price and available history.
+The bot stores product `No. 1` as the first product and waits for the second
+product. The user can send a Trendyol link or choose another saved product.
+
+From direct product links:
 
 ```text
 /compare https://www.trendyol.com/... https://www.trendyol.com/...
 ```
 
-Compare two direct product URLs.
+The user can also send the two links one by one. After the first link, the bot
+confirms that the first product was added and waits for the second one.
 
 ## Trends
 

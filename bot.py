@@ -392,6 +392,7 @@ health_check_interval = 60
 
 alert_edit_state = {}
 report_state = {}
+compare_state = {}
 import_state = set()
 
 
@@ -588,6 +589,118 @@ def is_trendyol_product_url(u: str) -> bool:
         return ("/p/" in path or "-p-" in path)
     except (AttributeError, TypeError, UnicodeError):
         return False
+
+
+def extract_supported_urls(text: str, limit: int = 2) -> List[str]:
+    """Return supported Trendyol/ty.gl URLs from a user message."""
+    urls: List[str] = []
+    seen = set()
+    for match in _SUPPORTED_URL_RE.finditer(text or ""):
+        url = ensure_url_scheme(match.group(0))
+        key = url.lower()
+        if url and key not in seen:
+            urls.append(url)
+            seen.add(key)
+        if len(urls) >= limit:
+            break
+    return urls
+
+
+async def prepare_compare_url(raw_url: str) -> str:
+    """Normalize and validate a Trendyol product URL for compare flows."""
+    url = await resolve_short_url(raw_url)
+    url = normalize_url(url)
+    if not is_trendyol_product_url(url):
+        raise ValueError("not_product_url")
+    return url
+
+
+def _compare_product_from_subscription(sub: Tuple[Any, ...]) -> Dict[str, Any]:
+    data = _subscription_fields(sub)
+    return {
+        "sub_id": data["sub_id"],
+        "url": data["url"] or "",
+        "title": data["product_title"],
+    }
+
+
+def _set_compare_first(user_id: int, product: Dict[str, Any]) -> None:
+    compare_state[user_id] = {
+        "first": dict(product),
+        "created_at": int(time.time()),
+    }
+
+
+def _clear_compare_state(user_id: int) -> None:
+    compare_state.pop(user_id, None)
+
+
+def _compare_prompt_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text=t(user_id, "btn_compare_choose_subs"),
+                callback_data="compare_subs",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text=t(user_id, "btn_cancel"),
+                callback_data="compare_cancel",
+            )
+        ],
+    ])
+
+
+def _compare_subscription_matches_first(sub: Tuple[Any, ...], first: Optional[Dict[str, Any]]) -> bool:
+    if not first:
+        return False
+
+    data = _subscription_fields(sub)
+    first_sub_id = first.get("sub_id")
+    if first_sub_id is not None and data["sub_id"] == first_sub_id:
+        return True
+
+    first_url = normalize_url(first.get("url") or "").lower()
+    sub_url = normalize_url(data["url"] or "").lower()
+    return bool(first_url and sub_url and first_url == sub_url)
+
+
+def _compare_subscriptions_keyboard(
+    user_id: int,
+    subs: List[Tuple[Any, ...]],
+    first: Optional[Dict[str, Any]] = None,
+) -> InlineKeyboardMarkup:
+    rows = []
+    for index, sub in enumerate(subs, start=1):
+        if _compare_subscription_matches_first(sub, first):
+            continue
+
+        data = _subscription_fields(sub)
+        sub_id = data["sub_id"]
+        title = _short_title(data["product_title"], data["url"] or "", limit=36)
+        rows.append([
+            InlineKeyboardButton(
+                text=f"№ {index} · {title}",
+                callback_data=f"compare_pick:{sub_id}",
+            )
+        ])
+    rows.append([
+        InlineKeyboardButton(
+            text=t(user_id, "btn_cancel"),
+            callback_data="compare_cancel",
+        )
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _prompt_compare_second(target, user_id: int) -> None:
+    await target.answer(
+        t(user_id, "compare_first_added"),
+        reply_markup=_compare_prompt_keyboard(user_id),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
 
 
 def parse_date_flexible(date_str: str) -> Optional[datetime]:
@@ -2413,91 +2526,182 @@ async def cmd_history_plot(message: types.Message):
 
 @router.message(Command("compare"))
 async def cmd_compare(message: types.Message):
-    """Unified compare command:
-    - /compare <subscription_id>
-    - /compare <url1> <url2>
-    """
+    """Start or run product comparison."""
     user_id = message.from_user.id
     add_user_if_not_exists(user_id)
     args = (message.text or "").split()
-    status_message = None
+    urls = extract_supported_urls(message.text or "", limit=2)
 
     try:
+        if len(urls) >= 2:
+            _clear_compare_state(user_id)
+            await _compare_products_by_urls(message, urls[0], urls[1])
+            return
 
-        if len(args) == 2 and args[1].isdigit():
-            from scraper import get_similar_products_comparison
+        numeric_args = [part for part in args[1:] if part.isdigit()]
+        if len(numeric_args) >= 2:
+            sub1, _public_number1 = resolve_user_subscription_ref(user_id, numeric_args[0])
+            sub2, _public_number2 = resolve_user_subscription_ref(user_id, numeric_args[1])
+            if not sub1 or not sub2:
+                await message.answer(t(user_id, "no_subs_found_id"))
+                return
+            _clear_compare_state(user_id)
+            await _compare_products_by_urls(message, sub1[2], sub2[2])
+            return
 
-            sub, _public_number = resolve_user_subscription_ref(user_id, args[1])
-
+        if len(numeric_args) == 1:
+            sub, _public_number = resolve_user_subscription_ref(user_id, numeric_args[0])
             if not sub:
                 await message.answer(t(user_id, "no_subs_found_id"))
                 return
-            retry_after = check_heavy_command_rate_limit(user_id, "compare")
-            if retry_after:
-                await message.answer(t(user_id, "heavy_command_rate_limited", seconds=retry_after))
-                return
-            sub_id = sub[0]
-
-            status_message = await _send_progress_message(
-                message,
-                t(user_id, "status_loading_compare"),
-            )
-            comparison = await get_similar_products_comparison(user_id, sub_id)
-            if comparison:
-                await _replace_progress_message(
-                    status_message,
-                    comparison,
-                    fallback_target=message,
-                    parse_mode="Markdown",
-                )
-            else:
-                await _replace_progress_message(
-                    status_message,
-                    t(user_id, "compare_no_similar"),
-                    fallback_target=message,
-                )
+            _set_compare_first(user_id, _compare_product_from_subscription(sub))
+            await _prompt_compare_second(message, user_id)
             return
 
-
-        if len(args) >= 3:
-            await _compare_products_by_urls(message, args[1], args[2])
+        if len(urls) == 1:
+            first_url = await prepare_compare_url(urls[0])
+            _set_compare_first(user_id, {"url": first_url, "title": None, "sub_id": None})
+            await _prompt_compare_second(message, user_id)
             return
 
         await message.answer(
-            f"📊 <b>{t(user_id, 'cmd_compare_usage')}</b>\n\n"
-            "Примеры:\n"
-            "<code>/compare 1</code>\n"
-            "<code>/compare https://trendyol.com/product1 https://trendyol.com/product2</code>",
-            parse_mode="HTML"
+            t(user_id, "compare_prompt_command"),
+            reply_markup=_compare_prompt_keyboard(user_id),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
         )
-    except Exception as e:
-        logger.exception("compare command error: %s", e)
-        if status_message is not None:
-            await _replace_progress_message(
-                status_message,
-                t(user_id, "error_generic"),
-                fallback_target=message,
-            )
+        compare_state[user_id] = {"first": None, "created_at": int(time.time())}
+    except ValueError as exc:
+        if str(exc) == "not_product_url":
+            await message.answer(t(user_id, "not_product_url"))
         else:
             await message.answer(t(user_id, "error_generic"))
+    except Exception as e:
+        logger.exception("compare command error: %s", e)
+        await message.answer(t(user_id, "error_generic"))
 
 
-async def _compare_products_by_urls(message: types.Message, url1: str, url2: str) -> None:
-    """Compare prices for two direct product URLs."""
+def _filter_compare_text(message: types.Message) -> bool:
+    if not message.text or not message.from_user:
+        return False
+    if message.text.startswith("/"):
+        return False
+
     user_id = message.from_user.id
+    main_menu_keys = {
+        "btn_subscribe",
+        "btn_subs",
+        "btn_trending",
+        "btn_recommend",
+        "btn_language",
+        "btn_help",
+        "btn_premium",
+    }
+    try:
+        if message.text in {t(user_id, key) for key in main_menu_keys}:
+            _clear_compare_state(user_id)
+            return False
+    except Exception:
+        logger.debug("Failed to check main menu text during compare flow", exc_info=True)
 
-    if not (is_trendyol_product_url(url1) and is_trendyol_product_url(url2)):
-        await message.answer(t(user_id, "not_product_url"))
+    return user_id in compare_state
+
+
+@router.message(_filter_compare_text)
+async def cmd_compare_text(message: types.Message):
+    user_id = message.from_user.id
+    urls = extract_supported_urls(message.text or "", limit=2)
+    if not urls:
+        await message.answer(
+            t(user_id, "compare_need_link"),
+            reply_markup=_compare_prompt_keyboard(user_id),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
         return
-    retry_after = check_heavy_command_rate_limit(user_id, "compare")
+
+    state = compare_state.get(user_id) or {}
+    first = state.get("first")
+
+    try:
+        if first and first.get("url"):
+            first_url = first["url"]
+            second_url = urls[0]
+            _clear_compare_state(user_id)
+            await _compare_products_by_urls(message, first_url, second_url, apply_rate_limit=False)
+            return
+
+        if len(urls) >= 2:
+            _clear_compare_state(user_id)
+            await _compare_products_by_urls(message, urls[0], urls[1], apply_rate_limit=False)
+            return
+
+        first_url = await prepare_compare_url(urls[0])
+        _set_compare_first(user_id, {"url": first_url, "title": None, "sub_id": None})
+        await _prompt_compare_second(message, user_id)
+    except ValueError as exc:
+        if str(exc) == "not_product_url":
+            await message.answer(t(user_id, "not_product_url"))
+        else:
+            await message.answer(t(user_id, "error_generic"))
+    except Exception as exc:
+        logger.exception("compare text flow error: %s", exc)
+        await message.answer(t(user_id, "error_generic"))
+
+
+async def _compare_products_by_urls(
+    message: types.Message,
+    url1: str,
+    url2: str,
+    *,
+    apply_rate_limit: bool = True,
+    status_message=None,
+    fallback_target=None,
+) -> None:
+    """Compare prices for two direct product URLs."""
+    if isinstance(message, int):
+        user_id = message
+        default_fallback_target = message
+    else:
+        user_id = message.from_user.id
+        default_fallback_target = message
+
+    if fallback_target is None:
+        fallback_target = default_fallback_target
+
+    try:
+        url1 = await prepare_compare_url(url1)
+        url2 = await prepare_compare_url(url2)
+    except ValueError:
+        await _replace_progress_message(
+            status_message,
+            t(user_id, "not_product_url"),
+            fallback_target=fallback_target,
+        )
+        return
+
+    if url1.lower() == url2.lower():
+        await _replace_progress_message(
+            status_message,
+            t(user_id, "compare_same_product"),
+            fallback_target=fallback_target,
+        )
+        return
+
+    retry_after = check_heavy_command_rate_limit(user_id, "compare") if apply_rate_limit else 0
     if retry_after:
-        await message.answer(t(user_id, "heavy_command_rate_limited", seconds=retry_after))
+        await _replace_progress_message(
+            status_message,
+            t(user_id, "heavy_command_rate_limited", seconds=retry_after),
+            fallback_target=fallback_target,
+        )
         return
 
-    status_message = await _send_progress_message(
-        message,
-        t(user_id, "status_loading_compare"),
-    )
+    if status_message is None:
+        status_message = await _send_progress_message(
+            fallback_target,
+            t(user_id, "status_loading_compare"),
+        )
 
     try:
 
@@ -2510,7 +2714,7 @@ async def _compare_products_by_urls(message: types.Message, url1: str, url2: str
             await _replace_progress_message(
                 status_message,
                 t(user_id, "compare_error_no_price"),
-                fallback_target=message,
+                fallback_target=fallback_target,
             )
             return
 
@@ -2535,7 +2739,7 @@ async def _compare_products_by_urls(message: types.Message, url1: str, url2: str
         await _replace_progress_message(
             status_message,
             comparison_text,
-            fallback_target=message,
+            fallback_target=fallback_target,
             parse_mode="HTML",
         )
     except Exception as e:
@@ -2543,7 +2747,7 @@ async def _compare_products_by_urls(message: types.Message, url1: str, url2: str
         await _replace_progress_message(
             status_message,
             t(user_id, "error_generic"),
-            fallback_target=message,
+            fallback_target=fallback_target,
         )
 
 

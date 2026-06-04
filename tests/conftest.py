@@ -11,9 +11,11 @@ def clear_heavy_command_rate_limit_state():
         return
 
     bot.heavy_command_last_used.clear()
+    bot.compare_state.clear()
     TREND_SEARCH_AWAIT.clear()
     TRENDING_RESULT_CACHE.clear()
     yield
     bot.heavy_command_last_used.clear()
+    bot.compare_state.clear()
     TREND_SEARCH_AWAIT.clear()
     TRENDING_RESULT_CACHE.clear()

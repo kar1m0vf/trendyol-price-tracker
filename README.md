@@ -58,7 +58,7 @@ Read the full product flow in [User Guide](docs/guides/USER_GUIDE.md).
 - Show price history and statistics.
 - Generate price charts.
 - Export subscriptions and price history as directly delivered CSV/JSON documents.
-- Compare saved products or two direct product links.
+- Compare products from a product card, from the saved watchlist, or from one/two direct product links.
 - Use local history first and external history helpers where available.
 
 ### Discovery
@@ -116,8 +116,8 @@ Detailed system notes are in [Architecture](docs/ARCHITECTURE.md).
 | `/stats 1` | Price statistics |
 | `/all_list` | Compact table of tracked products |
 | `/top_drops` | Products with the largest visible price drops |
-| `/compare 1` | Compare a saved product |
-| `/compare <url1> <url2>` | Compare two product URLs |
+| `/compare 1` | Start comparison from saved product `No. 1` |
+| `/compare <url1> <url2>` | Compare two product URLs in one message |
 | `/setmode 1 discount` | Change notification mode |
 | `/price_alert 1 2500` | Notify when product `No. 1` reaches 2500 TL or lower |
 | `/settings quiet 23 7` | Configure quiet hours |
@@ -207,7 +207,7 @@ The project includes checks for:
 - scraper parsing helpers;
 - notification flow.
 
-Latest recorded owner-runtime verification: `256 passed, 3 skipped`. The public portfolio source does not include every private runtime asset required to run the production bot.
+Latest recorded owner-runtime verification: `272 passed, 3 skipped`. The public portfolio source does not include every private runtime asset required to run the production bot.
 
 ## Documentation
 

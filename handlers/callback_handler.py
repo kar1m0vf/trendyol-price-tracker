@@ -376,62 +376,155 @@ class CallbackHandler(BaseHandler):
                 return
 
 
-            if data.startswith("compare:"):
-                from bot import check_heavy_command_rate_limit
+            if data == "compare_cancel":
+                from bot import _clear_compare_state
 
-                retry_after = check_heavy_command_rate_limit(user_id, "compare")
-                if retry_after:
-                    await cq.answer(
-                        self.t(user_id, "heavy_command_rate_limited", seconds=retry_after),
-                        show_alert=True,
+                _clear_compare_state(user_id)
+                await cq.answer()
+                await self._replace_callback_message(cq, self.t(user_id, "action_cancelled"))
+                return
+
+            if data == "compare_subs":
+                from bot import (
+                    _compare_subscription_matches_first,
+                    _compare_subscriptions_keyboard,
+                    _compare_prompt_keyboard,
+                    compare_state,
+                )
+
+                await cq.answer()
+                subs = get_user_subscriptions(user_id)
+                if not subs:
+                    await self._replace_callback_message(cq, self.t(user_id, "no_subs"))
+                    return
+                first = (compare_state.get(user_id) or {}).get("first")
+                selectable_subs = [
+                    sub
+                    for sub in subs
+                    if not _compare_subscription_matches_first(sub, first)
+                ]
+                if not selectable_subs:
+                    await self._replace_callback_message(
+                        cq,
+                        self.t(user_id, "compare_no_other_subs"),
+                        reply_markup=_compare_prompt_keyboard(user_id),
+                        parse_mode="HTML",
+                        disable_web_page_preview=True,
                     )
                     return
-                await cq.answer(self.t(user_id, "status_loading_compare"))
-                status_message = await self.send_status_message(
-                    user_id,
-                    self.t(user_id, "status_loading_compare"),
+                await self._replace_callback_message(
+                    cq,
+                    self.t(user_id, "compare_choose_subscription"),
+                    reply_markup=_compare_subscriptions_keyboard(user_id, subs, first),
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
                 )
-                try:
-                    from scraper import get_comparison_report
+                return
 
+            if data.startswith("compare_pick:"):
+                from bot import (
+                    _clear_compare_state,
+                    _compare_product_from_subscription,
+                    _compare_prompt_keyboard,
+                    _compare_products_by_urls,
+                    _set_compare_first,
+                    normalize_url,
+                    compare_state,
+                )
+
+                try:
                     sub_id = int(data.split(":", 1)[1])
                     sub = get_subscription(sub_id)
                     if not sub or sub[1] != user_id:
-                        await self.replace_status_message(
-                            status_message,
-                            self.t(user_id, "error_not_your_sub"),
+                        await cq.answer(self.t(user_id, "error_not_your_sub"), show_alert=True)
+                        return
+
+                    product = _compare_product_from_subscription(sub)
+                    state = compare_state.get(user_id) or {}
+                    first = state.get("first")
+                    if first and first.get("url"):
+                        same_sub = (
+                            first.get("sub_id") is not None
+                            and first.get("sub_id") == product.get("sub_id")
+                        )
+                        same_url = (
+                            normalize_url(first.get("url") or "").lower()
+                            == normalize_url(product.get("url") or "").lower()
+                        )
+                        if same_sub or same_url:
+                            await cq.answer(self.t(user_id, "compare_same_product"), show_alert=True)
+                            return
+
+                        await cq.answer()
+                        await self._replace_callback_message(
+                            cq,
+                            self.t(user_id, "status_loading_compare"),
+                            parse_mode="HTML",
+                            disable_web_page_preview=True,
+                        )
+                        _clear_compare_state(user_id)
+                        await _compare_products_by_urls(
+                            user_id,
+                            first["url"],
+                            product["url"],
+                            apply_rate_limit=False,
+                            status_message=getattr(cq, "message", None),
                             fallback_target=user_id,
                         )
                         return
 
-                    comparison = await get_comparison_report(user_id, sub_id)
-                    if comparison:
-                        await self.replace_status_message(
-                            status_message,
-                            comparison,
-                            fallback_target=user_id,
-                            parse_mode="Markdown",
-                        )
-                    else:
-                        await self.replace_status_message(
-                            status_message,
-                            self.t(user_id, "compare_no_similar"),
-                            fallback_target=user_id,
-                        )
-
-                except ValueError:
-                    await self.replace_status_message(
-                        status_message,
-                        self.t(user_id, "error_invalid_id"),
-                        fallback_target=user_id,
+                    _set_compare_first(user_id, product)
+                    await cq.answer()
+                    await self._replace_callback_message(
+                        cq,
+                        self.t(user_id, "compare_first_added"),
+                        reply_markup=_compare_prompt_keyboard(user_id),
+                        parse_mode="HTML",
+                        disable_web_page_preview=True,
                     )
+                except ValueError:
+                    await cq.answer(self.t(user_id, "error_invalid_id"), show_alert=True)
+                except Exception as e:
+                    logger.exception("compare pick callback error: %s", e)
+                    await cq.answer(self.t(user_id, "error_generic"), show_alert=True)
+                return
+
+            if data.startswith("compare:"):
+                from bot import (
+                    _compare_product_from_subscription,
+                    _compare_prompt_keyboard,
+                    _set_compare_first,
+                )
+
+                try:
+                    sub_id = int(data.split(":", 1)[1])
+                    sub = get_subscription(sub_id)
+                    if not sub or sub[1] != user_id:
+                        await cq.answer(self.t(user_id, "error_not_your_sub"), show_alert=True)
+                        return
+
+                    _set_compare_first(user_id, _compare_product_from_subscription(sub))
+                    await cq.answer()
+                    try:
+                        await cq.message.answer(
+                            self.t(user_id, "compare_prompt_button"),
+                            reply_markup=_compare_prompt_keyboard(user_id),
+                            parse_mode="HTML",
+                            disable_web_page_preview=True,
+                        )
+                    except Exception:
+                        await self.bot.send_message(
+                            user_id,
+                            self.t(user_id, "compare_prompt_button"),
+                            reply_markup=_compare_prompt_keyboard(user_id),
+                            parse_mode="HTML",
+                            disable_web_page_preview=True,
+                        )
+                except ValueError:
+                    await cq.answer(self.t(user_id, "error_invalid_id"), show_alert=True)
                 except Exception as e:
                     logger.exception("compare callback error: %s", e)
-                    await self.replace_status_message(
-                        status_message,
-                        self.t(user_id, "error_generic"),
-                        fallback_target=user_id,
-                    )
+                    await cq.answer(self.t(user_id, "error_generic"), show_alert=True)
                 return
             if data.startswith(("unsubscribe:", "delete:")):
                 try:
