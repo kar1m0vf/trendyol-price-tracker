@@ -387,9 +387,35 @@ class CallbackHandler(BaseHandler):
                     sub_id = int(data.split(":", 1)[1])
                     sub = get_subscription(sub_id)
                     if sub and sub[1] == user_id:
-                        remove_subscription(sub_id)
-                        action_event("USER", "removed subscription from button", user=actor_label(cq.from_user), sub_id=sub_id)
-                        await cq.message.edit_text(self.t(user_id, "sub_removed"))
+                        title = html.escape(str(sub[5] or sub[2] or "").strip())
+                        confirm_text = self.t(user_id, "confirm_unsubscribe_one")
+                        if title:
+                            confirm_text = f"{confirm_text}\n\n<b>{title}</b>"
+                        kb = InlineKeyboardMarkup(inline_keyboard=[
+                            [
+                                InlineKeyboardButton(
+                                    text=self.t(user_id, "btn_confirm_delete"),
+                                    callback_data=f"confirm_unsub:{sub_id}:yes",
+                                ),
+                                InlineKeyboardButton(
+                                    text=self.t(user_id, "btn_cancel"),
+                                    callback_data=f"confirm_unsub:{sub_id}:no",
+                                ),
+                            ],
+                            [
+                                InlineKeyboardButton(
+                                    text=self.t(user_id, "btn_subscription_settings"),
+                                    callback_data=f"sub_settings:{sub_id}",
+                                )
+                            ],
+                        ])
+                        await self._replace_callback_message(
+                            cq,
+                            confirm_text,
+                            reply_markup=kb,
+                            parse_mode="HTML",
+                            disable_web_page_preview=True,
+                        )
                     else:
                         await cq.answer(self.t(user_id, "error_not_your_sub"), show_alert=True)
                 except ValueError:
@@ -399,6 +425,31 @@ class CallbackHandler(BaseHandler):
                     await cq.answer(self.t(user_id, "error_database"), show_alert=True)
                 except Exception as e:
                     logger.exception("Unsubscribe/delete error: %s", e)
+                    await cq.answer(self.t(user_id, "error_generic"), show_alert=True)
+                return
+
+            if data.startswith("confirm_unsub:"):
+                try:
+                    _prefix, sub_id_raw, answer = data.split(":", 2)
+                    sub_id = int(sub_id_raw)
+                    if answer != "yes":
+                        await self._replace_callback_message(cq, self.t(user_id, "action_cancelled"))
+                        return
+
+                    sub = get_subscription(sub_id)
+                    if sub and sub[1] == user_id:
+                        remove_subscription(sub_id)
+                        action_event("USER", "removed subscription from button", user=actor_label(cq.from_user), sub_id=sub_id)
+                        await self._replace_callback_message(cq, self.t(user_id, "sub_removed"))
+                    else:
+                        await cq.answer(self.t(user_id, "error_not_your_sub"), show_alert=True)
+                except ValueError:
+                    await cq.answer(self.t(user_id, "error_invalid_id"), show_alert=True)
+                except sqlite3.DatabaseError as e:
+                    logger.error("Database error in confirm_unsub: %s", e)
+                    await cq.answer(self.t(user_id, "error_database"), show_alert=True)
+                except Exception as e:
+                    logger.exception("Confirm unsubscribe error: %s", e)
                     await cq.answer(self.t(user_id, "error_generic"), show_alert=True)
                 return
 

@@ -399,6 +399,126 @@ async def test_subscription_settings_callback_edits_caption_for_photo_card(monke
 
 
 @pytest.mark.asyncio
+async def test_unsubscribe_callback_asks_confirmation_before_delete(monkeypatch):
+    handler = CallbackHandler()
+    sub = (
+        42,
+        12345,
+        "https://www.trendyol.com/test/product-p-42",
+        "discount",
+        199.0,
+        "Test product",
+        None,
+        None,
+        None,
+        None,
+        60,
+        None,
+        None,
+    )
+    remove = MagicMock()
+    monkeypatch.setattr(callback_module, "get_subscription", lambda sub_id: sub)
+    monkeypatch.setattr(callback_module, "remove_subscription", remove)
+
+    cq = MagicMock()
+    cq.data = "unsubscribe:42"
+    cq.from_user.id = 12345
+    cq.answer = AsyncMock()
+    cq.message.edit_text = AsyncMock()
+
+    await handler.handle_main_callback(cq)
+
+    remove.assert_not_called()
+    cq.message.edit_text.assert_awaited_once()
+    text = cq.message.edit_text.await_args.args[0]
+    keyboard = cq.message.edit_text.await_args.kwargs["reply_markup"]
+    callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
+    assert handler.t(12345, "confirm_unsubscribe_one") in text
+    assert "Test product" in text
+    assert "confirm_unsub:42:yes" in callbacks
+    assert "confirm_unsub:42:no" in callbacks
+
+
+@pytest.mark.asyncio
+async def test_confirm_unsubscribe_callback_removes_subscription(monkeypatch):
+    handler = CallbackHandler()
+    sub = (
+        42,
+        12345,
+        "https://www.trendyol.com/test/product-p-42",
+        "discount",
+        199.0,
+        "Test product",
+        None,
+        None,
+        None,
+        None,
+        60,
+        None,
+        None,
+    )
+    remove = MagicMock()
+    monkeypatch.setattr(callback_module, "get_subscription", lambda sub_id: sub)
+    monkeypatch.setattr(callback_module, "remove_subscription", remove)
+    monkeypatch.setattr(callback_module, "action_event", lambda *args, **kwargs: None)
+
+    cq = MagicMock()
+    cq.data = "confirm_unsub:42:yes"
+    cq.from_user.id = 12345
+    cq.answer = AsyncMock()
+    cq.message.edit_text = AsyncMock()
+
+    await handler.handle_main_callback(cq)
+
+    remove.assert_called_once_with(42)
+    cq.message.edit_text.assert_awaited_once_with(handler.t(12345, "sub_removed"))
+
+
+@pytest.mark.asyncio
+async def test_confirm_unsubscribe_callback_edits_caption_for_photo_card(monkeypatch):
+    handler = CallbackHandler()
+    sub = (
+        42,
+        12345,
+        "https://www.trendyol.com/test/product-p-42",
+        "discount",
+        199.0,
+        "Test product",
+        "https://cdn.example/image.jpg",
+        None,
+        None,
+        None,
+        60,
+        None,
+        None,
+    )
+    remove = MagicMock()
+    monkeypatch.setattr(callback_module, "get_subscription", lambda sub_id: sub)
+    monkeypatch.setattr(callback_module, "remove_subscription", remove)
+    monkeypatch.setattr(callback_module, "action_event", lambda *args, **kwargs: None)
+
+    cq = MagicMock()
+    cq.data = "confirm_unsub:42:yes"
+    cq.from_user.id = 12345
+    cq.answer = AsyncMock()
+    cq.message.edit_text = AsyncMock(
+        side_effect=TelegramBadRequest(
+            method=None,
+            message="Bad Request: there is no text in the message to edit",
+        )
+    )
+    cq.message.edit_caption = AsyncMock()
+    cq.message.answer = AsyncMock()
+
+    await handler.handle_main_callback(cq)
+
+    remove.assert_called_once_with(42)
+    cq.message.edit_caption.assert_awaited_once()
+    assert cq.message.edit_caption.await_args.kwargs["caption"] == handler.t(12345, "sub_removed")
+    cq.message.answer.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_subscription_settings_interval_updates_subscription(monkeypatch):
     handler = CallbackHandler()
     sub = (
