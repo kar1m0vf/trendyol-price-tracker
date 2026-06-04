@@ -127,6 +127,57 @@ class CallbackHandler(BaseHandler):
             return
         raise RuntimeError("Callback message cannot be edited or answered")
 
+    async def _show_product_card_message(
+        self,
+        cq: CallbackQuery,
+        user_id: int,
+        text: str,
+        *,
+        image: str = "",
+        reply_markup: InlineKeyboardMarkup | None = None,
+    ) -> None:
+        if image and len(text) <= 1024:
+            message = getattr(cq, "message", None)
+            photo_kwargs = {
+                "reply_markup": reply_markup,
+                "parse_mode": "HTML",
+            }
+
+            edit_caption = getattr(message, "edit_caption", None) if message is not None else None
+            if callable(edit_caption):
+                try:
+                    await edit_caption(caption=text, **photo_kwargs)
+                    return
+                except TelegramBadRequest as exc:
+                    message_text = str(exc).lower()
+                    if "message is not modified" in message_text:
+                        return
+                    logger.debug("Could not edit product card caption", exc_info=True)
+                except Exception:
+                    logger.debug("Could not edit product card caption", exc_info=True)
+
+            answer_photo = getattr(message, "answer_photo", None) if message is not None else None
+            if callable(answer_photo):
+                try:
+                    await answer_photo(photo=image, caption=text, **photo_kwargs)
+                    return
+                except Exception:
+                    logger.debug("Could not send product card photo from callback message", exc_info=True)
+
+            try:
+                await self.bot.send_photo(user_id, photo=image, caption=text, **photo_kwargs)
+                return
+            except Exception:
+                logger.debug("Could not send product card photo via bot", exc_info=True)
+
+        await self._replace_callback_message(
+            cq,
+            text,
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+
     async def handle_main_callback(self, cq: CallbackQuery):
         """Handle main callback queries."""
         data = cq.data or ""
@@ -519,53 +570,12 @@ class CallbackHandler(BaseHandler):
 
 
             if data.startswith("edit_sub:"):
-                await cq.answer(self.t(user_id, "loading"))
                 try:
-                    from bot import format_subscription_card
-
                     sub_id = int(data.split(":", 1)[1])
-                    sub = get_subscription(sub_id)
-                    if not sub or sub[1] != user_id:
-                        await cq.answer(self.t(user_id, "error_not_your_sub"), show_alert=True)
-                        return
-
-
-                    try:
-                        (_, _, url, mode, last_price, product_title, product_image,
-                         min_price, max_price, notify_percent, notify_interval, last_notify_time, price_alert) = sub
-                    except ValueError:
-                        (_, _, url, mode, last_price, product_title, product_image,
-                         min_price, max_price, notify_percent, notify_interval, last_notify_time) = sub[:12]
-                        price_alert = None
-
-                    edit_text = (
-                        f"⚙️ <b>{html.escape(self.t(user_id, 'edit_subscription'))}</b>\n\n"
-                        + format_subscription_card(user_id, sub)
-                    )
-
-                    detail_keyboard = self._subscription_detail_keyboard(user_id, sub_id)
-                    try:
-                        await cq.message.edit_text(
-                            edit_text,
-                            reply_markup=detail_keyboard,
-                            parse_mode="HTML",
-                            disable_web_page_preview=True,
-                        )
-                    except Exception as e:
-                        logger.warning("Failed to edit subscription list message: %s", e)
-                        await self.bot.send_message(
-                            user_id,
-                            edit_text,
-                            reply_markup=detail_keyboard,
-                            parse_mode="HTML",
-                            disable_web_page_preview=True,
-                        )
-
                 except ValueError:
                     await cq.answer(self.t(user_id, "error_invalid_id"), show_alert=True)
-                except Exception as e:
-                    logger.exception("Edit subscription error: %s", e)
-                    await cq.answer(self.t(user_id, "error_generic"), show_alert=True)
+                    return
+                await self._show_subscription_detail(cq, user_id, sub_id, self.t(user_id, "loading"))
                 return
 
             if data.startswith("alert_edit:"):
@@ -966,12 +976,13 @@ class CallbackHandler(BaseHandler):
             f"⚙️ <b>{html.escape(self.t(user_id, 'edit_subscription'))}</b>\n\n"
             + format_subscription_card(user_id, sub)
         )
-        await self._replace_callback_message(
+        product_image = str(self._subscription_values(sub)[6] or "").strip()
+        await self._show_product_card_message(
             cq,
+            user_id,
             text,
+            image=product_image,
             reply_markup=self._subscription_detail_keyboard(user_id, sub_id),
-            parse_mode="HTML",
-            disable_web_page_preview=True,
         )
 
     async def _show_subscription_settings(

@@ -93,6 +93,134 @@ async def test_edit_subscription_callback_edits_list_message(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_edit_subscription_callback_sends_photo_card_when_image_exists(monkeypatch):
+    handler = CallbackHandler()
+    image = "https://cdn.example/product.jpg"
+    sub = (
+        42,
+        12345,
+        "https://www.trendyol.com/test/product-p-42",
+        "discount",
+        199.0,
+        "Test product",
+        image,
+        None,
+        None,
+        None,
+        60,
+        None,
+        None,
+    )
+    monkeypatch.setattr(callback_module, "get_subscription", lambda sub_id: sub)
+
+    cq = MagicMock()
+    cq.data = "edit_sub:42"
+    cq.from_user.id = 12345
+    cq.answer = AsyncMock()
+    cq.message.edit_text = AsyncMock()
+    cq.message.edit_caption = AsyncMock(
+        side_effect=TelegramBadRequest(
+            method=None,
+            message="Bad Request: message is not a media message",
+        )
+    )
+    cq.message.answer_photo = AsyncMock()
+
+    with patch("bot.format_subscription_card", return_value="CARD"):
+        await handler.handle_main_callback(cq)
+
+    cq.answer.assert_awaited()
+    cq.message.edit_caption.assert_awaited_once()
+    cq.message.answer_photo.assert_awaited_once()
+    cq.message.edit_text.assert_not_awaited()
+    kwargs = cq.message.answer_photo.await_args.kwargs
+    assert kwargs["photo"] == image
+    assert "CARD" in kwargs["caption"]
+    assert kwargs["parse_mode"] == "HTML"
+    assert "reply_markup" in kwargs
+
+
+@pytest.mark.asyncio
+async def test_edit_subscription_photo_card_falls_back_to_text_when_photo_fails(monkeypatch):
+    handler = CallbackHandler()
+    sub = (
+        42,
+        12345,
+        "https://www.trendyol.com/test/product-p-42",
+        "discount",
+        199.0,
+        "Test product",
+        "https://cdn.example/broken.jpg",
+        None,
+        None,
+        None,
+        60,
+        None,
+        None,
+    )
+    monkeypatch.setattr(callback_module, "get_subscription", lambda sub_id: sub)
+
+    cq = MagicMock()
+    cq.data = "edit_sub:42"
+    cq.from_user.id = 12345
+    cq.answer = AsyncMock()
+    cq.message.edit_caption = AsyncMock(
+        side_effect=TelegramBadRequest(
+            method=None,
+            message="Bad Request: message is not a media message",
+        )
+    )
+    cq.message.answer_photo = AsyncMock(side_effect=RuntimeError("bad photo"))
+    cq.message.edit_text = AsyncMock()
+
+    with patch("bot.format_subscription_card", return_value="CARD"):
+        await handler.handle_main_callback(cq)
+
+    cq.message.answer_photo.assert_awaited_once()
+    cq.message.edit_text.assert_awaited_once()
+    assert "CARD" in cq.message.edit_text.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_settings_back_edits_caption_for_existing_photo_card(monkeypatch):
+    handler = CallbackHandler()
+    sub = (
+        42,
+        12345,
+        "https://www.trendyol.com/test/product-p-42",
+        "discount",
+        199.0,
+        "Test product",
+        "https://cdn.example/product.jpg",
+        None,
+        None,
+        None,
+        60,
+        None,
+        None,
+    )
+    monkeypatch.setattr(callback_module, "get_subscription", lambda sub_id: sub)
+
+    cq = MagicMock()
+    cq.data = "settings_back:42"
+    cq.from_user.id = 12345
+    cq.answer = AsyncMock()
+    cq.message.edit_caption = AsyncMock()
+    cq.message.answer_photo = AsyncMock()
+    cq.message.edit_text = AsyncMock()
+
+    with patch("bot.format_subscription_card", return_value="CARD"):
+        await handler.handle_main_callback(cq)
+
+    cq.message.edit_caption.assert_awaited_once()
+    cq.message.answer_photo.assert_not_awaited()
+    cq.message.edit_text.assert_not_awaited()
+    kwargs = cq.message.edit_caption.await_args.kwargs
+    assert "CARD" in kwargs["caption"]
+    assert kwargs["parse_mode"] == "HTML"
+
+
+@pytest.mark.asyncio
 async def test_subscriptions_back_callback_restores_overview(monkeypatch):
     handler = CallbackHandler()
 
