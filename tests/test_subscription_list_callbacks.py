@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import sys
 
 import pytest
+from aiogram.exceptions import TelegramBadRequest
 
 from handlers import callback_handler as callback_module
 from handlers import CallbackHandler
@@ -350,6 +351,51 @@ async def test_subscription_settings_callback_opens_settings_menu(monkeypatch):
     assert "settings_alert_remove:42" in callbacks
     assert "settings_toggle_active:42" in callbacks
     assert "settings_back:42" in callbacks
+
+
+@pytest.mark.asyncio
+async def test_subscription_settings_callback_edits_caption_for_photo_card(monkeypatch):
+    handler = CallbackHandler()
+    sub = (
+        42,
+        12345,
+        "https://www.trendyol.com/test/product-p-42",
+        "discount",
+        199.0,
+        "Test product",
+        "https://cdn.example/image.jpg",
+        None,
+        None,
+        None,
+        60,
+        None,
+        180.0,
+    )
+    monkeypatch.setattr(callback_module, "get_subscription", lambda sub_id: sub)
+
+    cq = MagicMock()
+    cq.data = "sub_settings:42"
+    cq.from_user.id = 12345
+    cq.answer = AsyncMock()
+    cq.message.edit_text = AsyncMock(
+        side_effect=TelegramBadRequest(
+            method=None,
+            message="Bad Request: there is no text in the message to edit",
+        )
+    )
+    cq.message.edit_caption = AsyncMock()
+    cq.message.answer = AsyncMock()
+
+    await handler.handle_main_callback(cq)
+
+    cq.answer.assert_awaited_once()
+    cq.message.edit_text.assert_awaited_once()
+    cq.message.edit_caption.assert_awaited_once()
+    kwargs = cq.message.edit_caption.await_args.kwargs
+    assert "Test product" in kwargs["caption"]
+    assert kwargs["parse_mode"] == "HTML"
+    assert "reply_markup" in kwargs
+    cq.message.answer.assert_not_awaited()
 
 
 @pytest.mark.asyncio

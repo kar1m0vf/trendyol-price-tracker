@@ -5,6 +5,7 @@ from datetime import datetime
 import sys
 
 from aiogram import types
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 import html
 import re
@@ -87,6 +88,44 @@ class CallbackHandler(BaseHandler):
                 return
             except Exception:
                 logger.debug("Failed to send durable callback error", exc_info=True)
+
+    async def _replace_callback_message(self, cq: CallbackQuery, text: str, **kwargs) -> None:
+        """Replace text/caption behind a callback, falling back to a new message."""
+        message = getattr(cq, "message", None)
+        if message is None:
+            return
+
+        try:
+            await message.edit_text(text, **kwargs)
+            return
+        except TelegramBadRequest as exc:
+            message_text = str(exc).lower()
+            if "no text" not in message_text and "message is not modified" not in message_text:
+                raise
+            if "message is not modified" in message_text:
+                return
+
+        caption_kwargs = {
+            key: value
+            for key, value in kwargs.items()
+            if key in {"reply_markup", "parse_mode", "caption_entities"}
+        }
+        edit_caption = getattr(message, "edit_caption", None)
+        if callable(edit_caption):
+            try:
+                await edit_caption(caption=text, **caption_kwargs)
+                return
+            except TelegramBadRequest as exc:
+                message_text = str(exc).lower()
+                if "message is not modified" in message_text:
+                    return
+                logger.debug("Could not edit callback message caption", exc_info=True)
+
+        answer = getattr(message, "answer", None)
+        if callable(answer):
+            await answer(text, **kwargs)
+            return
+        raise RuntimeError("Callback message cannot be edited or answered")
 
     async def handle_main_callback(self, cq: CallbackQuery):
         """Handle main callback queries."""
@@ -845,11 +884,12 @@ class CallbackHandler(BaseHandler):
 
         subs = get_user_subscriptions(user_id)
         if not subs:
-            await cq.message.edit_text(self.t(user_id, "no_subs"))
+            await self._replace_callback_message(cq, self.t(user_id, "no_subs"))
             return
 
         overview_text, overview_keyboard = build_subscriptions_overview(user_id, subs)
-        await cq.message.edit_text(
+        await self._replace_callback_message(
+            cq,
             overview_text,
             reply_markup=overview_keyboard,
             parse_mode="HTML",
@@ -875,7 +915,8 @@ class CallbackHandler(BaseHandler):
             f"⚙️ <b>{html.escape(self.t(user_id, 'edit_subscription'))}</b>\n\n"
             + format_subscription_card(user_id, sub)
         )
-        await cq.message.edit_text(
+        await self._replace_callback_message(
+            cq,
             text,
             reply_markup=self._subscription_detail_keyboard(user_id, sub_id),
             parse_mode="HTML",
@@ -895,7 +936,8 @@ class CallbackHandler(BaseHandler):
             return
 
         await cq.answer(notice or None)
-        await cq.message.edit_text(
+        await self._replace_callback_message(
+            cq,
             self._subscription_settings_text(user_id, sub),
             reply_markup=self._subscription_settings_keyboard(user_id, sub),
             parse_mode="HTML",
