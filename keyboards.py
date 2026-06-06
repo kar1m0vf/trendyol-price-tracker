@@ -10,7 +10,7 @@ from aiogram.types import (
 )
 
 from localization import t as translate_func
-from project_links import GITHUB_REPO_URL
+from project_links import GITHUB_REPO_URL, USER_GUIDE_URL
 import logging
 
 logger = logging.getLogger(__name__)
@@ -82,6 +82,12 @@ def get_help_inline_kb(user_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text=translate_func(user_id, "btn_github"),
                     url=GITHUB_REPO_URL,
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=translate_func(user_id, "btn_user_guide"),
+                    url=USER_GUIDE_URL,
                 )
             ],
         ]

@@ -1,5 +1,5 @@
 import keyboards
-from project_links import GITHUB_REPO_URL
+from project_links import GITHUB_REPO_URL, USER_GUIDE_URL
 
 
 def test_main_keyboard_uses_localized_labels_without_extra_prefix(monkeypatch):
@@ -58,6 +58,7 @@ def test_help_inline_keyboard_includes_repository_link(monkeypatch):
     labels = {
         "btn_detailed_help": "HELP",
         "btn_github": "GITHUB",
+        "btn_user_guide": "GUIDE",
     }
     monkeypatch.setattr(
         keyboards,
@@ -71,6 +72,8 @@ def test_help_inline_keyboard_includes_repository_link(monkeypatch):
     assert kb.inline_keyboard[0][0].callback_data == "help:full"
     assert kb.inline_keyboard[1][0].text == "GITHUB"
     assert kb.inline_keyboard[1][0].url == GITHUB_REPO_URL
+    assert kb.inline_keyboard[2][0].text == "GUIDE"
+    assert kb.inline_keyboard[2][0].url == USER_GUIDE_URL
 
 
 def test_about_inline_keyboard_points_to_user_actions_and_repository(monkeypatch):
