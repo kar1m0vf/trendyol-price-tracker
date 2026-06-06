@@ -165,6 +165,35 @@ def test_user_access_grant_and_revoke_premium(temp_db_path):
     }
 
 
+def test_cleanup_user_overlimit_subscriptions_keeps_public_first_products(temp_db_path):
+    user_id = 12345
+    premium_until = int(time.time()) - 10
+    database.grant_user_premium(user_id, premium_until=premium_until)
+
+    sub_ids = []
+    for index in range(1, 6):
+        url = f"https://www.trendyol.com/test/product-p-{index}"
+        sub_id = database.add_subscription(user_id, url, product_title=f"Product {index}")
+        database.add_price_point(sub_id, url, 100.0 + index, ts=1000 + index)
+        sub_ids.append(sub_id)
+
+    cleanup = database.cleanup_user_overlimit_subscriptions(user_id, 2, ts=2000)
+
+    kept_ids = [item["id"] for item in cleanup["kept"]]
+    deleted_ids = [item["id"] for item in cleanup["deleted"]]
+    assert kept_ids == list(reversed(sub_ids))[:2]
+    assert deleted_ids == list(reversed(sub_ids))[2:]
+    assert cleanup["deleted_history"] == 3
+
+    remaining_ids = [row[0] for row in database.get_user_subscriptions(user_id)]
+    assert remaining_ids == kept_ids
+    assert database.get_user_access(user_id) == {
+        "access_tier": "free",
+        "premium_until": None,
+    }
+    assert database.get_expired_premium_overlimit_users(3000, 2, 7) == []
+
+
 def test_subscription_check_failure_tracking(temp_db_path):
     user_id = 12345
     url = "https://www.trendyol.com/test-product-p-1"

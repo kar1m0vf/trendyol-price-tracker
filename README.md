@@ -207,7 +207,7 @@ The project includes checks for:
 - scraper parsing helpers;
 - notification flow.
 
-Latest recorded owner-runtime verification: `274 passed, 3 skipped`. The public portfolio source does not include every private runtime asset required to run the production bot.
+Latest recorded owner-runtime verification: `277 passed, 3 skipped`. The public portfolio source does not include every private runtime asset required to run the production bot.
 
 ## Documentation
 

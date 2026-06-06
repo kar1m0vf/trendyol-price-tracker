@@ -26,6 +26,8 @@ from config import (
     BOT_TOKEN,
     DATABASE_PATH,
     HEAVY_COMMAND_COOLDOWN_SECONDS,
+    MAX_SUBSCRIPTIONS_PER_USER,
+    PREMIUM_EXPIRY_GRACE_DAYS,
     USE_NEW_HANDLERS,
     _check_bot_token,
 )
@@ -59,8 +61,11 @@ from database import (
     get_subscription_active_map_for_user,
     set_subscription_active,
     set_subscription_tags,
+    cleanup_user_overlimit_subscriptions,
     save_price_points_batch,
+    get_expired_premium_overlimit_users,
     get_bot_text,
+    mark_premium_expiry_notified,
     close_all_connections,
 )
 from localization import t, LOCALES
@@ -239,6 +244,7 @@ ADMIN_ALERT_COOLDOWN_MINUTES = _get_env_int(
 
 CHECK_ALL_JOB_ID = "check_all_interval"
 BACKUP_JOB_ID = "db_backup_daily"
+PREMIUM_CLEANUP_JOB_ID = "premium_expiry_cleanup_daily"
 
 bot: Optional[Bot] = None
 dp: Optional[Dispatcher] = None
@@ -332,6 +338,15 @@ def _format_timestamp(ts: Optional[int]) -> str:
         return datetime.fromtimestamp(int(ts)).strftime("%d.%m.%Y %H:%M:%S")
     except Exception:
         return "unknown"
+
+
+def _format_date_for_user(ts: Optional[int]) -> str:
+    if not ts:
+        return "-"
+    try:
+        return datetime.fromtimestamp(int(ts)).strftime("%d.%m.%Y")
+    except Exception:
+        return "-"
 
 
 async def send_admin_runtime_alert(
@@ -450,6 +465,129 @@ async def send_notification_with_timeout(
     except Exception:
         logger.exception("notification_service.send_notification_safe failed")
         return False
+
+
+def _premium_cleanup_deleted_list(user_id: int, deleted: List[Dict[str, Any]], max_items: int = 30) -> str:
+    if not deleted:
+        return "-"
+
+    lines = []
+    for index, item in enumerate(deleted[:max_items], start=1):
+        title = _short_title(item.get("product_title"), item.get("url") or "", limit=70)
+        lines.append(f"{index}. {html.escape(title, quote=False)}")
+
+    remaining = len(deleted) - len(lines)
+    if remaining > 0:
+        lines.append(html.escape(t(user_id, "premium_cleanup_more_deleted"), quote=False).format(more=remaining))
+    return "\n".join(lines)
+
+
+async def enforce_premium_expiry_limits(now_ts: Optional[int] = None) -> Dict[str, int]:
+    """Warn expired premium users and remove over-limit products after grace period."""
+    now = int(now_ts or time.time())
+    grace_seconds = max(0, int(PREMIUM_EXPIRY_GRACE_DAYS)) * 86400
+    result = {
+        "checked": 0,
+        "warned": 0,
+        "cleaned": 0,
+        "deleted": 0,
+        "failed": 0,
+    }
+
+    try:
+        users = get_expired_premium_overlimit_users(
+            now,
+            MAX_SUBSCRIPTIONS_PER_USER,
+            PREMIUM_EXPIRY_GRACE_DAYS,
+        )
+    except Exception as exc:
+        logger.exception("Premium expiry scan failed: %s", exc)
+        result["failed"] += 1
+        return result
+
+    result["checked"] = len(users)
+    for item in users:
+        try:
+            user_id = int(item["user_id"])
+            subscription_count = int(item.get("subscription_count") or 0)
+            notified_at = item.get("premium_expiry_notified_at")
+            notified_at = int(notified_at) if notified_at else None
+
+            if not notified_at and grace_seconds > 0:
+                cleanup_due_at = now + grace_seconds
+                sent = await send_notification_with_timeout(
+                    user_id,
+                    t(
+                        user_id,
+                        "premium_expired_overlimit_notice",
+                        count=subscription_count,
+                        free_limit=MAX_SUBSCRIPTIONS_PER_USER,
+                        grace_days=PREMIUM_EXPIRY_GRACE_DAYS,
+                        cleanup_date=_format_date_for_user(cleanup_due_at),
+                    ),
+                    parse_mode="HTML",
+                )
+                mark_premium_expiry_notified(user_id, now)
+                result["warned"] += 1
+                action_event(
+                    "SYSTEM",
+                    "premium over-limit warning sent",
+                    user=user_id,
+                    count=subscription_count,
+                    limit=MAX_SUBSCRIPTIONS_PER_USER,
+                    delivered=sent,
+                )
+                continue
+
+            cleanup_due_at = (notified_at or int(item.get("premium_until") or now)) + grace_seconds
+            if now < cleanup_due_at:
+                continue
+
+            cleanup = cleanup_user_overlimit_subscriptions(
+                user_id,
+                MAX_SUBSCRIPTIONS_PER_USER,
+                ts=now,
+            )
+            deleted = cleanup.get("deleted") or []
+            kept = cleanup.get("kept") or []
+            if deleted:
+                await send_notification_with_timeout(
+                    user_id,
+                    t(
+                        user_id,
+                        "premium_overlimit_cleanup_done",
+                        kept=len(kept),
+                        free_limit=MAX_SUBSCRIPTIONS_PER_USER,
+                        deleted=len(deleted),
+                        deleted_list=_premium_cleanup_deleted_list(user_id, deleted),
+                    ),
+                    parse_mode="HTML",
+                )
+
+            result["cleaned"] += 1
+            result["deleted"] += len(deleted)
+            action_event(
+                "SYSTEM",
+                "premium over-limit cleanup completed",
+                user=user_id,
+                kept=len(kept),
+                deleted=len(deleted),
+            )
+        except Exception as exc:
+            logger.exception("Premium expiry enforcement failed for %s: %s", item, exc)
+            result["failed"] += 1
+
+    if any(result[key] for key in ("warned", "cleaned", "deleted", "failed")):
+        action_event(
+            "JOB",
+            "premium expiry enforcement finished",
+            checked=result["checked"],
+            warned=result["warned"],
+            cleaned=result["cleaned"],
+            deleted=result["deleted"],
+            failed=result["failed"],
+        )
+    return result
 
 
 def convert_to_turkish_url(url: str) -> str:
@@ -3491,13 +3629,25 @@ async def start_scheduler_async(delay: float = 1.0):
                 coalesce=True,
                 misfire_grace_time=3600,
             )
+            scheduler.add_job(
+                enforce_premium_expiry_limits,
+                "interval",
+                id=PREMIUM_CLEANUP_JOB_ID,
+                hours=24,
+                next_run_time=datetime.now() + timedelta(minutes=5),
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+                misfire_grace_time=3600,
+            )
             scheduler.start()
             logger.info(
-                "Scheduler started (async): check interval=%s min, backup=%02d:%02d, keep=%d",
+                "Scheduler started (async): check interval=%s min, backup=%02d:%02d, keep=%d, premium_grace_days=%d",
                 CHECK_ALL_INTERVAL_MINUTES,
                 DB_BACKUP_HOUR,
                 DB_BACKUP_MINUTE,
                 DB_BACKUP_KEEP_FILES,
+                PREMIUM_EXPIRY_GRACE_DAYS,
             )
             action_event(
                 "START",
@@ -3505,6 +3655,7 @@ async def start_scheduler_async(delay: float = 1.0):
                 check_interval_min=CHECK_ALL_INTERVAL_MINUTES,
                 backup_time=f"{DB_BACKUP_HOUR:02d}:{DB_BACKUP_MINUTE:02d}",
                 keep_backups=DB_BACKUP_KEEP_FILES,
+                premium_grace_days=PREMIUM_EXPIRY_GRACE_DAYS,
             )
         except Exception:
             logger.exception("Failed to start scheduler or add job")

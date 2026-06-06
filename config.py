@@ -73,6 +73,12 @@ PREMIUM_MAX_SUBSCRIPTIONS_PER_USER = _parse_int_env(
     min_value=1,
     max_value=10000,
 )
+PREMIUM_EXPIRY_GRACE_DAYS = _parse_int_env(
+    "PREMIUM_EXPIRY_GRACE_DAYS",
+    7,
+    min_value=0,
+    max_value=365,
+)
 HEAVY_COMMAND_COOLDOWN_SECONDS = _parse_int_env("HEAVY_COMMAND_COOLDOWN_SECONDS", 20, min_value=0, max_value=3600)
 # Kept for compatibility with older diagnostics/tests. The bot now always uses
 # the package-based handler registration path.

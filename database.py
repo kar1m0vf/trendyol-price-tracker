@@ -192,6 +192,8 @@ def init_db(run_maintenance: bool = True):
                 'is_premium': "ALTER TABLE users ADD COLUMN is_premium INTEGER DEFAULT 0",
                 'access_tier': "ALTER TABLE users ADD COLUMN access_tier TEXT DEFAULT 'free'",
                 'premium_until': "ALTER TABLE users ADD COLUMN premium_until INTEGER",
+                'premium_expiry_notified_at': "ALTER TABLE users ADD COLUMN premium_expiry_notified_at INTEGER",
+                'premium_overlimit_cleanup_at': "ALTER TABLE users ADD COLUMN premium_overlimit_cleanup_at INTEGER",
                 'last_seen_at': f"ALTER TABLE users ADD COLUMN last_seen_at INTEGER DEFAULT {now_ts}",
             }
             for col_name, alter_sql in user_missing.items():
@@ -240,6 +242,8 @@ def init_db(run_maintenance: bool = True):
             is_premium INTEGER DEFAULT 0,
             access_tier TEXT DEFAULT 'free',
             premium_until INTEGER,
+            premium_expiry_notified_at INTEGER,
+            premium_overlimit_cleanup_at INTEGER,
             last_seen_at INTEGER DEFAULT (strftime('%s', 'now'))
         )
         """)
@@ -498,10 +502,30 @@ def set_user_access(user_id: int, access_tier: str, premium_until: Optional[int]
             "INSERT OR IGNORE INTO users (user_id, language, access_tier, premium_until) VALUES (?, ?, ?, ?)",
             (safe_user_id, "ru", safe_tier, safe_until),
         )
-        cur.execute(
-            "UPDATE users SET access_tier = ?, premium_until = ? WHERE user_id = ?",
-            (safe_tier, safe_until, safe_user_id),
-        )
+        if safe_tier == "premium":
+            cur.execute(
+                """
+                UPDATE users
+                SET access_tier = ?,
+                    premium_until = ?,
+                    premium_expiry_notified_at = NULL,
+                    premium_overlimit_cleanup_at = NULL
+                WHERE user_id = ?
+                """,
+                (safe_tier, safe_until, safe_user_id),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE users
+                SET access_tier = ?,
+                    premium_until = NULL,
+                    premium_expiry_notified_at = NULL,
+                    premium_overlimit_cleanup_at = NULL
+                WHERE user_id = ?
+                """,
+                (safe_tier, safe_user_id),
+            )
 
     logger.info(
         "Updated user access user=%s access_tier=%s premium_until=%s",
@@ -518,6 +542,125 @@ def grant_user_premium(user_id: int, premium_until: Optional[int] = None) -> Dic
 def revoke_user_premium(user_id: int) -> Dict[str, Any]:
     """Return a user to the internal free tier."""
     return set_user_access(user_id, "free", premium_until=None)
+
+
+def get_expired_premium_overlimit_users(now_ts: int, free_limit: int, grace_days: int) -> List[Dict[str, Any]]:
+    """Return expired premium users who still have more products than the free limit."""
+    safe_now = int(now_ts)
+    safe_limit = max(0, int(free_limit))
+    grace_seconds = max(0, int(grace_days)) * 86400
+
+    with DatabaseConnection() as conn:
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                """
+                SELECT
+                    u.user_id,
+                    u.premium_until,
+                    u.premium_expiry_notified_at,
+                    u.premium_overlimit_cleanup_at,
+                    COUNT(s.id) AS subscription_count
+                FROM users u
+                JOIN subscriptions s ON s.user_id = u.user_id
+                WHERE u.access_tier = 'premium'
+                  AND u.premium_until IS NOT NULL
+                  AND u.premium_until <= ?
+                GROUP BY u.user_id
+                HAVING subscription_count > ?
+                """,
+                (safe_now, safe_limit),
+            ).fetchall()
+        finally:
+            conn.row_factory = None
+
+    result: List[Dict[str, Any]] = []
+    for row in rows:
+        data = dict(row)
+        premium_until = int(data.get("premium_until") or 0)
+        data["cleanup_due_at"] = premium_until + grace_seconds
+        data["cleanup_due"] = safe_now >= data["cleanup_due_at"]
+        result.append(data)
+    return result
+
+
+def mark_premium_expiry_notified(user_id: int, ts: Optional[int] = None) -> None:
+    """Mark that the user was warned about over-limit products after premium expiry."""
+    with DatabaseConnection() as conn:
+        conn.execute(
+            "UPDATE users SET premium_expiry_notified_at = ? WHERE user_id = ?",
+            (int(ts or time.time()), int(user_id)),
+        )
+
+
+def cleanup_user_overlimit_subscriptions(
+    user_id: int,
+    keep_limit: int,
+    *,
+    ts: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Keep the first N subscriptions in public order and delete the rest with history."""
+    safe_user_id = int(user_id)
+    safe_keep_limit = max(0, int(keep_limit))
+    cleanup_ts = int(ts or time.time())
+
+    with DatabaseConnection() as conn:
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        try:
+            rows = cur.execute(
+                """
+                SELECT id, url, product_title
+                FROM subscriptions
+                WHERE user_id = ?
+                ORDER BY id DESC
+                """,
+                (safe_user_id,),
+            ).fetchall()
+        finally:
+            conn.row_factory = None
+
+        all_subs = [dict(row) for row in rows]
+        kept = all_subs[:safe_keep_limit]
+        deleted = all_subs[safe_keep_limit:]
+        deleted_ids = [int(item["id"]) for item in deleted]
+
+        deleted_history = 0
+        if deleted_ids:
+            placeholders = ",".join("?" for _ in deleted_ids)
+            cur.execute(
+                f"DELETE FROM price_history WHERE subscription_id IN ({placeholders})",
+                deleted_ids,
+            )
+            deleted_history = max(cur.rowcount, 0)
+            cur.execute(
+                f"DELETE FROM subscriptions WHERE id IN ({placeholders})",
+                deleted_ids,
+            )
+
+        cur.execute(
+            """
+            UPDATE users
+            SET access_tier = 'free',
+                premium_until = NULL,
+                premium_overlimit_cleanup_at = ?
+            WHERE user_id = ?
+            """,
+            (cleanup_ts, safe_user_id),
+        )
+
+    logger.info(
+        "Premium over-limit cleanup user=%s kept=%s deleted=%s history=%s",
+        safe_user_id,
+        len(kept),
+        len(deleted),
+        deleted_history,
+    )
+    return {
+        "kept": kept,
+        "deleted": deleted,
+        "deleted_history": deleted_history,
+    }
 
 def set_user_language(user_id: int, language: str) -> None:
     with DatabaseConnection() as conn:
