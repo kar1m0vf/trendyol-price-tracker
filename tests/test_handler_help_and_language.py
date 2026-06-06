@@ -152,7 +152,7 @@ async def test_basic_premium_shows_status_and_limits(monkeypatch):
             "premium_usage_limited": "USAGE {count}/{limit}",
             "premium_next_step_request": "REQUEST_NEXT_STEP",
             "premium_text": (
-                "TEXT {status} {usage} {free_limit} {premium_limit} {next_step}"
+                "TEXT {status} {usage} {free_limit} {premium_limit} {grace_days} {next_step}"
             ),
             "error_generic": "ERROR",
         }
@@ -173,6 +173,7 @@ async def test_basic_premium_shows_status_and_limits(monkeypatch):
     monkeypatch.setattr(basic_module, "get_user_subscriptions", lambda _user_id: [1, 2, 3])
     monkeypatch.setattr(basic_module, "MAX_SUBSCRIPTIONS_PER_USER", 15)
     monkeypatch.setattr(basic_module, "PREMIUM_MAX_SUBSCRIPTIONS_PER_USER", 100)
+    monkeypatch.setattr(basic_module, "PREMIUM_EXPIRY_GRACE_DAYS", 7)
     monkeypatch.setattr(basic_module, "get_premium_inline_kb", premium_kb)
 
     message = SimpleNamespace(
@@ -184,7 +185,7 @@ async def test_basic_premium_shows_status_and_limits(monkeypatch):
     await handler.handle_premium(message)
 
     message.answer.assert_awaited_once_with(
-        "TEXT FREE_STATUS USAGE 3/15 15 100 REQUEST_NEXT_STEP",
+        "TEXT FREE_STATUS USAGE 3/15 15 100 7 REQUEST_NEXT_STEP",
         reply_markup="PREMIUM_KB",
         parse_mode="HTML",
         disable_web_page_preview=True,
@@ -358,6 +359,97 @@ async def test_callback_premium_request_starts_report_state(monkeypatch):
     cq.message.answer.assert_awaited_once_with(
         "PREMIUM_REQUEST_PROMPT",
         parse_mode="HTML",
+    )
+
+
+@pytest.mark.asyncio
+async def test_callback_premium_plan_shows_payment_notice():
+    handler = CallbackHandler()
+
+    def fake_t(_uid, key, **kwargs):
+        values = {
+            "btn_premium_90": "PLAN_90",
+            "btn_request_premium": "REQUEST_PREMIUM",
+            "btn_support": "SUPPORT",
+            "premium_payment_soon": "PAYMENT_SOON {title}",
+            "error_generic": "ERROR",
+        }
+        return values[key].format(**kwargs)
+
+    handler.t = fake_t
+
+    cq = SimpleNamespace(
+        data="premium:plan:90",
+        from_user=SimpleNamespace(id=42),
+        answer=AsyncMock(),
+        message=SimpleNamespace(answer=AsyncMock()),
+    )
+
+    await handler.handle_main_callback(cq)
+
+    cq.answer.assert_awaited_once()
+    cq.message.answer.assert_awaited_once()
+    args, kwargs = cq.message.answer.await_args
+    assert args[0] == "PAYMENT_SOON PLAN_90"
+    assert kwargs["parse_mode"] == "HTML"
+    assert [
+        row[0].callback_data
+        for row in kwargs["reply_markup"].inline_keyboard
+    ] == ["premium:request", "premium:support"]
+
+
+@pytest.mark.asyncio
+async def test_callback_premium_donate_shows_donate_notice():
+    handler = CallbackHandler()
+    handler.t = lambda _uid, key, **_kwargs: {
+        "btn_request_premium": "REQUEST_PREMIUM",
+        "btn_support": "SUPPORT",
+        "premium_donate_soon": "DONATE_SOON",
+        "error_generic": "ERROR",
+    }[key]
+
+    cq = SimpleNamespace(
+        data="premium:donate",
+        from_user=SimpleNamespace(id=42),
+        answer=AsyncMock(),
+        message=SimpleNamespace(answer=AsyncMock()),
+    )
+
+    await handler.handle_main_callback(cq)
+
+    cq.answer.assert_awaited_once()
+    cq.message.answer.assert_awaited_once()
+    args, kwargs = cq.message.answer.await_args
+    assert args[0] == "DONATE_SOON"
+    assert kwargs["parse_mode"] == "HTML"
+    assert [
+        row[0].callback_data
+        for row in kwargs["reply_markup"].inline_keyboard
+    ] == ["premium:request", "premium:support"]
+
+
+@pytest.mark.asyncio
+async def test_callback_premium_support_sends_support_text():
+    handler = CallbackHandler()
+    handler.t = lambda _uid, key, **_kwargs: {
+        "support_text": "SUPPORT_TEXT",
+        "error_generic": "ERROR",
+    }[key]
+
+    cq = SimpleNamespace(
+        data="premium:support",
+        from_user=SimpleNamespace(id=42),
+        answer=AsyncMock(),
+        message=SimpleNamespace(answer=AsyncMock()),
+    )
+
+    await handler.handle_main_callback(cq)
+
+    cq.answer.assert_awaited_once()
+    cq.message.answer.assert_awaited_once_with(
+        "SUPPORT_TEXT",
+        parse_mode="HTML",
+        disable_web_page_preview=True,
     )
 
 

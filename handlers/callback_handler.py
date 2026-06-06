@@ -73,6 +73,24 @@ class CallbackHandler(BaseHandler):
                 updated = True
         return updated
 
+    def _premium_contact_kb(self, user_id: int) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=self.t(user_id, "btn_request_premium"),
+                        callback_data="premium:request",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text=self.t(user_id, "btn_support"),
+                        callback_data="premium:support",
+                    )
+                ],
+            ]
+        )
+
     async def _send_callback_problem(self, cq: CallbackQuery, user_id: int, text: str = "") -> None:
         """Send a durable error message for callbacks that cannot finish."""
         message_text = text or self.t(user_id, "error_generic")
@@ -204,6 +222,43 @@ class CallbackHandler(BaseHandler):
                 await cq.answer()
                 action_event("USER", "opened subscriptions from button", user=actor_label(cq.from_user))
                 await self._show_subscriptions_overview(cq, user_id)
+                return
+
+            if data.startswith("premium:plan:"):
+                await cq.answer()
+                plan_days = data.rsplit(":", 1)[-1]
+                title_key = {
+                    "30": "btn_premium_30",
+                    "90": "btn_premium_90",
+                    "365": "btn_premium_365",
+                }.get(plan_days, "btn_premium")
+                await cq.message.answer(
+                    self.t(
+                        user_id,
+                        "premium_payment_soon",
+                        title=self.t(user_id, title_key),
+                    ),
+                    reply_markup=self._premium_contact_kb(user_id),
+                    parse_mode="HTML",
+                )
+                return
+
+            if data == "premium:donate":
+                await cq.answer()
+                await cq.message.answer(
+                    self.t(user_id, "premium_donate_soon"),
+                    reply_markup=self._premium_contact_kb(user_id),
+                    parse_mode="HTML",
+                )
+                return
+
+            if data == "premium:support":
+                await cq.answer()
+                await cq.message.answer(
+                    self.t(user_id, "support_text"),
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                )
                 return
 
             if data == "premium:request":

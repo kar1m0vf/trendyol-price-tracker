@@ -143,16 +143,40 @@ def get_fallback_inline_kb(user_id: int) -> InlineKeyboardMarkup:
 
 
 def get_premium_inline_kb(user_id: int, *, is_premium: bool = False) -> InlineKeyboardMarkup:
-    """Return actions for the user-facing premium status screen."""
+    """Return actions for the user-facing premium storefront."""
     keyboard = [
+        [
+            InlineKeyboardButton(
+                text=translate_func(user_id, "btn_premium_30"),
+                callback_data="premium:plan:30",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text=translate_func(user_id, "btn_premium_90"),
+                callback_data="premium:plan:90",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text=translate_func(user_id, "btn_premium_365"),
+                callback_data="premium:plan:365",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text=translate_func(user_id, "btn_donate"),
+                callback_data="premium:donate",
+            )
+        ],
         [
             InlineKeyboardButton(
                 text=translate_func(user_id, "btn_subs"),
                 callback_data="subs:list",
             ),
             InlineKeyboardButton(
-                text=translate_func(user_id, "btn_subscribe"),
-                callback_data="onboarding:add",
+                text=translate_func(user_id, "btn_support"),
+                callback_data="premium:support",
             ),
         ]
     ]

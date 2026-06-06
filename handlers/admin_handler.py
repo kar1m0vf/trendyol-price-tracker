@@ -255,15 +255,15 @@ def _admin_user_premium_text(target_user_id: int) -> str:
 def _admin_user_premium_keyboard(target_user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="7 дней", callback_data=f"admin_user_premium_grant:{target_user_id}:7"),
             InlineKeyboardButton(text="30 дней", callback_data=f"admin_user_premium_grant:{target_user_id}:30"),
+            InlineKeyboardButton(text="90 дней", callback_data=f"admin_user_premium_grant:{target_user_id}:90"),
         ],
         [
-            InlineKeyboardButton(text="90 дней", callback_data=f"admin_user_premium_grant:{target_user_id}:90"),
+            InlineKeyboardButton(text="365 дней", callback_data=f"admin_user_premium_grant:{target_user_id}:365"),
             InlineKeyboardButton(text="Бессрочно", callback_data=f"admin_user_premium_grant:{target_user_id}:forever"),
         ],
         [
-            InlineKeyboardButton(text="Снять premium", callback_data=f"admin_user_premium_revoke:{target_user_id}"),
+            InlineKeyboardButton(text="Снять Premium", callback_data=f"admin_user_premium_revoke:{target_user_id}"),
         ],
         [
             InlineKeyboardButton(text="🔙 К пользователю", callback_data=f"user_details:{target_user_id}"),
@@ -272,17 +272,60 @@ def _admin_user_premium_keyboard(target_user_id: int) -> InlineKeyboardMarkup:
     ])
 
 
+async def _send_user_premium_notice(target_user_id: int, *, premium_until: Optional[int], revoked: bool = False) -> bool:
+    if revoked:
+        text = t(
+            target_user_id,
+            "premium_admin_revoked",
+            limit=MAX_SUBSCRIPTIONS_PER_USER,
+        )
+    elif premium_until:
+        text = t(
+            target_user_id,
+            "premium_admin_granted_until",
+            date=_format_dt(premium_until),
+            limit=PREMIUM_MAX_SUBSCRIPTIONS_PER_USER,
+        )
+    else:
+        text = t(
+            target_user_id,
+            "premium_admin_granted_forever",
+            limit=PREMIUM_MAX_SUBSCRIPTIONS_PER_USER,
+        )
+
+    try:
+        runtime_bot = _get_runtime_bot()
+    except RuntimeError:
+        logger.debug("Runtime bot unavailable; premium notice skipped for user=%s", target_user_id)
+        return False
+
+    try:
+        await runtime_bot.send_message(target_user_id, text, parse_mode="HTML")
+        return True
+    except (TelegramBadRequest, TelegramForbiddenError):
+        logger.warning("Could not deliver premium notice to user=%s", target_user_id, exc_info=True)
+    except Exception:
+        logger.exception("Unexpected premium notice delivery failure user=%s", target_user_id)
+    return False
+
+
 async def admin_user_premium_menu(message: types.Message, target_user_id: int) -> None:
-    await message.edit_text(
-        _admin_user_premium_text(target_user_id),
-        reply_markup=_admin_user_premium_keyboard(target_user_id),
-        parse_mode="HTML",
-    )
+    try:
+        await message.edit_text(
+            _admin_user_premium_text(target_user_id),
+            reply_markup=_admin_user_premium_keyboard(target_user_id),
+            parse_mode="HTML",
+        )
+    except TelegramBadRequest as exc:
+        if _is_message_not_modified_error(exc):
+            return
+        raise
 
 
 async def admin_user_premium_grant(message: types.Message, admin_user, target_user_id: int, days: Optional[int]) -> None:
     premium_until = None if days is None else int(time.time()) + days * 86400
     grant_user_premium(target_user_id, premium_until=premium_until)
+    await _send_user_premium_notice(target_user_id, premium_until=premium_until)
     action_event(
         "ADMIN",
         "granted premium from user profile",
@@ -294,10 +337,21 @@ async def admin_user_premium_grant(message: types.Message, admin_user, target_us
 
 
 async def admin_user_premium_revoke(message: types.Message, admin_user, target_user_id: int) -> None:
-    revoke_user_premium(target_user_id)
+    should_revoke = True
+    try:
+        should_revoke = get_effective_user_access(target_user_id).get("access_tier") == "premium"
+    except Exception:
+        logger.debug("Could not read premium state before revoke user=%s", target_user_id, exc_info=True)
+
+    if should_revoke:
+        revoke_user_premium(target_user_id)
+        await _send_user_premium_notice(target_user_id, premium_until=None, revoked=True)
+    else:
+        logger.debug("Premium revoke skipped for already-free user=%s", target_user_id)
+
     action_event(
         "ADMIN",
-        "revoked premium from user profile",
+        "revoked premium from user profile" if should_revoke else "premium revoke skipped; already free",
         admin=actor_label(admin_user),
         target_user=target_user_id,
     )
@@ -697,6 +751,7 @@ async def admin_premium(message: types.Message, args: List[str]):
             premium_until = int(time.time()) + days * 86400
 
         grant_user_premium(target_user_id, premium_until=premium_until)
+        await _send_user_premium_notice(target_user_id, premium_until=premium_until)
         action_event(
             "ADMIN",
             "granted premium",
@@ -722,10 +777,18 @@ async def admin_premium(message: types.Message, args: List[str]):
             await message.answer("❌ USER_ID должен быть числом.", parse_mode="HTML")
             return
 
-        revoke_user_premium(target_user_id)
+        should_revoke = True
+        try:
+            should_revoke = get_effective_user_access(target_user_id).get("access_tier") == "premium"
+        except Exception:
+            logger.debug("Could not read premium state before command revoke user=%s", target_user_id, exc_info=True)
+
+        if should_revoke:
+            revoke_user_premium(target_user_id)
+            await _send_user_premium_notice(target_user_id, premium_until=None, revoked=True)
         action_event(
             "ADMIN",
-            "revoked premium",
+            "revoked premium" if should_revoke else "premium revoke skipped; already free",
             admin=actor_label(message.from_user),
             target_user=target_user_id,
         )

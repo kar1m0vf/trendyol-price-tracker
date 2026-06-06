@@ -8,7 +8,11 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from access_control import get_effective_user_access, get_subscription_limit_for_user
-from config import MAX_SUBSCRIPTIONS_PER_USER, PREMIUM_MAX_SUBSCRIPTIONS_PER_USER
+from config import (
+    MAX_SUBSCRIPTIONS_PER_USER,
+    PREMIUM_EXPIRY_GRACE_DAYS,
+    PREMIUM_MAX_SUBSCRIPTIONS_PER_USER,
+)
 from database import (
     add_user_if_not_exists,
     delete_user_data,
@@ -176,6 +180,7 @@ class BasicHandler(BaseHandler):
                 usage=usage,
                 free_limit=MAX_SUBSCRIPTIONS_PER_USER,
                 premium_limit=PREMIUM_MAX_SUBSCRIPTIONS_PER_USER,
+                grace_days=PREMIUM_EXPIRY_GRACE_DAYS,
                 next_step=next_step,
             ),
             reply_markup=get_premium_inline_kb(user_id, is_premium=has_premium_capacity),

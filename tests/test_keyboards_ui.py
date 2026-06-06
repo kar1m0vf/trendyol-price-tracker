@@ -123,7 +123,11 @@ def test_fallback_inline_keyboard_points_to_recovery_actions(monkeypatch):
 def test_premium_inline_keyboard_offers_request_for_free_users(monkeypatch):
     labels = {
         "btn_subs": "PRODUCTS",
-        "btn_subscribe": "ADD",
+        "btn_support": "SUPPORT",
+        "btn_premium_30": "P30",
+        "btn_premium_90": "P90",
+        "btn_premium_365": "P365",
+        "btn_donate": "DONATE",
         "btn_request_premium": "REQUEST_PREMIUM",
     }
     monkeypatch.setattr(
@@ -134,18 +138,35 @@ def test_premium_inline_keyboard_offers_request_for_free_users(monkeypatch):
 
     kb = keyboards.get_premium_inline_kb(user_id=101, is_premium=False)
 
-    assert kb.inline_keyboard[0][0].text == "PRODUCTS"
-    assert kb.inline_keyboard[0][0].callback_data == "subs:list"
-    assert kb.inline_keyboard[0][1].text == "ADD"
-    assert kb.inline_keyboard[0][1].callback_data == "onboarding:add"
-    assert kb.inline_keyboard[1][0].text == "REQUEST_PREMIUM"
-    assert kb.inline_keyboard[1][0].callback_data == "premium:request"
+    assert [row[0].text for row in kb.inline_keyboard[:4]] == [
+        "P30",
+        "P90",
+        "P365",
+        "DONATE",
+    ]
+    assert [row[0].callback_data for row in kb.inline_keyboard[:4]] == [
+        "premium:plan:30",
+        "premium:plan:90",
+        "premium:plan:365",
+        "premium:donate",
+    ]
+    assert [button.text for button in kb.inline_keyboard[4]] == ["PRODUCTS", "SUPPORT"]
+    assert [button.callback_data for button in kb.inline_keyboard[4]] == [
+        "subs:list",
+        "premium:support",
+    ]
+    assert kb.inline_keyboard[5][0].text == "REQUEST_PREMIUM"
+    assert kb.inline_keyboard[5][0].callback_data == "premium:request"
 
 
 def test_premium_inline_keyboard_hides_request_for_active_premium(monkeypatch):
     labels = {
         "btn_subs": "PRODUCTS",
-        "btn_subscribe": "ADD",
+        "btn_support": "SUPPORT",
+        "btn_premium_30": "P30",
+        "btn_premium_90": "P90",
+        "btn_premium_365": "P365",
+        "btn_donate": "DONATE",
     }
     monkeypatch.setattr(
         keyboards,
@@ -155,10 +176,18 @@ def test_premium_inline_keyboard_hides_request_for_active_premium(monkeypatch):
 
     kb = keyboards.get_premium_inline_kb(user_id=101, is_premium=True)
 
-    assert len(kb.inline_keyboard) == 1
-    assert [button.callback_data for button in kb.inline_keyboard[0]] == [
+    callbacks = [
+        button.callback_data
+        for row in kb.inline_keyboard
+        for button in row
+    ]
+    assert callbacks == [
+        "premium:plan:30",
+        "premium:plan:90",
+        "premium:plan:365",
+        "premium:donate",
         "subs:list",
-        "onboarding:add",
+        "premium:support",
     ]
 
 
