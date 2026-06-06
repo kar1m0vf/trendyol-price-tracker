@@ -64,6 +64,29 @@ def test_trending_results_keyboard_uses_url_buttons():
     assert "trend:catmenu" in callback_values
 
 
+def test_trending_ui_shows_up_to_five_products():
+    from bot import format_trending_items, trending_results_kb
+
+    items = [
+        (f"Product {index}", 1000.0 + index, f"https://trendyol.com/product-{index}-p-{index}")
+        for index in range(1, 7)
+    ]
+
+    text = format_trending_items(12345, items)
+    keyboard = trending_results_kb(12345, items)
+    product_urls = [
+        button.url
+        for row in keyboard.inline_keyboard
+        for button in row
+        if getattr(button, "url", None)
+    ]
+
+    assert "5. <b>Product 5</b>" in text
+    assert "6. <b>Product 6</b>" not in text
+    assert "https://trendyol.com/product-5-p-5" in product_urls
+    assert "https://trendyol.com/product-6-p-6" not in product_urls
+
+
 def test_trending_fallback_does_not_return_fake_product_urls():
     from scraper import TRENDING_CACHE, get_trending_all_top3, get_trending_by_category_top3, get_trending_by_search_top3
 

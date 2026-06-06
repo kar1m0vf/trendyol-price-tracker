@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
                              
 from scraper import (
     TRENDING_CACHE,
+    TRENDING_TOP_LIMIT,
     clean_trending_title,
     get_trending_all_top3,
     get_trending_by_search_top3,
@@ -179,6 +180,18 @@ def test_get_trending_listing_fills_missing_prices_from_product_page():
         ("Second Product", 200.0, "https://www.trendyol.com/brand/second-p-222"),
     ]
     get_price_mock.assert_called_once_with("https://www.trendyol.com/brand/first-p-111")
+
+
+def test_trending_entrypoints_request_default_top_limit():
+    item = ("Product", 100.0, "https://www.trendyol.com/brand/product-p-1")
+
+    with patch("scraper._get_trending_listing", return_value=[item]) as get_listing:
+        assert get_trending_all_top3() == [item]
+        assert get_trending_by_search_top3("iphone") == [item]
+        assert get_trending_by_category_top3("electronics") == [item]
+
+    limits = [call.kwargs["limit"] for call in get_listing.call_args_list]
+    assert limits == [TRENDING_TOP_LIMIT, TRENDING_TOP_LIMIT, TRENDING_TOP_LIMIT]
 
 
 def test_get_trending_all_top3():

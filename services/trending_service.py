@@ -11,6 +11,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from localization import t
 
 TrendItem = Tuple[str, Optional[float], str]
+TRENDING_ITEMS_LIMIT = 5
 
 TREND_SEARCH_AWAIT: Set[int] = set()
 TRENDING_RESULT_CACHE_TTL_SECONDS = 10 * 60
@@ -132,7 +133,7 @@ def trending_categories_kb(user_id: int) -> InlineKeyboardMarkup:
 
 def format_trending_items(user_id: int, items: List[TrendItem]) -> str:
     lines = []
-    for index, (title, price, url) in enumerate(items[:3], start=1):
+    for index, (title, price, url) in enumerate(items[:TRENDING_ITEMS_LIMIT], start=1):
         safe_title = html.escape(_short_title(title, url, limit=96), quote=False)
         price_str = html.escape(_format_price_for_user(user_id, price), quote=False)
         lines.append(
@@ -149,7 +150,7 @@ def trending_results_kb(
     refresh_callback: str = "trend:all",
 ) -> InlineKeyboardMarkup:
     rows = []
-    for index, (title, _price, url) in enumerate(items[:3], start=1):
+    for index, (title, _price, url) in enumerate(items[:TRENDING_ITEMS_LIMIT], start=1):
         safe_url = (url or "").strip()
         if not safe_url.startswith("http"):
             continue
