@@ -127,13 +127,24 @@ def test_delete_user_data_removes_profile_subscriptions_and_history(temp_db_path
         "https://www.trendyol.com/keep-me-p-3",
         product_title="Keep me",
     )
+    database.create_payment_event(
+        user_id,
+        plan_id="premium_30",
+        kind="premium",
+        provider="test",
+    )
     database.add_price_point(first_id, "https://www.trendyol.com/delete-me-a-p-1", 100.0, 1000)
     database.add_price_point(second_id, "https://www.trendyol.com/delete-me-b-p-2", 200.0, 2000)
     database.add_price_point(other_id, "https://www.trendyol.com/keep-me-p-3", 300.0, 3000)
 
     deleted = database.delete_user_data(user_id)
 
-    assert deleted == {"users": 1, "subscriptions": 2, "price_history": 2}
+    assert deleted == {
+        "users": 1,
+        "subscriptions": 2,
+        "price_history": 2,
+        "payment_events": 1,
+    }
     assert database.get_user_profile(user_id) is None
     assert database.get_user_subscriptions(user_id) == []
     assert database.get_price_history(first_id) == []
@@ -141,6 +152,7 @@ def test_delete_user_data_removes_profile_subscriptions_and_history(temp_db_path
     assert database.get_user_profile(other_user_id) is not None
     assert len(database.get_user_subscriptions(other_user_id)) == 1
     assert len(database.get_price_history(other_id)) == 1
+    assert database.get_user_payment_events(user_id) == []
 
 
 def test_user_access_grant_and_revoke_premium(temp_db_path):
@@ -163,6 +175,48 @@ def test_user_access_grant_and_revoke_premium(temp_db_path):
         "access_tier": "free",
         "premium_until": None,
     }
+
+
+def test_payment_event_lifecycle(temp_db_path):
+    user_id = 12345
+
+    event = database.create_payment_event(
+        user_id,
+        plan_id="premium_30",
+        kind="premium",
+        provider="telegram_stars",
+        amount=100,
+        currency="XTR",
+        premium_days=30,
+        payload={"source": "unit"},
+        ts=1000,
+    )
+
+    assert event["id"] > 0
+    assert event["status"] == "pending"
+    assert event["payload"] == {"source": "unit"}
+    assert database.get_user_payment_events(user_id)[0]["id"] == event["id"]
+
+    paid = database.mark_payment_event_paid(
+        event["id"],
+        provider_payment_id="telegram-charge-1",
+        payload={"source": "paid"},
+        ts=1100,
+    )
+
+    assert paid["status"] == "paid"
+    assert paid["provider_payment_id"] == "telegram-charge-1"
+    assert paid["paid_at"] == 1100
+    assert paid["payload"] == {"source": "paid"}
+    assert database.get_payment_event_by_provider_payment_id(
+        "telegram_stars",
+        "telegram-charge-1",
+    )["id"] == event["id"]
+
+    applied = database.mark_payment_event_applied(event["id"], ts=1200)
+
+    assert applied["status"] == "paid"
+    assert applied["applied_at"] == 1200
 
 
 def test_cleanup_user_overlimit_subscriptions_keeps_public_first_products(temp_db_path):

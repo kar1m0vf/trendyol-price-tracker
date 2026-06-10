@@ -53,6 +53,7 @@ Read the full product flow in [User Guide](docs/guides/USER_GUIDE.md).
 - Group multiple price updates into one notification when needed.
 - Support internal free/premium access tiers with different product limits.
 - Show users their current access tier, product usage, premium expiry, and request path through `/premium`.
+- Prepare premium plans, donation intent, and payment-event tracking for a future Telegram Stars integration.
 
 ### Price Intelligence
 
@@ -93,7 +94,7 @@ Read the full product flow in [User Guide](docs/guides/USER_GUIDE.md).
 | --- | --- |
 | Telegram runtime | aiogram 3 router/dispatcher stack with package-based handlers |
 | UX state | Inline callbacks, reply keyboards, in-place product cards, user-facing numbering |
-| Persistence | SQLite schema, migrations, indexes, price history, recommendations, custom texts, access tiers |
+| Persistence | SQLite schema, migrations, indexes, price history, recommendations, custom texts, access tiers, payment events |
 | Scheduler | APScheduler jobs for price checks and daily backups |
 | Concurrency | Scheduler lock, task batching, network fetch semaphore, grouped notifications |
 | Notifications | Safe send helpers, image fallback, grouped updates, chart delivery |
@@ -167,6 +168,7 @@ bot.py runtime helpers
     +--> database.py
     +--> private Trendyol scraper module
     +--> services/notification_service.py
+    +--> services/payment_service.py
     +--> localization.py / locales/
     |
     v
@@ -180,6 +182,7 @@ Key paths:
 - `database.py` - SQLite schema, migrations, subscriptions, price history, recommendations, backups.
 - Private Trendyol scraper module - owner runtime dependency for product extraction, trends, and history helpers. The implementation is not distributed in the public portfolio source.
 - `services/notification_service.py` - notifications and charts.
+- `services/payment_service.py` - internal premium/donation plan model and payment-event application layer for future Telegram Stars integration.
 - `locales/` - translation files.
 - `tools/diagnostics/deploy_smoke_check.py` - deploy smoke validation.
 - `tests/` - behavioral and unit tests.
@@ -192,7 +195,7 @@ Key paths:
 - The production Trendyol scraper is not part of the public source.
 - `trendyol_bot.db`, `logs/`, `backups/`, and production configuration are runtime artifacts and are not part of the public source.
 - User export payloads are generated for direct delivery and should not be committed if saved manually.
-- Users can request deletion of their bot profile, subscriptions, and related local price history through `/delete_me`.
+- Users can request deletion of their bot profile, subscriptions, payment events, and related local price history through `/delete_me`.
 - If a Telegram bot token is ever exposed, it must be revoked and regenerated through `@BotFather`.
 
 ## Verification
@@ -209,7 +212,7 @@ The project includes checks for:
 - scraper parsing helpers;
 - notification flow.
 
-Latest recorded owner-runtime verification: `286 passed, 3 skipped`. The public portfolio source does not include every private runtime asset required to run the production bot.
+Latest recorded owner-runtime verification: `293 passed, 3 skipped`. The public portfolio source does not include every private runtime asset required to run the production bot.
 
 ## Documentation
 

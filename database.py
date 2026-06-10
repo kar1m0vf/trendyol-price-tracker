@@ -3,6 +3,7 @@ import time
 import logging
 import threading
 import os
+import json
 from typing import List, Tuple, Optional, Dict, Any, Iterator
 from datetime import datetime
 
@@ -379,6 +380,40 @@ def init_db(run_maintenance: bool = True):
         )
         """)
 
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS payment_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            plan_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            provider TEXT NOT NULL DEFAULT 'internal',
+            provider_payment_id TEXT,
+            amount INTEGER,
+            currency TEXT,
+            premium_days INTEGER,
+            payload TEXT,
+            created_at INTEGER DEFAULT (CAST(strftime('%s', 'now') AS INTEGER)),
+            updated_at INTEGER DEFAULT (CAST(strftime('%s', 'now') AS INTEGER)),
+            paid_at INTEGER,
+            applied_at INTEGER,
+            FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
+        )
+        """)
+        cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_payment_events_user_created
+        ON payment_events(user_id, created_at DESC)
+        """)
+        cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_payment_events_status
+        ON payment_events(status, updated_at DESC)
+        """)
+        cur.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_events_provider_payment_id
+        ON payment_events(provider, provider_payment_id)
+        WHERE provider_payment_id IS NOT NULL
+        """)
+
                                                                    
         try:
                                                                   
@@ -542,6 +577,222 @@ def grant_user_premium(user_id: int, premium_until: Optional[int] = None) -> Dic
 def revoke_user_premium(user_id: int) -> Dict[str, Any]:
     """Return a user to the internal free tier."""
     return set_user_access(user_id, "free", premium_until=None)
+
+
+PAYMENT_EVENT_STATUSES = {"pending", "paid", "failed", "refunded"}
+PAYMENT_EVENT_KINDS = {"premium", "donation"}
+
+
+def _normalize_payment_payload(payload: Optional[Any]) -> Optional[str]:
+    if payload is None:
+        return None
+    if isinstance(payload, str):
+        return payload
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _payment_event_from_row(row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    data = dict(row)
+    payload = data.get("payload")
+    if payload:
+        try:
+            data["payload"] = json.loads(payload)
+        except (TypeError, ValueError):
+            pass
+    return data
+
+
+def create_payment_event(
+    user_id: int,
+    *,
+    plan_id: str,
+    kind: str,
+    status: str = "pending",
+    provider: str = "internal",
+    provider_payment_id: Optional[str] = None,
+    amount: Optional[int] = None,
+    currency: Optional[str] = None,
+    premium_days: Optional[int] = None,
+    payload: Optional[Any] = None,
+    ts: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Create an internal payment event without contacting any payment provider."""
+    safe_user_id = int(user_id)
+    safe_status = str(status or "pending").lower()
+    safe_kind = str(kind or "").lower()
+    if safe_status not in PAYMENT_EVENT_STATUSES:
+        raise ValueError(f"payment status must be one of {sorted(PAYMENT_EVENT_STATUSES)}")
+    if safe_kind not in PAYMENT_EVENT_KINDS:
+        raise ValueError(f"payment kind must be one of {sorted(PAYMENT_EVENT_KINDS)}")
+
+    now_ts = int(ts or time.time())
+    add_user_if_not_exists(safe_user_id)
+    with DatabaseConnection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO payment_events (
+                user_id, plan_id, kind, status, provider, provider_payment_id,
+                amount, currency, premium_days, payload, created_at, updated_at,
+                paid_at, applied_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            """,
+            (
+                safe_user_id,
+                str(plan_id),
+                safe_kind,
+                safe_status,
+                str(provider or "internal"),
+                provider_payment_id,
+                int(amount) if amount is not None else None,
+                currency,
+                int(premium_days) if premium_days is not None else None,
+                _normalize_payment_payload(payload),
+                now_ts,
+                now_ts,
+                now_ts if safe_status == "paid" else None,
+            ),
+        )
+        event_id = int(cur.lastrowid)
+
+    event = get_payment_event(event_id)
+    if event is None:
+        raise RuntimeError("Payment event was created but could not be loaded")
+    return event
+
+
+def get_payment_event(event_id: int) -> Optional[Dict[str, Any]]:
+    with DatabaseConnection() as conn:
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT * FROM payment_events WHERE id = ?",
+                (int(event_id),),
+            ).fetchone()
+        finally:
+            conn.row_factory = None
+    return _payment_event_from_row(row)
+
+
+def get_payment_event_by_provider_payment_id(
+    provider: str,
+    provider_payment_id: str,
+) -> Optional[Dict[str, Any]]:
+    with DatabaseConnection() as conn:
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                """
+                SELECT * FROM payment_events
+                WHERE provider = ? AND provider_payment_id = ?
+                """,
+                (str(provider or "internal"), str(provider_payment_id)),
+            ).fetchone()
+        finally:
+            conn.row_factory = None
+    return _payment_event_from_row(row)
+
+
+def update_payment_event_status(
+    event_id: int,
+    status: str,
+    *,
+    provider_payment_id: Optional[str] = None,
+    payload: Optional[Any] = None,
+    paid_at: Optional[int] = None,
+    applied_at: Optional[int] = None,
+    ts: Optional[int] = None,
+) -> Dict[str, Any]:
+    safe_status = str(status or "").lower()
+    if safe_status not in PAYMENT_EVENT_STATUSES:
+        raise ValueError(f"payment status must be one of {sorted(PAYMENT_EVENT_STATUSES)}")
+
+    now_ts = int(ts or time.time())
+    current = get_payment_event(event_id)
+    if current is None:
+        raise ValueError(f"Payment event {event_id} not found")
+
+    next_paid_at = paid_at
+    if next_paid_at is None and safe_status == "paid":
+        next_paid_at = current.get("paid_at") or now_ts
+
+    with DatabaseConnection() as conn:
+        conn.execute(
+            """
+            UPDATE payment_events
+            SET status = ?,
+                provider_payment_id = COALESCE(?, provider_payment_id),
+                payload = COALESCE(?, payload),
+                paid_at = COALESCE(?, paid_at),
+                applied_at = COALESCE(?, applied_at),
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                safe_status,
+                provider_payment_id,
+                _normalize_payment_payload(payload),
+                next_paid_at,
+                applied_at,
+                now_ts,
+                int(event_id),
+            ),
+        )
+
+    updated = get_payment_event(event_id)
+    if updated is None:
+        raise RuntimeError("Payment event disappeared after update")
+    return updated
+
+
+def mark_payment_event_paid(
+    event_id: int,
+    *,
+    provider_payment_id: Optional[str] = None,
+    payload: Optional[Any] = None,
+    ts: Optional[int] = None,
+) -> Dict[str, Any]:
+    paid_ts = int(ts or time.time())
+    return update_payment_event_status(
+        event_id,
+        "paid",
+        provider_payment_id=provider_payment_id,
+        payload=payload,
+        paid_at=paid_ts,
+        ts=paid_ts,
+    )
+
+
+def mark_payment_event_applied(event_id: int, *, ts: Optional[int] = None) -> Dict[str, Any]:
+    applied_ts = int(ts or time.time())
+    return update_payment_event_status(
+        event_id,
+        "paid",
+        applied_at=applied_ts,
+        ts=applied_ts,
+    )
+
+
+def get_user_payment_events(user_id: int, *, limit: int = 20) -> List[Dict[str, Any]]:
+    safe_limit = max(1, min(int(limit or 20), 100))
+    with DatabaseConnection() as conn:
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                """
+                SELECT * FROM payment_events
+                WHERE user_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (int(user_id), safe_limit),
+            ).fetchall()
+        finally:
+            conn.row_factory = None
+    return [_payment_event_from_row(row) for row in rows if row is not None]
 
 
 def get_expired_premium_overlimit_users(now_ts: int, free_limit: int, grace_days: int) -> List[Dict[str, Any]]:
@@ -817,20 +1068,25 @@ def delete_user_data(user_id: int) -> Dict[str, int]:
         cur.execute("DELETE FROM subscriptions WHERE user_id = ?", (safe_user_id,))
         deleted_subscriptions = max(cur.rowcount, 0)
 
+        cur.execute("DELETE FROM payment_events WHERE user_id = ?", (safe_user_id,))
+        deleted_payment_events = max(cur.rowcount, 0)
+
         cur.execute("DELETE FROM users WHERE user_id = ?", (safe_user_id,))
         deleted_users = max(cur.rowcount, 0)
 
     logger.info(
-        "Deleted user data user=%s users=%s subscriptions=%s price_history=%s",
+        "Deleted user data user=%s users=%s subscriptions=%s price_history=%s payment_events=%s",
         safe_user_id,
         deleted_users,
         deleted_subscriptions,
         deleted_history,
+        deleted_payment_events,
     )
     return {
         "users": deleted_users,
         "subscriptions": deleted_subscriptions,
         "price_history": deleted_history,
+        "payment_events": deleted_payment_events,
     }
 
 def get_user_subscriptions(user_id: int) -> List[Tuple]:

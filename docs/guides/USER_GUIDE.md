@@ -67,6 +67,9 @@ Command:
 The bot shows the user's current access tier, product usage, product limit, and
 premium expiry when applicable. Free users can tap `Request Premium` from that
 screen to send a request to the administrator through the existing report flow.
+Premium plan and donation buttons may also be shown as a future payment entry
+point. Until payments are enabled, those buttons only explain that payment is
+coming soon and point the user back to the manual admin request flow.
 
 When Premium expires, the account returns to the Free product limit. If the user
 has more products than the Free limit, the bot gives a 7-day cleanup period and

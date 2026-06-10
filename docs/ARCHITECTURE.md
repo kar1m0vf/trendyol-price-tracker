@@ -27,6 +27,7 @@ runtime helpers in bot.py
     +--> database.py
     +--> private Trendyol scraper module
     +--> services/notification_service.py
+    +--> services/payment_service.py
     +--> localization.py / locales/
     |
     v
@@ -70,6 +71,7 @@ Some command helpers still live in `bot.py` while the handler package migration 
 - price history;
 - recommendations;
 - custom bot texts;
+- payment events for future Telegram Stars premium and donation flows;
 - direct CSV/JSON export payloads;
 - SQLite backup API usage.
 
@@ -82,8 +84,24 @@ Main tables:
 | `price_history` | Price time series for tracked products |
 | `recommended_products` | Admin-managed recommendation catalog |
 | `bot_texts` | Custom copy controlled by admin flows |
+| `payment_events` | Internal ledger for pending/paid/failed/refunded premium or donation payment events |
 
 Indexes are focused on common runtime queries: subscriptions by user, price history by subscription/time, price history by URL/time, and notification scheduling.
+
+## Payment And Premium Layer
+
+`services/payment_service.py` defines the internal payment model. It does not create real Telegram invoices yet.
+
+Current responsibilities:
+
+- keep premium and donation plan definitions in one place;
+- create pending payment events;
+- mark payment events as paid, failed, or refunded through database helpers;
+- apply a successful premium payment exactly once;
+- extend an active premium period from the current expiry date instead of overwriting remaining paid time;
+- keep donation payment events separate from premium access grants.
+
+The future Telegram Stars integration should call this service after Telegram confirms a successful payment. Admin-granted premium remains available through `handlers/admin_handler.py` and uses the same internal access tier fields.
 
 ## Scraper Layer
 
@@ -116,6 +134,7 @@ The runtime uses `AsyncIOScheduler`.
 | --- | --- |
 | `check_all_interval` | Check active subscriptions and notify users |
 | `db_backup_daily` | Create a daily SQLite backup |
+| `premium_expiry_cleanup_daily` | Warn expired premium users above the Free limit and clean up after the grace period |
 
 The price checker uses:
 
