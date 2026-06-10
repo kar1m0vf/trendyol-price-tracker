@@ -73,6 +73,7 @@ artifacts/
 # Private owner docs
 docs/guides/OPERATIONS.md
 docs/guides/DEPLOYMENT.md
+docs/guides/PAYMENT_SMOKE_CHECKLIST.md
 docs/private/
 deploy/
 
