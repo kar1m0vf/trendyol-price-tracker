@@ -8,9 +8,26 @@ from typing import Any, Optional
 
 from aiogram import types
 
-from config import ADMIN_IDS, PREMIUM_MAX_SUBSCRIPTIONS_PER_USER, TELEGRAM_STARS_CURRENCY
+from aiogram.types import LabeledPrice
+
+from config import (
+    ADMIN_IDS,
+    PREMIUM_MAX_SUBSCRIPTIONS_PER_USER,
+    TELEGRAM_STARS_CURRENCY,
+    TELEGRAM_STARS_PROVIDER_TOKEN,
+)
 import database
-from services.payment_service import PaymentKind, PaymentStatus, apply_successful_payment, get_payment_plan
+from services.payment_service import (
+    DONATION_QUICK_AMOUNTS,
+    MAX_DONATION_STARS,
+    MIN_DONATION_STARS,
+    PaymentKind,
+    PaymentStatus,
+    apply_successful_payment,
+    create_pending_payment_event,
+    get_payment_plan,
+    normalize_donation_amount,
+)
 
 from .base import BaseHandler
 
@@ -18,6 +35,27 @@ from .base import BaseHandler
 logger = logging.getLogger(__name__)
 
 PAYMENT_PAYLOAD_PREFIX = "payment_event:"
+DONATION_AMOUNT_STATE: dict[int, int] = {}
+DONATION_AMOUNT_TTL_SECONDS = 15 * 60
+
+
+def start_donation_amount_entry(user_id: int) -> None:
+    DONATION_AMOUNT_STATE[int(user_id)] = int(datetime.now().timestamp())
+
+
+def clear_donation_amount_entry(user_id: int) -> None:
+    DONATION_AMOUNT_STATE.pop(int(user_id), None)
+
+
+def is_waiting_for_donation_amount(user_id: int) -> bool:
+    safe_user_id = int(user_id)
+    started_at = DONATION_AMOUNT_STATE.get(safe_user_id)
+    if started_at is None:
+        return False
+    if int(datetime.now().timestamp()) - int(started_at) > DONATION_AMOUNT_TTL_SECONDS:
+        clear_donation_amount_entry(safe_user_id)
+        return False
+    return True
 
 
 def build_payment_payload(event_id: int) -> str:
@@ -57,12 +95,119 @@ def _short_payment_value(value: Any, limit: int = 120) -> str:
     return text[: max(0, limit - 3)].rstrip() + "..."
 
 
+def _expected_event_amount_and_currency(event: dict, plan) -> tuple[int, str]:
+    amount = event.get("amount")
+    currency = event.get("currency")
+    expected_amount = int(amount if amount is not None else (plan.amount or 0))
+    expected_currency = str(currency or plan.currency or TELEGRAM_STARS_CURRENCY)
+    return expected_amount, expected_currency
+
+
 class PaymentHandler(BaseHandler):
     """Handle Telegram payment lifecycle events."""
 
     @staticmethod
+    def donation_quick_amounts() -> tuple[int, ...]:
+        return DONATION_QUICK_AMOUNTS
+
+    @staticmethod
     def _has_successful_payment(message: types.Message) -> bool:
         return getattr(message, "successful_payment", None) is not None
+
+    @staticmethod
+    def _is_waiting_donation_amount(message: types.Message) -> bool:
+        if not getattr(message, "from_user", None):
+            return False
+        text = getattr(message, "text", None)
+        if not text or text.strip().startswith("/"):
+            return False
+        return is_waiting_for_donation_amount(int(message.from_user.id))
+
+    async def _send_donation_invoice(self, message: types.Message, user_id: int, amount: int, *, source: str) -> None:
+        try:
+            safe_amount = normalize_donation_amount(amount)
+        except ValueError:
+            await message.answer(
+                self.t(
+                    user_id,
+                    "donation_custom_amount_invalid",
+                    min=MIN_DONATION_STARS,
+                    max=MAX_DONATION_STARS,
+                ),
+                parse_mode="HTML",
+            )
+            return
+
+        title = self.t(user_id, "btn_donate")
+        description = self.t(
+            user_id,
+            "payment_invoice_description_donation",
+            title=title,
+            days=0,
+            stars=safe_amount,
+        )
+        event = create_pending_payment_event(
+            user_id,
+            "donation",
+            provider="telegram_stars",
+            amount=safe_amount,
+            payload={
+                "source": source,
+                "telegram_invoice": True,
+                "donation_amount": safe_amount,
+            },
+        )
+        invoice_kwargs = {
+            "title": title,
+            "description": description,
+            "payload": build_payment_payload(event["id"]),
+            "provider_token": TELEGRAM_STARS_PROVIDER_TOKEN,
+            "currency": TELEGRAM_STARS_CURRENCY,
+            "prices": [LabeledPrice(label=title, amount=safe_amount)],
+        }
+        try:
+            answer_invoice = getattr(message, "answer_invoice", None)
+            if callable(answer_invoice):
+                await answer_invoice(**invoice_kwargs)
+            else:
+                bot = getattr(message, "bot", None) or self.bot
+                await bot.send_invoice(chat_id=user_id, **invoice_kwargs)
+        except Exception as exc:
+            logger.exception(
+                "Failed to send custom donation invoice | user=%s amount=%s event_id=%s",
+                user_id,
+                safe_amount,
+                event["id"],
+            )
+            try:
+                database.update_payment_event_status(
+                    event["id"],
+                    PaymentStatus.FAILED.value,
+                    payload={"invoice_error": str(exc), "source": source, "donation_amount": safe_amount},
+                )
+            except Exception:
+                logger.debug("Failed to mark custom donation invoice event as failed", exc_info=True)
+            await message.answer(self.t(user_id, "payment_invoice_failed"), parse_mode="HTML")
+
+    async def handle_donation_amount_text(self, message: types.Message) -> None:
+        user_id = int(message.from_user.id)
+        raw_amount = (message.text or "").strip()
+        try:
+            amount = normalize_donation_amount(raw_amount)
+        except ValueError:
+            await message.answer(
+                self.t(
+                    user_id,
+                    "donation_custom_amount_invalid",
+                    min=MIN_DONATION_STARS,
+                    max=MAX_DONATION_STARS,
+                ),
+                parse_mode="HTML",
+            )
+            return
+
+        clear_donation_amount_entry(user_id)
+        await self._send_donation_invoice(message, user_id, amount, source="donation_custom_amount_text")
 
     async def _notify_admins_about_payment(self, message: types.Message, result) -> None:
         if not ADMIN_IDS:
@@ -119,8 +264,7 @@ class PaymentHandler(BaseHandler):
             await query.answer(ok=False, error_message=self.t(user_id, "payment_invalid_payload"))
             return
 
-        expected_amount = int(plan.amount or 0)
-        expected_currency = plan.currency or TELEGRAM_STARS_CURRENCY
+        expected_amount, expected_currency = _expected_event_amount_and_currency(event, plan)
         actual_amount = int(getattr(query, "total_amount", 0) or 0)
         actual_currency = str(getattr(query, "currency", "") or "")
         if actual_amount != expected_amount or actual_currency != expected_currency:
@@ -166,8 +310,7 @@ class PaymentHandler(BaseHandler):
 
         actual_amount = int(getattr(successful_payment, "total_amount", 0) or 0)
         actual_currency = str(getattr(successful_payment, "currency", "") or "")
-        expected_amount = int(plan.amount or 0)
-        expected_currency = plan.currency or TELEGRAM_STARS_CURRENCY
+        expected_amount, expected_currency = _expected_event_amount_and_currency(event, plan)
         if actual_amount != expected_amount or actual_currency != expected_currency:
             logger.error(
                 "Successful payment amount mismatch | event_id=%s user=%s expected=%s %s actual=%s %s",
@@ -216,3 +359,4 @@ class PaymentHandler(BaseHandler):
     def register(self, dp) -> None:
         dp.pre_checkout_query.register(self.handle_pre_checkout_query)
         dp.message.register(self.handle_successful_payment, self._has_successful_payment)
+        dp.message.register(self.handle_donation_amount_text, self._is_waiting_donation_amount)

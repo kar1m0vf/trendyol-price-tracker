@@ -8,6 +8,7 @@ from handlers.basic import BasicHandler
 import handlers.basic as basic_module
 from handlers.callback_handler import CallbackHandler
 import handlers.callback_handler as callback_module
+from handlers.payment_handler import clear_donation_amount_entry, is_waiting_for_donation_amount
 
 
 @pytest.mark.asyncio
@@ -365,8 +366,9 @@ async def test_callback_premium_request_starts_report_state(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_callback_premium_plan_shows_payment_notice():
+async def test_callback_premium_plan_shows_payment_notice(monkeypatch):
     handler = CallbackHandler()
+    monkeypatch.setattr(callback_module, "TELEGRAM_STARS_PAYMENTS_ENABLED", False)
 
     def fake_t(_uid, key, **kwargs):
         values = {
@@ -443,8 +445,9 @@ async def test_callback_premium_plan_sends_stars_invoice_when_enabled(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_callback_premium_donate_shows_donate_notice():
+async def test_callback_premium_donate_shows_donate_notice(monkeypatch):
     handler = CallbackHandler()
+    monkeypatch.setattr(callback_module, "TELEGRAM_STARS_PAYMENTS_ENABLED", False)
     handler.t = lambda _uid, key, **_kwargs: {
         "btn_request_premium": "REQUEST_PREMIUM",
         "btn_support": "SUPPORT",
@@ -470,6 +473,105 @@ async def test_callback_premium_donate_shows_donate_notice():
         row[0].callback_data
         for row in kwargs["reply_markup"].inline_keyboard
     ] == ["premium:request", "premium:support"]
+
+
+@pytest.mark.asyncio
+async def test_callback_premium_donate_shows_amount_menu_when_enabled(monkeypatch):
+    handler = CallbackHandler()
+    monkeypatch.setattr(callback_module, "TELEGRAM_STARS_PAYMENTS_ENABLED", True)
+    handler.t = lambda _uid, key, **kwargs: {
+        "donation_choose_amount": "CHOOSE {min} {max}",
+        "btn_donation_custom_amount": "CUSTOM",
+        "btn_cancel": "CANCEL",
+        "error_generic": "ERROR",
+    }[key].format(**kwargs)
+
+    cq = SimpleNamespace(
+        data="premium:donate",
+        from_user=SimpleNamespace(id=42),
+        answer=AsyncMock(),
+        message=SimpleNamespace(answer=AsyncMock()),
+    )
+
+    await handler.handle_main_callback(cq)
+
+    cq.answer.assert_awaited_once()
+    cq.message.answer.assert_awaited_once()
+    args, kwargs = cq.message.answer.await_args
+    assert args[0].startswith("CHOOSE ")
+    callbacks = [
+        button.callback_data
+        for row in kwargs["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert "premium:donate:amount:50" in callbacks
+    assert "premium:donate:amount:500" in callbacks
+    assert "premium:donate:custom" in callbacks
+    assert "premium:donate:cancel" in callbacks
+
+
+@pytest.mark.asyncio
+async def test_callback_premium_donate_quick_amount_sends_invoice(monkeypatch):
+    handler = CallbackHandler()
+    monkeypatch.setattr(callback_module, "TELEGRAM_STARS_PAYMENTS_ENABLED", True)
+    create_event = MagicMock(return_value={"id": 654})
+    monkeypatch.setattr(callback_module, "create_pending_payment_event", create_event)
+
+    def fake_t(_uid, key, **kwargs):
+        values = {
+            "btn_donate": "DONATE",
+            "payment_invoice_description_donation": "DESC {stars}",
+            "donation_custom_amount_invalid": "INVALID {min} {max}",
+            "error_generic": "ERROR",
+        }
+        return values[key].format(**kwargs)
+
+    handler.t = fake_t
+    cq = SimpleNamespace(
+        data="premium:donate:amount:250",
+        from_user=SimpleNamespace(id=42),
+        answer=AsyncMock(),
+        message=SimpleNamespace(answer_invoice=AsyncMock(), answer=AsyncMock()),
+    )
+
+    await handler.handle_main_callback(cq)
+
+    cq.answer.assert_awaited_once()
+    create_event.assert_called_once()
+    assert create_event.call_args.kwargs["amount"] == 250
+    assert create_event.call_args.kwargs["payload"]["source"] == "donation_quick_amount_button"
+    cq.message.answer_invoice.assert_awaited_once()
+    invoice_kwargs = cq.message.answer_invoice.await_args.kwargs
+    assert invoice_kwargs["title"] == "DONATE"
+    assert invoice_kwargs["description"] == "DESC 250"
+    assert invoice_kwargs["payload"] == "payment_event:654"
+    assert invoice_kwargs["prices"][0].amount == 250
+
+
+@pytest.mark.asyncio
+async def test_callback_premium_donate_custom_starts_amount_entry():
+    handler = CallbackHandler()
+    handler.t = lambda _uid, key, **kwargs: {
+        "donation_custom_amount_prompt": "PROMPT {min} {max}",
+        "error_generic": "ERROR",
+    }[key].format(**kwargs)
+
+    cq = SimpleNamespace(
+        data="premium:donate:custom",
+        from_user=SimpleNamespace(id=42),
+        answer=AsyncMock(),
+        message=SimpleNamespace(answer=AsyncMock()),
+    )
+
+    clear_donation_amount_entry(42)
+    await handler.handle_main_callback(cq)
+
+    cq.answer.assert_awaited_once()
+    assert is_waiting_for_donation_amount(42) is True
+    cq.message.answer.assert_awaited_once()
+    assert cq.message.answer.await_args.args[0].startswith("PROMPT ")
+
+    clear_donation_amount_entry(42)
 
 
 @pytest.mark.asyncio

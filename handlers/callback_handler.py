@@ -27,8 +27,16 @@ from logging_utils import action_event, actor_label
 from localization import update_language_cache
 from user_texts import format_start_text
 from scraper import get_product_info_async
-from services.payment_service import create_pending_payment_event, get_payment_plan, premium_plan_id_for_days
-from .payment_handler import build_payment_payload
+from services.payment_service import (
+    DONATION_QUICK_AMOUNTS,
+    MAX_DONATION_STARS,
+    MIN_DONATION_STARS,
+    create_pending_payment_event,
+    get_payment_plan,
+    normalize_donation_amount,
+    premium_plan_id_for_days,
+)
+from .payment_handler import build_payment_payload, clear_donation_amount_entry, start_donation_amount_entry
 from services.trending_service import (
     TREND_SEARCH_AWAIT,
     format_trending_items,
@@ -102,9 +110,27 @@ class CallbackHandler(BaseHandler):
         plan_id: str,
         title_key: str,
         source: str,
+        amount: int | None = None,
     ) -> None:
         plan = get_payment_plan(plan_id)
-        if not plan.amount or not plan.currency:
+        invoice_amount = amount if amount is not None else plan.amount
+        if plan.id == "donation" and invoice_amount is not None:
+            try:
+                invoice_amount = normalize_donation_amount(invoice_amount)
+            except ValueError:
+                await self._send_callback_problem(
+                    cq,
+                    user_id,
+                    self.t(
+                        user_id,
+                        "donation_custom_amount_invalid",
+                        min=MIN_DONATION_STARS,
+                        max=MAX_DONATION_STARS,
+                    ),
+                )
+                return
+
+        if not invoice_amount or not plan.currency:
             await cq.message.answer(
                 self.t(user_id, "payment_invoice_failed"),
                 reply_markup=self._premium_contact_kb(user_id),
@@ -123,16 +149,18 @@ class CallbackHandler(BaseHandler):
             description_key,
             title=title,
             days=plan.duration_days or 0,
-            stars=plan.amount,
+            stars=invoice_amount,
         )
         event = create_pending_payment_event(
             user_id,
             plan.id,
             provider="telegram_stars",
+            amount=invoice_amount,
             payload={
                 "source": source,
                 "callback_data": cq.data,
                 "telegram_invoice": True,
+                "donation_amount": invoice_amount if plan.id == "donation" else None,
             },
         )
         invoice_kwargs = {
@@ -141,7 +169,7 @@ class CallbackHandler(BaseHandler):
             "payload": build_payment_payload(event["id"]),
             "provider_token": TELEGRAM_STARS_PROVIDER_TOKEN,
             "currency": plan.currency,
-            "prices": [LabeledPrice(label=title, amount=int(plan.amount))],
+            "prices": [LabeledPrice(label=title, amount=int(invoice_amount))],
         }
 
         message = getattr(cq, "message", None)
@@ -171,6 +199,50 @@ class CallbackHandler(BaseHandler):
                 reply_markup=self._premium_contact_kb(user_id),
                 parse_mode="HTML",
             )
+
+    def _donation_amount_kb(self, user_id: int) -> InlineKeyboardMarkup:
+        rows = []
+        amounts = list(DONATION_QUICK_AMOUNTS)
+        for index in range(0, len(amounts), 2):
+            row = []
+            for amount in amounts[index:index + 2]:
+                row.append(
+                    InlineKeyboardButton(
+                        text=f"{amount} ⭐",
+                        callback_data=f"premium:donate:amount:{amount}",
+                    )
+                )
+            rows.append(row)
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=self.t(user_id, "btn_donation_custom_amount"),
+                    callback_data="premium:donate:custom",
+                )
+            ]
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=self.t(user_id, "btn_cancel"),
+                    callback_data="premium:donate:cancel",
+                )
+            ]
+        )
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    async def _show_donation_amount_menu(self, cq: CallbackQuery, user_id: int) -> None:
+        clear_donation_amount_entry(user_id)
+        await cq.message.answer(
+            self.t(
+                user_id,
+                "donation_choose_amount",
+                min=MIN_DONATION_STARS,
+                max=MAX_DONATION_STARS,
+            ),
+            reply_markup=self._donation_amount_kb(user_id),
+            parse_mode="HTML",
+        )
 
     async def _send_callback_problem(self, cq: CallbackQuery, user_id: int, text: str = "") -> None:
         """Send a durable error message for callbacks that cannot finish."""
@@ -341,19 +413,61 @@ class CallbackHandler(BaseHandler):
             if data == "premium:donate":
                 await cq.answer()
                 if TELEGRAM_STARS_PAYMENTS_ENABLED:
-                    await self._send_stars_invoice(
-                        cq,
-                        user_id,
-                        plan_id="donation",
-                        title_key="btn_donate",
-                        source="donation_button",
-                    )
+                    await self._show_donation_amount_menu(cq, user_id)
                     return
                 await cq.message.answer(
                     self.t(user_id, "premium_donate_soon"),
                     reply_markup=self._premium_contact_kb(user_id),
                     parse_mode="HTML",
                 )
+                return
+
+            if data.startswith("premium:donate:amount:"):
+                await cq.answer()
+                raw_amount = data.rsplit(":", 1)[-1]
+                try:
+                    amount = normalize_donation_amount(raw_amount)
+                except ValueError:
+                    await self._send_callback_problem(
+                        cq,
+                        user_id,
+                        self.t(
+                            user_id,
+                            "donation_custom_amount_invalid",
+                            min=MIN_DONATION_STARS,
+                            max=MAX_DONATION_STARS,
+                        ),
+                    )
+                    return
+                clear_donation_amount_entry(user_id)
+                await self._send_stars_invoice(
+                    cq,
+                    user_id,
+                    plan_id="donation",
+                    title_key="btn_donate",
+                    source="donation_quick_amount_button",
+                    amount=amount,
+                )
+                return
+
+            if data == "premium:donate:custom":
+                await cq.answer()
+                start_donation_amount_entry(user_id)
+                await cq.message.answer(
+                    self.t(
+                        user_id,
+                        "donation_custom_amount_prompt",
+                        min=MIN_DONATION_STARS,
+                        max=MAX_DONATION_STARS,
+                    ),
+                    parse_mode="HTML",
+                )
+                return
+
+            if data == "premium:donate:cancel":
+                await cq.answer()
+                clear_donation_amount_entry(user_id)
+                await cq.message.answer(self.t(user_id, "donation_custom_amount_cancelled"), parse_mode="HTML")
                 return
 
             if data == "premium:support":

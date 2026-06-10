@@ -27,6 +27,11 @@ def test_payment_plans_are_defined_for_premium_and_donation():
     assert all(plan.amount and plan.currency == "XTR" for plan in premium_plans)
     assert payment_service.get_payment_plan("donation").amount
     assert payment_service.get_payment_plan("donation").currency == "XTR"
+    assert payment_service.normalize_donation_amount("75") == 75
+    with pytest.raises(ValueError):
+        payment_service.normalize_donation_amount("0")
+    with pytest.raises(ValueError):
+        payment_service.normalize_donation_amount("12.5")
 
 
 def test_create_pending_payment_event(temp_db_path):
@@ -47,6 +52,25 @@ def test_create_pending_payment_event(temp_db_path):
     assert event["currency"] == "XTR"
     assert event["premium_days"] == 30
     assert event["payload"] == {"callback": "premium:plan:30"}
+
+
+def test_create_pending_custom_donation_event(temp_db_path):
+    event = payment_service.create_pending_payment_event(
+        12345,
+        "donation",
+        amount=75,
+        payload={"source": "custom"},
+        ts=1000,
+    )
+
+    assert event["user_id"] == 12345
+    assert event["plan_id"] == "donation"
+    assert event["kind"] == "donation"
+    assert event["status"] == "pending"
+    assert event["amount"] == 75
+    assert event["currency"] == "XTR"
+    assert event["premium_days"] is None
+    assert event["payload"] == {"source": "custom"}
 
 
 def test_apply_successful_premium_payment_grants_access(temp_db_path):

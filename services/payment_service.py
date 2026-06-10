@@ -83,6 +83,10 @@ PAYMENT_PLANS: Dict[str, PaymentPlan] = {
     ),
 }
 
+DONATION_QUICK_AMOUNTS = (50, 100, 250, 500)
+MIN_DONATION_STARS = 1
+MAX_DONATION_STARS = 10_000
+
 
 def get_payment_plan(plan_id: str) -> PaymentPlan:
     try:
@@ -107,23 +111,45 @@ def premium_plan_id_for_days(days: int) -> str:
     return plan_id
 
 
+def normalize_donation_amount(value: Any) -> int:
+    """Validate a user-selected Telegram Stars donation amount."""
+    if isinstance(value, bool):
+        raise ValueError("Donation amount must be an integer")
+    if isinstance(value, int):
+        amount = value
+    else:
+        text = str(value or "").strip()
+        if not text.isdigit():
+            raise ValueError("Donation amount must be an integer")
+        amount = int(text)
+
+    if amount < MIN_DONATION_STARS or amount > MAX_DONATION_STARS:
+        raise ValueError(
+            f"Donation amount must be between {MIN_DONATION_STARS} and {MAX_DONATION_STARS}"
+        )
+    return amount
+
+
 def create_pending_payment_event(
     user_id: int,
     plan_id: str,
     *,
     provider: str = "telegram_stars",
+    amount: Optional[int] = None,
+    currency: Optional[str] = None,
     payload: Optional[Any] = None,
     ts: Optional[int] = None,
 ) -> Dict[str, Any]:
     plan = get_payment_plan(plan_id)
+    event_amount = normalize_donation_amount(amount) if amount is not None and plan.kind == PaymentKind.DONATION else amount
     return database.create_payment_event(
         user_id,
         plan_id=plan.id,
         kind=plan.kind.value,
         status=PaymentStatus.PENDING.value,
         provider=provider,
-        amount=plan.amount,
-        currency=plan.currency,
+        amount=event_amount if event_amount is not None else plan.amount,
+        currency=currency or plan.currency,
         premium_days=plan.duration_days,
         payload=payload,
         ts=ts,

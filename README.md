@@ -53,7 +53,7 @@ Read the full product flow in [User Guide](docs/guides/USER_GUIDE.md).
 - Group multiple price updates into one notification when needed.
 - Support internal free/premium access tiers with different product limits.
 - Show users their current access tier, product usage, premium expiry, and request path through `/premium`.
-- Support premium plans, donation intent, Telegram Stars invoices, and payment-event tracking when payments are enabled by the owner runtime.
+- Support premium plans, configurable donation amounts, Telegram Stars invoices, and payment-event tracking when payments are enabled by the owner runtime.
 
 ### Price Intelligence
 

@@ -46,6 +46,7 @@ from database import (
     revoke_user_premium,
     set_bot_text,
 )
+from services.payment_service import DONATION_QUICK_AMOUNTS
 from logging_utils import action_event, actor_label, short_value
 from localization import t
 
@@ -485,7 +486,8 @@ def _admin_payment_settings_text(admin_user_id: int) -> str:
         f"• {t(admin_user_id, 'admin_payment_premium_30_label')}: <b>{PREMIUM_30_STARS} {TELEGRAM_STARS_CURRENCY}</b>\n"
         f"• {t(admin_user_id, 'admin_payment_premium_90_label')}: <b>{PREMIUM_90_STARS} {TELEGRAM_STARS_CURRENCY}</b>\n"
         f"• {t(admin_user_id, 'admin_payment_premium_365_label')}: <b>{PREMIUM_365_STARS} {TELEGRAM_STARS_CURRENCY}</b>\n"
-        f"• {t(admin_user_id, 'admin_payment_donation_label')}: <b>{DONATION_STARS} {TELEGRAM_STARS_CURRENCY}</b>\n\n"
+        f"• {t(admin_user_id, 'admin_payment_donation_label')}: <b>{DONATION_STARS} {TELEGRAM_STARS_CURRENCY}</b>\n"
+        f"• {t(admin_user_id, 'admin_payment_donation_quick_label')}: <b>{', '.join(str(amount) for amount in DONATION_QUICK_AMOUNTS)} {TELEGRAM_STARS_CURRENCY}</b>\n\n"
         f"<b>{t(admin_user_id, 'admin_payment_limits_label')}:</b>\n"
         f"• {t(admin_user_id, 'admin_payment_free_label')}: <b>{MAX_SUBSCRIPTIONS_PER_USER}</b>\n"
         f"• {t(admin_user_id, 'admin_payment_premium_label')}: <b>{PREMIUM_MAX_SUBSCRIPTIONS_PER_USER}</b>\n\n"
