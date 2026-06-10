@@ -12,6 +12,7 @@ from config import (
     MAX_SUBSCRIPTIONS_PER_USER,
     PREMIUM_EXPIRY_GRACE_DAYS,
     PREMIUM_MAX_SUBSCRIPTIONS_PER_USER,
+    TELEGRAM_STARS_PAYMENTS_ENABLED,
 )
 from database import (
     add_user_if_not_exists,
@@ -172,6 +173,12 @@ class BasicHandler(BaseHandler):
         else:
             usage = self.t(user_id, "premium_usage_limited", count=current_count, limit=limit)
 
+        payment_status_key = (
+            "premium_payment_status_enabled"
+            if TELEGRAM_STARS_PAYMENTS_ENABLED
+            else "premium_payment_status_disabled"
+        )
+
         await message.answer(
             self.t(
                 user_id,
@@ -181,6 +188,7 @@ class BasicHandler(BaseHandler):
                 free_limit=MAX_SUBSCRIPTIONS_PER_USER,
                 premium_limit=PREMIUM_MAX_SUBSCRIPTIONS_PER_USER,
                 grace_days=PREMIUM_EXPIRY_GRACE_DAYS,
+                payment_status=self.t(user_id, payment_status_key),
                 next_step=next_step,
             ),
             reply_markup=get_premium_inline_kb(user_id, is_premium=has_premium_capacity),

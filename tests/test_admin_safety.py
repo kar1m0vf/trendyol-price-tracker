@@ -592,6 +592,166 @@ async def test_admin_main_menu_greets_admin_by_name():
     callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
     assert "admin_health" in callbacks
     assert "admin_premium" in callbacks
+    assert "admin_payments" in callbacks
+    assert "admin_payment_settings" in callbacks
+
+
+@pytest.mark.asyncio
+async def test_admin_payments_lists_recent_events():
+    from handlers import admin_handler
+
+    msg = _message("/admin payments")
+    event = {
+        "id": 7,
+        "user_id": 12345,
+        "plan_id": "premium_30",
+        "kind": "premium",
+        "status": "paid",
+        "provider": "telegram_stars",
+        "provider_payment_id": "stars-charge-1",
+        "amount": 100,
+        "currency": "XTR",
+        "premium_days": 30,
+        "payload": {"source": "unit"},
+        "created_at": 1000,
+        "updated_at": 1100,
+        "paid_at": 1100,
+        "applied_at": 1100,
+    }
+
+    with patch.object(admin_handler, "get_payment_events", return_value=[event]) as get_events:
+        with patch.object(admin_handler, "get_user_profile", return_value={"username": "buyer"}):
+            await admin_handler.admin_payments(msg, status="paid")
+
+    get_events.assert_called_once_with(status="paid", limit=admin_handler.ADMIN_PAYMENTS_PAGE_SIZE)
+    text = msg.edit_text.await_args.args[0]
+    assert "Payments" in text
+    assert "#7" in text
+    assert "@buyer" in text
+    assert "100 XTR" in text
+    markup = msg.edit_text.await_args.kwargs["reply_markup"]
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+    assert "admin_payment:7" in callbacks
+    assert "admin_payments_status:pending" in callbacks
+
+
+@pytest.mark.asyncio
+async def test_admin_payment_settings_shows_runtime_values(monkeypatch):
+    from handlers import admin_handler
+
+    msg = _message("/admin payment_settings")
+    monkeypatch.setattr(admin_handler, "TELEGRAM_STARS_PAYMENTS_ENABLED", True)
+    monkeypatch.setattr(admin_handler, "TELEGRAM_STARS_PROVIDER_TOKEN", "")
+    monkeypatch.setattr(admin_handler, "PREMIUM_30_STARS", 11)
+    monkeypatch.setattr(admin_handler, "PREMIUM_90_STARS", 22)
+    monkeypatch.setattr(admin_handler, "PREMIUM_365_STARS", 33)
+    monkeypatch.setattr(admin_handler, "DONATION_STARS", 4)
+
+    await admin_handler.admin_payment_settings(msg)
+
+    text = msg.edit_text.await_args.args[0]
+    assert "Payment settings" in text
+    assert "enabled" in text
+    assert "11 XTR" in text
+    assert "22 XTR" in text
+    assert "33 XTR" in text
+    assert "4 XTR" in text
+    assert "empty - OK" in text
+    markup = msg.edit_text.await_args.kwargs["reply_markup"]
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+    assert "admin_payments" in callbacks
+    assert "admin_payment_settings" in callbacks
+
+
+@pytest.mark.asyncio
+async def test_admin_payments_settings_command_opens_settings():
+    from handlers import admin_handler
+
+    msg = _message("/admin payments settings")
+
+    with patch.object(admin_handler, "admin_payment_settings", new_callable=AsyncMock) as settings:
+        await admin_handler.cmd_admin(msg)
+
+    settings.assert_awaited_once_with(msg)
+
+
+@pytest.mark.asyncio
+async def test_admin_payment_details_shows_charge_and_user_link():
+    from handlers import admin_handler
+
+    msg = _message("/admin payment 7")
+    event = {
+        "id": 7,
+        "user_id": 12345,
+        "plan_id": "premium_30",
+        "kind": "premium",
+        "status": "paid",
+        "provider": "telegram_stars",
+        "provider_payment_id": "stars-charge-1",
+        "amount": 100,
+        "currency": "XTR",
+        "premium_days": 30,
+        "payload": {"source": "unit"},
+        "created_at": 1000,
+        "updated_at": 1100,
+        "paid_at": 1100,
+        "applied_at": 1100,
+    }
+
+    with patch.object(admin_handler, "get_payment_event", return_value=event):
+        with patch.object(admin_handler, "get_user_profile", return_value={"username": "buyer"}):
+            await admin_handler.admin_payment_details(msg, 7)
+
+    text = msg.edit_text.await_args.args[0]
+    assert "Payment event" in text
+    assert "stars-charge-1" in text
+    assert "premium_30" in text
+    markup = msg.edit_text.await_args.kwargs["reply_markup"]
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+    assert "user_details:12345" in callbacks
+    assert "admin_payments" in callbacks
+
+
+@pytest.mark.asyncio
+async def test_admin_payments_callback_opens_screen():
+    from handlers.callback_handler import CallbackHandler
+
+    cq = _callback("admin_payments")
+    handler = CallbackHandler()
+
+    with patch("handlers.admin_handler.admin_payments", new_callable=AsyncMock) as payments:
+        handled = await handler._handle_admin_callback(cq, "admin_payments", ADMIN_ID)
+
+    assert handled is True
+    payments.assert_awaited_once_with(cq.message)
+
+
+@pytest.mark.asyncio
+async def test_admin_payment_settings_callback_opens_screen():
+    from handlers.callback_handler import CallbackHandler
+
+    cq = _callback("admin_payment_settings")
+    handler = CallbackHandler()
+
+    with patch("handlers.admin_handler.admin_payment_settings", new_callable=AsyncMock) as settings:
+        handled = await handler._handle_admin_callback(cq, "admin_payment_settings", ADMIN_ID)
+
+    assert handled is True
+    settings.assert_awaited_once_with(cq.message)
+
+
+@pytest.mark.asyncio
+async def test_admin_payment_detail_callback_opens_event():
+    from handlers.callback_handler import CallbackHandler
+
+    cq = _callback("admin_payment:7")
+    handler = CallbackHandler()
+
+    with patch("handlers.admin_handler.admin_payment_details", new_callable=AsyncMock) as details:
+        handled = await handler._handle_admin_callback(cq, "admin_payment:7", ADMIN_ID)
+
+    assert handled is True
+    details.assert_awaited_once_with(cq.message, 7)
 
 
 @pytest.mark.asyncio

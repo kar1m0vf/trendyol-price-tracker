@@ -151,8 +151,9 @@ async def test_basic_premium_shows_status_and_limits(monkeypatch):
             "premium_status_free": "FREE_STATUS",
             "premium_usage_limited": "USAGE {count}/{limit}",
             "premium_next_step_request": "REQUEST_NEXT_STEP",
+            "premium_payment_status_disabled": "PAYMENT_STATUS",
             "premium_text": (
-                "TEXT {status} {usage} {free_limit} {premium_limit} {grace_days} {next_step}"
+                "TEXT {status} {usage} {free_limit} {premium_limit} {grace_days} {payment_status} {next_step}"
             ),
             "error_generic": "ERROR",
         }
@@ -174,6 +175,7 @@ async def test_basic_premium_shows_status_and_limits(monkeypatch):
     monkeypatch.setattr(basic_module, "MAX_SUBSCRIPTIONS_PER_USER", 15)
     monkeypatch.setattr(basic_module, "PREMIUM_MAX_SUBSCRIPTIONS_PER_USER", 100)
     monkeypatch.setattr(basic_module, "PREMIUM_EXPIRY_GRACE_DAYS", 7)
+    monkeypatch.setattr(basic_module, "TELEGRAM_STARS_PAYMENTS_ENABLED", False)
     monkeypatch.setattr(basic_module, "get_premium_inline_kb", premium_kb)
 
     message = SimpleNamespace(
@@ -185,7 +187,7 @@ async def test_basic_premium_shows_status_and_limits(monkeypatch):
     await handler.handle_premium(message)
 
     message.answer.assert_awaited_once_with(
-        "TEXT FREE_STATUS USAGE 3/15 15 100 7 REQUEST_NEXT_STEP",
+        "TEXT FREE_STATUS USAGE 3/15 15 100 7 PAYMENT_STATUS REQUEST_NEXT_STEP",
         reply_markup="PREMIUM_KB",
         parse_mode="HTML",
         disable_web_page_preview=True,
@@ -396,6 +398,48 @@ async def test_callback_premium_plan_shows_payment_notice():
         row[0].callback_data
         for row in kwargs["reply_markup"].inline_keyboard
     ] == ["premium:request", "premium:support"]
+
+
+@pytest.mark.asyncio
+async def test_callback_premium_plan_sends_stars_invoice_when_enabled(monkeypatch):
+    handler = CallbackHandler()
+
+    monkeypatch.setattr(callback_module, "TELEGRAM_STARS_PAYMENTS_ENABLED", True)
+    create_event = MagicMock(return_value={"id": 321})
+    monkeypatch.setattr(callback_module, "create_pending_payment_event", create_event)
+
+    def fake_t(_uid, key, **kwargs):
+        values = {
+            "btn_premium_30": "PLAN_30",
+            "payment_invoice_description_premium": "DESC {days} {stars}",
+            "error_generic": "ERROR",
+        }
+        return values[key].format(**kwargs)
+
+    handler.t = fake_t
+
+    cq = SimpleNamespace(
+        data="premium:plan:30",
+        from_user=SimpleNamespace(id=42),
+        answer=AsyncMock(),
+        message=SimpleNamespace(answer_invoice=AsyncMock()),
+    )
+
+    await handler.handle_main_callback(cq)
+
+    cq.answer.assert_awaited_once()
+    create_event.assert_called_once()
+    assert create_event.call_args.args[:2] == (42, "premium_30")
+    assert create_event.call_args.kwargs["provider"] == "telegram_stars"
+    assert create_event.call_args.kwargs["payload"]["source"] == "premium_plan_button"
+
+    cq.message.answer_invoice.assert_awaited_once()
+    invoice_kwargs = cq.message.answer_invoice.await_args.kwargs
+    assert invoice_kwargs["title"] == "PLAN_30"
+    assert invoice_kwargs["description"].startswith("DESC 30 ")
+    assert invoice_kwargs["payload"] == "payment_event:321"
+    assert invoice_kwargs["currency"] == "XTR"
+    assert invoice_kwargs["prices"][0].amount == callback_module.get_payment_plan("premium_30").amount
 
 
 @pytest.mark.asyncio

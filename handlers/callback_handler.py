@@ -6,11 +6,12 @@ import sys
 
 from aiogram import types
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
 import html
 import re
 
 from .base import BaseHandler
+from config import TELEGRAM_STARS_PAYMENTS_ENABLED, TELEGRAM_STARS_PROVIDER_TOKEN
 from database import (
     get_subscription, remove_subscription, remove_subscriptions_by_user,
     update_mode, set_user_language, update_subscription_settings,
@@ -18,7 +19,7 @@ from database import (
     get_price_history, add_price_point, save_price_point, get_user_subscriptions,
     get_user_language, get_bot_text, get_recommended_products,
     remove_recommended_product, record_subscription_check_failure,
-    clear_subscription_check_failure, get_subscription_active,
+    clear_subscription_check_failure, get_subscription_active, update_payment_event_status,
     get_subscription_failure_details, set_subscription_active
 )
 from keyboards import subscription_controls_kb_for_user, get_main_kb
@@ -26,6 +27,8 @@ from logging_utils import action_event, actor_label
 from localization import update_language_cache
 from user_texts import format_start_text
 from scraper import get_product_info_async
+from services.payment_service import create_pending_payment_event, get_payment_plan, premium_plan_id_for_days
+from .payment_handler import build_payment_payload
 from services.trending_service import (
     TREND_SEARCH_AWAIT,
     format_trending_items,
@@ -90,6 +93,84 @@ class CallbackHandler(BaseHandler):
                 ],
             ]
         )
+
+    async def _send_stars_invoice(
+        self,
+        cq: CallbackQuery,
+        user_id: int,
+        *,
+        plan_id: str,
+        title_key: str,
+        source: str,
+    ) -> None:
+        plan = get_payment_plan(plan_id)
+        if not plan.amount or not plan.currency:
+            await cq.message.answer(
+                self.t(user_id, "payment_invoice_failed"),
+                reply_markup=self._premium_contact_kb(user_id),
+                parse_mode="HTML",
+            )
+            return
+
+        title = self.t(user_id, title_key)
+        description_key = (
+            "payment_invoice_description_donation"
+            if plan.id == "donation"
+            else "payment_invoice_description_premium"
+        )
+        description = self.t(
+            user_id,
+            description_key,
+            title=title,
+            days=plan.duration_days or 0,
+            stars=plan.amount,
+        )
+        event = create_pending_payment_event(
+            user_id,
+            plan.id,
+            provider="telegram_stars",
+            payload={
+                "source": source,
+                "callback_data": cq.data,
+                "telegram_invoice": True,
+            },
+        )
+        invoice_kwargs = {
+            "title": title,
+            "description": description,
+            "payload": build_payment_payload(event["id"]),
+            "provider_token": TELEGRAM_STARS_PROVIDER_TOKEN,
+            "currency": plan.currency,
+            "prices": [LabeledPrice(label=title, amount=int(plan.amount))],
+        }
+
+        message = getattr(cq, "message", None)
+        try:
+            answer_invoice = getattr(message, "answer_invoice", None) if message is not None else None
+            if callable(answer_invoice):
+                await answer_invoice(**invoice_kwargs)
+            else:
+                await self.bot.send_invoice(chat_id=user_id, **invoice_kwargs)
+        except Exception as exc:
+            logger.exception(
+                "Failed to send Telegram Stars invoice | user=%s plan=%s event_id=%s",
+                user_id,
+                plan.id,
+                event["id"],
+            )
+            try:
+                update_payment_event_status(
+                    event["id"],
+                    "failed",
+                    payload={"invoice_error": str(exc), "source": source},
+                )
+            except Exception:
+                logger.debug("Failed to mark invoice event as failed", exc_info=True)
+            await cq.message.answer(
+                self.t(user_id, "payment_invoice_failed"),
+                reply_markup=self._premium_contact_kb(user_id),
+                parse_mode="HTML",
+            )
 
     async def _send_callback_problem(self, cq: CallbackQuery, user_id: int, text: str = "") -> None:
         """Send a durable error message for callbacks that cannot finish."""
@@ -232,6 +313,20 @@ class CallbackHandler(BaseHandler):
                     "90": "btn_premium_90",
                     "365": "btn_premium_365",
                 }.get(plan_days, "btn_premium")
+                if TELEGRAM_STARS_PAYMENTS_ENABLED:
+                    try:
+                        plan_id = premium_plan_id_for_days(int(plan_days))
+                    except (TypeError, ValueError):
+                        await self._send_callback_problem(cq, user_id, self.t(user_id, "payment_invoice_failed"))
+                        return
+                    await self._send_stars_invoice(
+                        cq,
+                        user_id,
+                        plan_id=plan_id,
+                        title_key=title_key,
+                        source="premium_plan_button",
+                    )
+                    return
                 await cq.message.answer(
                     self.t(
                         user_id,
@@ -245,6 +340,15 @@ class CallbackHandler(BaseHandler):
 
             if data == "premium:donate":
                 await cq.answer()
+                if TELEGRAM_STARS_PAYMENTS_ENABLED:
+                    await self._send_stars_invoice(
+                        cq,
+                        user_id,
+                        plan_id="donation",
+                        title_key="btn_donate",
+                        source="donation_button",
+                    )
+                    return
                 await cq.message.answer(
                     self.t(user_id, "premium_donate_soon"),
                     reply_markup=self._premium_contact_kb(user_id),
@@ -2040,6 +2144,40 @@ class CallbackHandler(BaseHandler):
                 from bot import cmd_health
 
                 await cmd_health(cq.message)
+                return True
+
+            if data == "admin_payment_settings":
+                await cq.answer(self.t(user_id, "loading"))
+                from handlers.admin_handler import admin_payment_settings
+
+                await admin_payment_settings(cq.message)
+                return True
+
+            if data == "admin_payments":
+                await cq.answer(self.t(user_id, "loading"))
+                from handlers.admin_handler import admin_payments
+
+                await admin_payments(cq.message)
+                return True
+
+            if data.startswith("admin_payments_status:"):
+                await cq.answer(self.t(user_id, "loading"))
+                from handlers.admin_handler import admin_payments
+
+                status = data.split(":", 1)[1]
+                await admin_payments(cq.message, status=status)
+                return True
+
+            if data.startswith("admin_payment:"):
+                await cq.answer(self.t(user_id, "loading"))
+                from handlers.admin_handler import admin_payment_details
+
+                try:
+                    event_id = int(data.split(":", 1)[1])
+                except ValueError:
+                    await cq.answer(self.t(user_id, "error_generic"), show_alert=True)
+                    return True
+                await admin_payment_details(cq.message, event_id)
                 return True
 
             if data == "admin_premium":

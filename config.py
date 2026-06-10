@@ -58,6 +58,19 @@ def _parse_int_env(
     return value
 
 
+def _parse_bool_env(name: str, default: bool = False) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    normalized = raw_value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    logger.warning("Invalid boolean env %s=%r; using default=%s", name, raw_value, default)
+    return default
+
+
 _load_env()
 
 BOT_TOKEN: Optional[str] = os.getenv("BOT_TOKEN")
@@ -80,6 +93,13 @@ PREMIUM_EXPIRY_GRACE_DAYS = _parse_int_env(
     max_value=365,
 )
 HEAVY_COMMAND_COOLDOWN_SECONDS = _parse_int_env("HEAVY_COMMAND_COOLDOWN_SECONDS", 20, min_value=0, max_value=3600)
+TELEGRAM_STARS_PAYMENTS_ENABLED = _parse_bool_env("TELEGRAM_STARS_PAYMENTS_ENABLED", False)
+TELEGRAM_STARS_PROVIDER_TOKEN = os.getenv("TELEGRAM_STARS_PROVIDER_TOKEN", "")
+TELEGRAM_STARS_CURRENCY = "XTR"
+PREMIUM_30_STARS = _parse_int_env("PREMIUM_30_STARS", 100, min_value=1, max_value=1_000_000)
+PREMIUM_90_STARS = _parse_int_env("PREMIUM_90_STARS", 250, min_value=1, max_value=1_000_000)
+PREMIUM_365_STARS = _parse_int_env("PREMIUM_365_STARS", 800, min_value=1, max_value=1_000_000)
+DONATION_STARS = _parse_int_env("DONATION_STARS", 50, min_value=1, max_value=1_000_000)
 # Kept for compatibility with older diagnostics/tests. The bot now always uses
 # the package-based handler registration path.
 USE_NEW_HANDLERS = True

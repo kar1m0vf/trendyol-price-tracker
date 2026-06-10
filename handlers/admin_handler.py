@@ -23,14 +23,24 @@ from config import (
     ADMIN_IDS,
     BACKUP_DIR,
     DATABASE_PATH,
+    DONATION_STARS,
     MAX_SUBSCRIPTIONS_PER_USER,
+    PREMIUM_30_STARS,
+    PREMIUM_90_STARS,
+    PREMIUM_365_STARS,
     PREMIUM_MAX_SUBSCRIPTIONS_PER_USER,
+    TELEGRAM_STARS_CURRENCY,
+    TELEGRAM_STARS_PAYMENTS_ENABLED,
+    TELEGRAM_STARS_PROVIDER_TOKEN,
 )
 from database import (
     create_sqlite_backup,
     grant_user_premium,
     get_broken_subscriptions,
     get_bot_text,
+    get_payment_event,
+    get_payment_events,
+    get_user_profile,
     get_user_language,
     get_user_subscriptions,
     revoke_user_premium,
@@ -358,6 +368,249 @@ async def admin_user_premium_revoke(message: types.Message, admin_user, target_u
     await admin_user_premium_menu(message, target_user_id)
 
 
+ADMIN_PAYMENTS_PAGE_SIZE = 10
+ADMIN_PAYMENT_STATUSES = ("pending", "paid", "failed", "refunded")
+
+
+def _payment_status_label(admin_user_id: int, status: Any) -> str:
+    status_key = str(status or "").lower()
+    labels = {
+        "pending": t(admin_user_id, "admin_payment_status_pending"),
+        "paid": t(admin_user_id, "admin_payment_status_paid"),
+        "failed": t(admin_user_id, "admin_payment_status_failed"),
+        "refunded": t(admin_user_id, "admin_payment_status_refunded"),
+    }
+    return labels.get(status_key, _safe_html(status or "-"))
+
+
+def _format_payment_amount(event: Dict[str, Any]) -> str:
+    amount = event.get("amount")
+    currency = event.get("currency") or "-"
+    if amount is None:
+        return "-"
+    return f"{_safe_html(amount)} {_safe_html(currency)}"
+
+
+def _format_payment_user(user_id: int) -> str:
+    try:
+        profile = get_user_profile(user_id) or {}
+    except Exception:
+        logger.debug("Could not load payment user profile user=%s", user_id, exc_info=True)
+        profile = {}
+    return _user_display_html(
+        user_id,
+        profile.get("username"),
+        profile.get("first_name"),
+        profile.get("last_name"),
+    )
+
+
+def _admin_payments_keyboard(admin_user_id: int, events: List[Dict[str, Any]], status: Optional[str] = None) -> InlineKeyboardMarkup:
+    rows: List[List[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(text=t(admin_user_id, "admin_payment_filter_all"), callback_data="admin_payments"),
+            InlineKeyboardButton(text=t(admin_user_id, "admin_payment_filter_paid"), callback_data="admin_payments_status:paid"),
+            InlineKeyboardButton(text=t(admin_user_id, "admin_payment_filter_pending"), callback_data="admin_payments_status:pending"),
+        ],
+        [
+            InlineKeyboardButton(text=t(admin_user_id, "admin_payment_filter_failed"), callback_data="admin_payments_status:failed"),
+            InlineKeyboardButton(text=t(admin_user_id, "admin_payment_filter_refunded"), callback_data="admin_payments_status:refunded"),
+        ],
+    ]
+
+    for event in events[:ADMIN_PAYMENTS_PAGE_SIZE]:
+        event_id = int(event["id"])
+        status_text = _payment_status_label(admin_user_id, event.get("status"))
+        plan_id = _short_admin_text(event.get("plan_id") or "-", 18)
+        amount = _format_payment_amount(event)
+        rows.append([
+            InlineKeyboardButton(
+                text=f"#{event_id} {status_text} · {plan_id} · {amount}",
+                callback_data=f"admin_payment:{event_id}",
+            )
+        ])
+
+    rows.append([
+        InlineKeyboardButton(
+            text=t(admin_user_id, "admin_payment_btn_refresh"),
+            callback_data=f"admin_payments_status:{status}" if status else "admin_payments",
+        ),
+        InlineKeyboardButton(text=t(admin_user_id, "admin_payment_btn_admin"), callback_data="admin_main_menu"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _admin_payment_detail_keyboard(admin_user_id: int, event: Dict[str, Any]) -> InlineKeyboardMarkup:
+    user_id = int(event["user_id"])
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=t(admin_user_id, "admin_payment_btn_user"), callback_data=f"user_details:{user_id}"),
+            InlineKeyboardButton(text=t(admin_user_id, "admin_payments_button"), callback_data="admin_payments"),
+        ],
+        [
+            InlineKeyboardButton(text=t(admin_user_id, "admin_payment_btn_admin"), callback_data="admin_main_menu"),
+        ],
+    ])
+
+
+def _admin_payment_settings_keyboard(admin_user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=t(admin_user_id, "admin_payments_button"), callback_data="admin_payments"),
+            InlineKeyboardButton(text=t(admin_user_id, "admin_payment_btn_refresh"), callback_data="admin_payment_settings"),
+        ],
+        [
+            InlineKeyboardButton(text="⭐ Premium", callback_data="admin_premium"),
+            InlineKeyboardButton(text=t(admin_user_id, "admin_payment_btn_admin"), callback_data="admin_main_menu"),
+        ],
+    ])
+
+
+def _admin_payment_settings_text(admin_user_id: int) -> str:
+    enabled_text = t(
+        admin_user_id,
+        "admin_payment_enabled" if TELEGRAM_STARS_PAYMENTS_ENABLED else "admin_payment_disabled",
+    )
+    provider_text = (
+        t(admin_user_id, "admin_payment_provider_empty_ok")
+        if not TELEGRAM_STARS_PROVIDER_TOKEN
+        else t(admin_user_id, "admin_payment_provider_set")
+    )
+    return (
+        f"{t(admin_user_id, 'admin_payment_settings_title')}\n\n"
+        f"{t(admin_user_id, 'admin_payment_stars_enabled_label')}: <b>{enabled_text}</b>\n"
+        f"{t(admin_user_id, 'admin_payment_currency_label')}: <code>{_safe_html(TELEGRAM_STARS_CURRENCY)}</code>\n"
+        f"{t(admin_user_id, 'admin_payment_provider_token_label')}: <b>{_safe_html(provider_text)}</b>\n\n"
+        f"<b>{t(admin_user_id, 'admin_payment_prices_label')}:</b>\n"
+        f"• {t(admin_user_id, 'admin_payment_premium_30_label')}: <b>{PREMIUM_30_STARS} {TELEGRAM_STARS_CURRENCY}</b>\n"
+        f"• {t(admin_user_id, 'admin_payment_premium_90_label')}: <b>{PREMIUM_90_STARS} {TELEGRAM_STARS_CURRENCY}</b>\n"
+        f"• {t(admin_user_id, 'admin_payment_premium_365_label')}: <b>{PREMIUM_365_STARS} {TELEGRAM_STARS_CURRENCY}</b>\n"
+        f"• {t(admin_user_id, 'admin_payment_donation_label')}: <b>{DONATION_STARS} {TELEGRAM_STARS_CURRENCY}</b>\n\n"
+        f"<b>{t(admin_user_id, 'admin_payment_limits_label')}:</b>\n"
+        f"• {t(admin_user_id, 'admin_payment_free_label')}: <b>{MAX_SUBSCRIPTIONS_PER_USER}</b>\n"
+        f"• {t(admin_user_id, 'admin_payment_premium_label')}: <b>{PREMIUM_MAX_SUBSCRIPTIONS_PER_USER}</b>\n\n"
+        f"{t(admin_user_id, 'admin_payment_settings_env_note')}"
+    )
+
+
+def _format_payment_event_summary(admin_user_id: int, event: Dict[str, Any]) -> str:
+    event_id = int(event["id"])
+    user_id = int(event["user_id"])
+    plan_id = _safe_html(event.get("plan_id") or "-")
+    kind = _safe_html(event.get("kind") or "-")
+    return (
+        f"#{event_id} · {_payment_status_label(admin_user_id, event.get('status'))}\n"
+        f"{t(admin_user_id, 'admin_payment_user_label')}: {_format_payment_user(user_id)} (<code>{user_id}</code>)\n"
+        f"{t(admin_user_id, 'admin_payment_plan_label')}: <b>{plan_id}</b> · {kind}\n"
+        f"{t(admin_user_id, 'admin_payment_amount_label')}: <b>{_format_payment_amount(event)}</b>\n"
+        f"{t(admin_user_id, 'admin_payment_created_label')}: {_format_dt(event.get('created_at'))}"
+    )
+
+
+def _format_payment_event_details(admin_user_id: int, event: Dict[str, Any]) -> str:
+    payload = _safe_html(_short_admin_text(event.get("payload"), 700))
+    provider_payment_id = event.get("provider_payment_id") or "-"
+    return (
+        f"{t(admin_user_id, 'admin_payment_event_title')}\n\n"
+        f"{_format_payment_event_summary(admin_user_id, event)}\n\n"
+        f"{t(admin_user_id, 'admin_payment_provider_label')}: <code>{_safe_html(event.get('provider') or '-')}</code>\n"
+        f"{t(admin_user_id, 'admin_payment_provider_charge_label')}: <code>{_safe_html(provider_payment_id)}</code>\n"
+        f"{t(admin_user_id, 'admin_payment_premium_days_label')}: <b>{_safe_html(event.get('premium_days') or '-')}</b>\n"
+        f"{t(admin_user_id, 'admin_payment_updated_label')}: {_format_dt(event.get('updated_at'))}\n"
+        f"{t(admin_user_id, 'admin_payment_paid_at_label')}: {_format_dt(event.get('paid_at'))}\n"
+        f"{t(admin_user_id, 'admin_payment_applied_at_label')}: {_format_dt(event.get('applied_at'))}\n\n"
+        f"<b>{t(admin_user_id, 'admin_payment_payload_label')}:</b>\n<code>{payload}</code>"
+    )
+
+
+async def admin_payments(message: types.Message, status: Optional[str] = None) -> None:
+    admin_user_id = _get_request_user_id(message)
+    if not is_admin(admin_user_id):
+        await message.answer(t(admin_user_id, "admin_access_denied"))
+        return
+
+    safe_status = str(status).lower() if status else None
+    if safe_status and safe_status not in ADMIN_PAYMENT_STATUSES:
+        safe_status = None
+
+    events = get_payment_events(status=safe_status, limit=ADMIN_PAYMENTS_PAGE_SIZE)
+    status_title = _payment_status_label(admin_user_id, safe_status) if safe_status else t(admin_user_id, "admin_payment_filter_all")
+    text = (
+        f"{t(admin_user_id, 'admin_payments_title')}\n\n"
+        f"{t(admin_user_id, 'admin_payment_filter_label')}: <b>{_safe_html(status_title)}</b>\n"
+        f"{t(admin_user_id, 'admin_payment_shown_label')}: <b>{len(events)}</b>\n\n"
+    )
+    if events:
+        text += "\n\n".join(_format_payment_event_summary(admin_user_id, event) for event in events)
+    else:
+        text += t(admin_user_id, "admin_payments_empty")
+
+    try:
+        await message.edit_text(
+            text,
+            reply_markup=_admin_payments_keyboard(admin_user_id, events, safe_status),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+    except Exception:
+        logger.debug("Failed to edit admin payments screen, falling back to answer", exc_info=True)
+        await message.answer(
+            text,
+            reply_markup=_admin_payments_keyboard(admin_user_id, events, safe_status),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+
+
+async def admin_payment_settings(message: types.Message) -> None:
+    admin_user_id = _get_request_user_id(message)
+    if not is_admin(admin_user_id):
+        await message.answer(t(admin_user_id, "admin_access_denied"))
+        return
+
+    try:
+        await message.edit_text(
+            _admin_payment_settings_text(admin_user_id),
+            reply_markup=_admin_payment_settings_keyboard(admin_user_id),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+    except Exception:
+        logger.debug("Failed to edit admin payment settings, falling back to answer", exc_info=True)
+        await message.answer(
+            _admin_payment_settings_text(admin_user_id),
+            reply_markup=_admin_payment_settings_keyboard(admin_user_id),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+
+
+async def admin_payment_details(message: types.Message, event_id: int) -> None:
+    admin_user_id = _get_request_user_id(message)
+    if not is_admin(admin_user_id):
+        await message.answer(t(admin_user_id, "admin_access_denied"))
+        return
+
+    event = get_payment_event(event_id)
+    if event is None:
+        await message.edit_text(
+            t(admin_user_id, "admin_payment_not_found", event_id=event_id),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=t(admin_user_id, "admin_payments_button"), callback_data="admin_payments")],
+                [InlineKeyboardButton(text=t(admin_user_id, "admin_payment_btn_admin"), callback_data="admin_main_menu")],
+            ]),
+            parse_mode="HTML",
+        )
+        return
+
+    await message.edit_text(
+        _format_payment_event_details(admin_user_id, event),
+        reply_markup=_admin_payment_detail_keyboard(admin_user_id, event),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+
+
 def _short_admin_text(value: Any, limit: int = 80) -> str:
     text = " ".join(str(value or "").split())
     if len(text) <= limit:
@@ -622,6 +875,10 @@ async def admin_main_menu(message: types.Message):
         InlineKeyboardButton(text="⚠️ Битые товары", callback_data="admin_broken_subs"),
         InlineKeyboardButton(text="💚 Health", callback_data="admin_health"),
     ])
+    keyboard.inline_keyboard.insert(4, [
+        InlineKeyboardButton(text=t(user_id, "admin_payments_button"), callback_data="admin_payments"),
+        InlineKeyboardButton(text=t(user_id, "admin_payment_settings_button"), callback_data="admin_payment_settings"),
+    ])
 
     greeting_name = _safe_html(_admin_greeting_name(message, user_id))
     welcome_text = "🚀 <b>Панель администратора</b>\n\n"
@@ -687,6 +944,14 @@ async def cmd_admin(message: types.Message):
             )
             return
         await admin_premium(message, args)
+    elif command in {"payments", "payment"}:
+        status = tail.strip().lower() or None
+        if status in {"settings", "config"}:
+            await admin_payment_settings(message)
+        else:
+            await admin_payments(message, status=status)
+    elif command in {"payment_settings", "billing"}:
+        await admin_payment_settings(message)
     elif command == "blocked":
         await admin_check_blocked(message)
     elif command in {"broken", "broken_subs", "failures"}:

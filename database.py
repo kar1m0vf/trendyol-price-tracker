@@ -795,6 +795,36 @@ def get_user_payment_events(user_id: int, *, limit: int = 20) -> List[Dict[str, 
     return [_payment_event_from_row(row) for row in rows if row is not None]
 
 
+def get_payment_events(*, status: Optional[str] = None, limit: int = 20) -> List[Dict[str, Any]]:
+    """Return recent payment events for admin review."""
+    safe_limit = max(1, min(int(limit or 20), 100))
+    params: List[Any] = []
+    where_clause = ""
+    if status:
+        safe_status = str(status).lower()
+        if safe_status not in PAYMENT_EVENT_STATUSES:
+            raise ValueError(f"payment status must be one of {sorted(PAYMENT_EVENT_STATUSES)}")
+        where_clause = "WHERE status = ?"
+        params.append(safe_status)
+    params.append(safe_limit)
+
+    with DatabaseConnection() as conn:
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM payment_events
+                {where_clause}
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                tuple(params),
+            ).fetchall()
+        finally:
+            conn.row_factory = None
+    return [_payment_event_from_row(row) for row in rows if row is not None]
+
+
 def get_expired_premium_overlimit_users(now_ts: int, free_limit: int, grace_days: int) -> List[Dict[str, Any]]:
     """Return expired premium users who still have more products than the free limit."""
     safe_now = int(now_ts)

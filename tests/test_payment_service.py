@@ -24,6 +24,9 @@ def test_payment_plans_are_defined_for_premium_and_donation():
     ]
     assert payment_service.premium_plan_id_for_days(30) == "premium_30"
     assert payment_service.get_payment_plan("donation").kind == payment_service.PaymentKind.DONATION
+    assert all(plan.amount and plan.currency == "XTR" for plan in premium_plans)
+    assert payment_service.get_payment_plan("donation").amount
+    assert payment_service.get_payment_plan("donation").currency == "XTR"
 
 
 def test_create_pending_payment_event(temp_db_path):
@@ -40,6 +43,8 @@ def test_create_pending_payment_event(temp_db_path):
     assert event["kind"] == "premium"
     assert event["status"] == "pending"
     assert event["provider"] == "telegram_stars"
+    assert event["amount"] == payment_service.get_payment_plan("premium_30").amount
+    assert event["currency"] == "XTR"
     assert event["premium_days"] == 30
     assert event["payload"] == {"callback": "premium:plan:30"}
 

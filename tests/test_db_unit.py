@@ -217,6 +217,9 @@ def test_payment_event_lifecycle(temp_db_path):
 
     assert applied["status"] == "paid"
     assert applied["applied_at"] == 1200
+    assert database.get_payment_events(limit=10)[0]["id"] == event["id"]
+    assert database.get_payment_events(status="paid", limit=10)[0]["id"] == event["id"]
+    assert database.get_payment_events(status="pending", limit=10) == []
 
 
 def test_cleanup_user_overlimit_subscriptions_keeps_public_first_products(temp_db_path):

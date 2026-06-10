@@ -53,7 +53,7 @@ Read the full product flow in [User Guide](docs/guides/USER_GUIDE.md).
 - Group multiple price updates into one notification when needed.
 - Support internal free/premium access tiers with different product limits.
 - Show users their current access tier, product usage, premium expiry, and request path through `/premium`.
-- Prepare premium plans, donation intent, and payment-event tracking for a future Telegram Stars integration.
+- Support premium plans, donation intent, Telegram Stars invoices, and payment-event tracking when payments are enabled by the owner runtime.
 
 ### Price Intelligence
 
@@ -182,7 +182,7 @@ Key paths:
 - `database.py` - SQLite schema, migrations, subscriptions, price history, recommendations, backups.
 - Private Trendyol scraper module - owner runtime dependency for product extraction, trends, and history helpers. The implementation is not distributed in the public portfolio source.
 - `services/notification_service.py` - notifications and charts.
-- `services/payment_service.py` - internal premium/donation plan model and payment-event application layer for future Telegram Stars integration.
+- `services/payment_service.py` - internal premium/donation plan model and payment-event application layer used by the Telegram Stars flow.
 - `locales/` - translation files.
 - `tools/diagnostics/deploy_smoke_check.py` - deploy smoke validation.
 - `tests/` - behavioral and unit tests.

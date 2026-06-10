@@ -19,6 +19,7 @@ aiogram Dispatcher / Router
     +--> handlers/analytics_handler.py
     +--> handlers/trending_handler.py
     +--> handlers/callback_handler.py
+    +--> handlers/payment_handler.py
     +--> handlers/admin_handler.py
     |
     v
@@ -57,6 +58,7 @@ Some command helpers still live in `bot.py` while the handler package migration 
 | `handlers/analytics_handler.py` | `/stats`, `/all_list`, `/top_drops` |
 | `handlers/trending_handler.py` | Trend menu entry point and trend search text input |
 | `handlers/callback_handler.py` | Inline product controls, history, compare, alerts, trends, admin callbacks |
+| `handlers/payment_handler.py` | Telegram Stars pre-checkout validation and successful payment application |
 | `handlers/admin_handler.py` | Admin menu, stats, users, broadcast, reports, cleanup, backups, recommendations, broken subscription diagnostics |
 
 ## Database Layer
@@ -71,7 +73,7 @@ Some command helpers still live in `bot.py` while the handler package migration 
 - price history;
 - recommendations;
 - custom bot texts;
-- payment events for future Telegram Stars premium and donation flows;
+- payment events for Telegram Stars premium and donation flows;
 - direct CSV/JSON export payloads;
 - SQLite backup API usage.
 
@@ -90,18 +92,18 @@ Indexes are focused on common runtime queries: subscriptions by user, price hist
 
 ## Payment And Premium Layer
 
-`services/payment_service.py` defines the internal payment model. It does not create real Telegram invoices yet.
+`services/payment_service.py` defines the internal payment model. `handlers/callback_handler.py` creates Telegram Stars invoices when owner runtime payments are enabled, and `handlers/payment_handler.py` validates Telegram pre-checkout queries and applies confirmed payments.
 
 Current responsibilities:
 
 - keep premium and donation plan definitions in one place;
-- create pending payment events;
+- create pending payment events before an invoice is sent;
 - mark payment events as paid, failed, or refunded through database helpers;
 - apply a successful premium payment exactly once;
 - extend an active premium period from the current expiry date instead of overwriting remaining paid time;
 - keep donation payment events separate from premium access grants.
 
-The future Telegram Stars integration should call this service after Telegram confirms a successful payment. Admin-granted premium remains available through `handlers/admin_handler.py` and uses the same internal access tier fields.
+Telegram Stars payments use `XTR` invoice currency and an internal payload that points to the payment event. Admin-granted premium remains available through `handlers/admin_handler.py` and uses the same internal access tier fields.
 
 ## Scraper Layer
 

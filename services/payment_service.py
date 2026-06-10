@@ -1,8 +1,4 @@
-"""Internal payment planning and application service.
-
-This module does not create real Telegram invoices yet. It defines the stable
-payment model that future Telegram Stars handlers can call into.
-"""
+"""Internal payment planning and application service."""
 
 from __future__ import annotations
 
@@ -12,6 +8,13 @@ import time
 from typing import Any, Dict, List, Optional
 
 from access_control import get_effective_user_access
+from config import (
+    DONATION_STARS,
+    PREMIUM_30_STARS,
+    PREMIUM_90_STARS,
+    PREMIUM_365_STARS,
+    TELEGRAM_STARS_CURRENCY,
+)
 import database
 
 
@@ -52,23 +55,31 @@ PAYMENT_PLANS: Dict[str, PaymentPlan] = {
         kind=PaymentKind.PREMIUM,
         title="Premium 30 days",
         duration_days=30,
+        amount=PREMIUM_30_STARS,
+        currency=TELEGRAM_STARS_CURRENCY,
     ),
     "premium_90": PaymentPlan(
         id="premium_90",
         kind=PaymentKind.PREMIUM,
         title="Premium 90 days",
         duration_days=90,
+        amount=PREMIUM_90_STARS,
+        currency=TELEGRAM_STARS_CURRENCY,
     ),
     "premium_365": PaymentPlan(
         id="premium_365",
         kind=PaymentKind.PREMIUM,
         title="Premium 365 days",
         duration_days=365,
+        amount=PREMIUM_365_STARS,
+        currency=TELEGRAM_STARS_CURRENCY,
     ),
     "donation": PaymentPlan(
         id="donation",
         kind=PaymentKind.DONATION,
         title="Donation",
+        amount=DONATION_STARS,
+        currency=TELEGRAM_STARS_CURRENCY,
     ),
 }
 

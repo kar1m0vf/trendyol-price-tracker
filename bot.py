@@ -4544,7 +4544,7 @@ def register_application_handlers() -> None:
     logger.info("Using package handler architecture")
     try:
         _prune_decorated_legacy_handlers()
-        from handlers import BasicHandler, TrendingHandler, SubscriptionHandler, AnalyticsHandler, CallbackHandler, AdminHandler
+        from handlers import BasicHandler, TrendingHandler, SubscriptionHandler, AnalyticsHandler, CallbackHandler, AdminHandler, PaymentHandler
         basic_handler = BasicHandler()
         basic_handler.register(router)
         logger.info("Basic handlers registered")
@@ -4568,6 +4568,10 @@ def register_application_handlers() -> None:
         callback_handler = CallbackHandler()
         callback_handler.register(router)
         logger.info("Callback handlers registered")
+
+        payment_handler = PaymentHandler()
+        payment_handler.register(router)
+        logger.info("Payment handlers registered")
 
         basic_handler.register_fallback(router)
         logger.info("Fallback text handler registered")

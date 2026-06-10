@@ -10,6 +10,7 @@ from .subscription_handler import SubscriptionHandler
 from .analytics_handler import AnalyticsHandler
 from .callback_handler import CallbackHandler
 from .admin_handler import AdminHandler
+from .payment_handler import PaymentHandler
 
 __all__ = [
     'BaseHandler',
@@ -19,4 +20,5 @@ __all__ = [
     'AnalyticsHandler',
     'CallbackHandler',
     'AdminHandler',
+    'PaymentHandler',
 ]
