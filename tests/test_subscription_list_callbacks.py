@@ -573,6 +573,7 @@ async def test_unsubscribe_callback_asks_confirmation_before_delete(monkeypatch)
     assert "Test product" in text
     assert "confirm_unsub:42:yes" in callbacks
     assert "confirm_unsub:42:no" in callbacks
+    assert "edit_sub:42" in callbacks
 
 
 @pytest.mark.asyncio
@@ -607,7 +608,15 @@ async def test_confirm_unsubscribe_callback_removes_subscription(monkeypatch):
     await handler.handle_main_callback(cq)
 
     remove.assert_called_once_with(42)
-    cq.message.edit_text.assert_awaited_once_with(handler.t(12345, "sub_removed"))
+    cq.message.edit_text.assert_awaited_once()
+    args, kwargs = cq.message.edit_text.await_args
+    assert args[0] == handler.t(12345, "sub_removed")
+    callbacks = [
+        button.callback_data
+        for row in kwargs["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert callbacks == ["subs:list"]
 
 
 @pytest.mark.asyncio

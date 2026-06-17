@@ -384,6 +384,7 @@ async def test_callback_premium_plan_shows_payment_notice(monkeypatch):
             "btn_premium_90": "PLAN_90",
             "btn_request_premium": "REQUEST_PREMIUM",
             "btn_support": "SUPPORT",
+            "btn_premium": "PREMIUM",
             "premium_payment_soon": "PAYMENT_SOON {title}",
             "error_generic": "ERROR",
         }
@@ -409,7 +410,7 @@ async def test_callback_premium_plan_shows_payment_notice(monkeypatch):
     assert [
         row[0].callback_data
         for row in kwargs["reply_markup"].inline_keyboard
-    ] == ["premium:request", "premium:support"]
+    ] == ["premium:request", "premium:support", "premium:menu"]
 
 
 @pytest.mark.asyncio
@@ -461,6 +462,7 @@ async def test_callback_premium_donate_shows_donate_notice(monkeypatch):
     handler.t = lambda _uid, key, **_kwargs: {
         "btn_request_premium": "REQUEST_PREMIUM",
         "btn_support": "SUPPORT",
+        "btn_premium": "PREMIUM",
         "premium_donate_soon": "DONATE_SOON",
         "error_generic": "ERROR",
     }[key]
@@ -483,7 +485,7 @@ async def test_callback_premium_donate_shows_donate_notice(monkeypatch):
     assert [
         row[0].callback_data
         for row in kwargs["reply_markup"].inline_keyboard
-    ] == ["premium:request", "premium:support"]
+    ] == ["premium:request", "premium:support", "premium:menu"]
 
 
 @pytest.mark.asyncio
@@ -494,6 +496,7 @@ async def test_callback_premium_donate_shows_amount_menu_when_enabled(monkeypatc
         "donation_choose_amount": "CHOOSE {min} {max}",
         "btn_donation_custom_amount": "CUSTOM",
         "btn_cancel": "CANCEL",
+        "btn_premium": "PREMIUM",
         "error_generic": "ERROR",
     }[key].format(**kwargs)
 
@@ -520,6 +523,7 @@ async def test_callback_premium_donate_shows_amount_menu_when_enabled(monkeypatc
     assert "premium:donate:amount:500" in callbacks
     assert "premium:donate:custom" in callbacks
     assert "premium:donate:cancel" in callbacks
+    assert "premium:menu" in callbacks
 
 
 @pytest.mark.asyncio
@@ -628,6 +632,7 @@ async def test_callback_premium_donate_cancel_replaces_message():
     handler = CallbackHandler()
     handler.t = lambda _uid, key, **_kwargs: {
         "action_cancelled": "CANCELLED",
+        "btn_premium": "PREMIUM",
         "error_generic": "ERROR",
     }[key]
 
@@ -643,7 +648,16 @@ async def test_callback_premium_donate_cancel_replaces_message():
 
     cq.answer.assert_awaited_once()
     assert is_waiting_for_donation_amount(42) is False
-    cq.message.edit_text.assert_awaited_once_with("CANCELLED", parse_mode="HTML")
+    cq.message.edit_text.assert_awaited_once()
+    args, kwargs = cq.message.edit_text.await_args
+    assert args[0] == "CANCELLED"
+    assert kwargs["parse_mode"] == "HTML"
+    callbacks = [
+        button.callback_data
+        for row in kwargs["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert callbacks == ["premium:menu"]
     cq.message.answer.assert_not_awaited()
 
 
@@ -652,6 +666,7 @@ async def test_callback_premium_support_sends_support_text():
     handler = CallbackHandler()
     handler.t = lambda _uid, key, **_kwargs: {
         "support_text": "SUPPORT_TEXT",
+        "btn_premium": "PREMIUM",
         "error_generic": "ERROR",
     }[key]
 
@@ -665,11 +680,17 @@ async def test_callback_premium_support_sends_support_text():
     await handler.handle_main_callback(cq)
 
     cq.answer.assert_awaited_once()
-    cq.message.edit_text.assert_awaited_once_with(
-        "SUPPORT_TEXT",
-        parse_mode="HTML",
-        disable_web_page_preview=True,
-    )
+    cq.message.edit_text.assert_awaited_once()
+    args, kwargs = cq.message.edit_text.await_args
+    assert args[0] == "SUPPORT_TEXT"
+    assert kwargs["parse_mode"] == "HTML"
+    assert kwargs["disable_web_page_preview"] is True
+    callbacks = [
+        button.callback_data
+        for row in kwargs["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert callbacks == ["premium:menu"]
     cq.message.answer.assert_not_awaited()
 
 

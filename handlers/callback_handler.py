@@ -12,7 +12,14 @@ import html
 import re
 
 from .base import BaseHandler
-from config import TELEGRAM_STARS_PAYMENTS_ENABLED, TELEGRAM_STARS_PROVIDER_TOKEN
+from access_control import get_effective_user_access, get_subscription_limit_for_user
+from config import (
+    MAX_SUBSCRIPTIONS_PER_USER,
+    PREMIUM_EXPIRY_GRACE_DAYS,
+    PREMIUM_MAX_SUBSCRIPTIONS_PER_USER,
+    TELEGRAM_STARS_PAYMENTS_ENABLED,
+    TELEGRAM_STARS_PROVIDER_TOKEN,
+)
 from database import (
     get_subscription, remove_subscription, remove_subscriptions_by_user,
     update_mode, set_user_language, update_subscription_settings,
@@ -23,7 +30,7 @@ from database import (
     clear_subscription_check_failure, get_subscription_active, update_payment_event_status,
     get_subscription_failure_details, set_subscription_active
 )
-from keyboards import subscription_controls_kb_for_user, get_main_kb
+from keyboards import get_onboarding_inline_kb, get_premium_inline_kb, subscription_controls_kb_for_user, get_main_kb
 from logging_utils import action_event, actor_label
 from localization import update_language_cache
 from user_texts import format_start_text
@@ -93,6 +100,122 @@ class CallbackHandler(BaseHandler):
             input_field_placeholder=placeholder[:64],
         )
 
+    def _nav_keyboard(
+        self,
+        user_id: int,
+        *,
+        back_callback: str | None = None,
+        back_text_key: str = "btn_back",
+    ) -> InlineKeyboardMarkup | None:
+        rows = []
+        if back_callback:
+            rows.append([
+                InlineKeyboardButton(
+                    text=f"⬅️ {self.t(user_id, back_text_key)}",
+                    callback_data=back_callback,
+                )
+            ])
+        if not rows:
+            return None
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def _subscription_list_nav_keyboard(self, user_id: int) -> InlineKeyboardMarkup:
+        return self._nav_keyboard(user_id, back_callback="subs:list", back_text_key="btn_subs")
+
+    def _empty_subscriptions_keyboard(self, user_id: int) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=self.t(user_id, "btn_subscribe"),
+                        callback_data="onboarding:add",
+                    ),
+                    InlineKeyboardButton(
+                        text=self.t(user_id, "btn_trending"),
+                        callback_data="trend:menu",
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text=self.t(user_id, "btn_detailed_help"),
+                        callback_data="help:full",
+                    )
+                ],
+            ]
+        )
+
+    @staticmethod
+    def _format_access_date(ts: int) -> str:
+        return datetime.fromtimestamp(int(ts)).strftime("%d.%m.%Y")
+
+    def _premium_text_and_keyboard(self, user_id: int) -> tuple[str, InlineKeyboardMarkup]:
+        access = get_effective_user_access(user_id)
+        limit = get_subscription_limit_for_user(user_id)
+        current_count = len(get_user_subscriptions(user_id))
+        has_premium_capacity = access["is_premium"] or limit is None
+
+        if limit is None:
+            status = self.t(user_id, "premium_status_admin")
+            next_step = self.t(user_id, "premium_next_step_admin")
+        elif access["is_premium"]:
+            if access["premium_until"]:
+                status = self.t(
+                    user_id,
+                    "premium_status_active_until",
+                    date=self._format_access_date(access["premium_until"]),
+                )
+            else:
+                status = self.t(user_id, "premium_status_active_forever")
+            next_step = self.t(user_id, "premium_next_step_active")
+        elif access["is_expired"]:
+            status = self.t(
+                user_id,
+                "premium_status_expired",
+                date=self._format_access_date(access["premium_until"]),
+            )
+            next_step = self.t(user_id, "premium_next_step_request")
+        else:
+            status = self.t(user_id, "premium_status_free")
+            next_step = self.t(user_id, "premium_next_step_request")
+
+        usage = (
+            self.t(user_id, "premium_usage_unlimited", count=current_count)
+            if limit is None
+            else self.t(user_id, "premium_usage_limited", count=current_count, limit=limit)
+        )
+        payment_status_key = (
+            "premium_payment_status_enabled"
+            if TELEGRAM_STARS_PAYMENTS_ENABLED
+            else "premium_payment_status_disabled"
+        )
+        text = self.t(
+            user_id,
+            "premium_text",
+            status=status,
+            usage=usage,
+            free_limit=MAX_SUBSCRIPTIONS_PER_USER,
+            premium_limit=PREMIUM_MAX_SUBSCRIPTIONS_PER_USER,
+            grace_days=PREMIUM_EXPIRY_GRACE_DAYS,
+            payment_status=self.t(user_id, payment_status_key),
+            next_step=next_step,
+        )
+        return text, get_premium_inline_kb(user_id, is_premium=has_premium_capacity)
+
+    async def _show_premium_menu(self, cq: CallbackQuery, user_id: int) -> None:
+        try:
+            text, keyboard = self._premium_text_and_keyboard(user_id)
+        except Exception as exc:
+            logger.exception("Failed to build premium callback menu for user=%s: %s", user_id, exc)
+            await self._send_callback_problem(cq, user_id)
+            return
+        await self._replace_callback_message(
+            cq,
+            text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+
     def _premium_contact_kb(self, user_id: int) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(
             inline_keyboard=[
@@ -106,6 +229,12 @@ class CallbackHandler(BaseHandler):
                     InlineKeyboardButton(
                         text=self.t(user_id, "btn_support"),
                         callback_data="premium:support",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text=f"⬅️ {self.t(user_id, 'btn_premium')}",
+                        callback_data="premium:menu",
                     )
                 ],
             ]
@@ -238,6 +367,12 @@ class CallbackHandler(BaseHandler):
                 )
             ]
         )
+        rows.append([
+            InlineKeyboardButton(
+                text=f"⬅️ {self.t(user_id, 'btn_premium')}",
+                callback_data="premium:menu",
+            )
+        ])
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
     async def _show_donation_amount_menu(self, cq: CallbackQuery, user_id: int) -> None:
@@ -381,6 +516,16 @@ class CallbackHandler(BaseHandler):
                 await self._replace_callback_message(cq, self.t(user_id, "help_full"))
                 return
 
+            if data == "nav:home":
+                await cq.answer()
+                await self._replace_callback_message(
+                    cq,
+                    self.t(user_id, "main_menu_opened"),
+                    reply_markup=get_onboarding_inline_kb(user_id),
+                    parse_mode="HTML",
+                )
+                return
+
             if data == "onboarding:add":
                 await cq.answer()
                 await self._replace_callback_message(
@@ -393,6 +538,11 @@ class CallbackHandler(BaseHandler):
                 await cq.answer()
                 action_event("USER", "opened subscriptions from button", user=actor_label(cq.from_user))
                 await self._show_subscriptions_overview(cq, user_id)
+                return
+
+            if data == "premium:menu":
+                await cq.answer()
+                await self._show_premium_menu(cq, user_id)
                 return
 
             if data.startswith("premium:plan:"):
@@ -488,7 +638,12 @@ class CallbackHandler(BaseHandler):
             if data == "premium:donate:cancel":
                 await cq.answer()
                 clear_donation_amount_entry(user_id)
-                await self._replace_callback_message(cq, self.t(user_id, "action_cancelled"), parse_mode="HTML")
+                await self._replace_callback_message(
+                    cq,
+                    self.t(user_id, "action_cancelled"),
+                    reply_markup=self._nav_keyboard(user_id, back_callback="premium:menu", back_text_key="btn_premium"),
+                    parse_mode="HTML",
+                )
                 return
 
             if data == "premium:support":
@@ -496,6 +651,7 @@ class CallbackHandler(BaseHandler):
                 await self._replace_callback_message(
                     cq,
                     self.t(user_id, "support_text"),
+                    reply_markup=self._nav_keyboard(user_id, back_callback="premium:menu", back_text_key="btn_premium"),
                     parse_mode="HTML",
                     disable_web_page_preview=True,
                 )
@@ -677,7 +833,10 @@ class CallbackHandler(BaseHandler):
 
                 _clear_compare_state(user_id)
                 await cq.answer()
-                await self._replace_callback_message(cq, self.t(user_id, "action_cancelled"))
+                await self._replace_callback_message(
+                    cq,
+                    self.t(user_id, "action_cancelled"),
+                )
                 return
 
             if data == "compare_subs":
@@ -691,7 +850,11 @@ class CallbackHandler(BaseHandler):
                 await cq.answer()
                 subs = get_user_subscriptions(user_id)
                 if not subs:
-                    await self._replace_callback_message(cq, self.t(user_id, "no_subs"))
+                    await self._replace_callback_message(
+                        cq,
+                        self.t(user_id, "no_subs"),
+                        reply_markup=self._empty_subscriptions_keyboard(user_id),
+                    )
                     return
                 first = (compare_state.get(user_id) or {}).get("first")
                 selectable_subs = [
@@ -840,6 +1003,12 @@ class CallbackHandler(BaseHandler):
                                     callback_data=f"sub_settings:{sub_id}",
                                 )
                             ],
+                            [
+                                InlineKeyboardButton(
+                                    text=f"⬅️ {self.t(user_id, 'btn_back')}",
+                                    callback_data=f"edit_sub:{sub_id}",
+                                )
+                            ],
                         ])
                         await self._replace_callback_message(
                             cq,
@@ -865,14 +1034,18 @@ class CallbackHandler(BaseHandler):
                     _prefix, sub_id_raw, answer = data.split(":", 2)
                     sub_id = int(sub_id_raw)
                     if answer != "yes":
-                        await self._replace_callback_message(cq, self.t(user_id, "action_cancelled"))
+                        await self._show_subscription_detail(cq, user_id, sub_id, self.t(user_id, "action_cancelled"))
                         return
 
                     sub = get_subscription(sub_id)
                     if sub and sub[1] == user_id:
                         remove_subscription(sub_id)
                         action_event("USER", "removed subscription from button", user=actor_label(cq.from_user), sub_id=sub_id)
-                        await self._replace_callback_message(cq, self.t(user_id, "sub_removed"))
+                        await self._replace_callback_message(
+                            cq,
+                            self.t(user_id, "sub_removed"),
+                            reply_markup=self._subscription_list_nav_keyboard(user_id),
+                        )
                     else:
                         await cq.answer(self.t(user_id, "error_not_your_sub"), show_alert=True)
                 except ValueError:
@@ -893,12 +1066,20 @@ class CallbackHandler(BaseHandler):
                     if ans == "yes":
                         remove_subscriptions_by_user(user_id)
                         action_event("USER", "removed all subscriptions", user=actor_label(cq.from_user))
-                        await cq.message.edit_text(self.t(user_id, "unsubscribed_all"))
+                        await self._replace_callback_message(
+                            cq,
+                            self.t(user_id, "unsubscribed_all"),
+                            reply_markup=self._empty_subscriptions_keyboard(user_id),
+                        )
                     else:
-                        await cq.message.edit_text(self.t(user_id, "action_cancelled"))
+                        await self._replace_callback_message(
+                            cq,
+                            self.t(user_id, "action_cancelled"),
+                            reply_markup=self._subscription_list_nav_keyboard(user_id),
+                        )
                 except Exception as e:
                     logger.exception("Mass unsubscribe error: %s", e)
-                    await cq.message.edit_text(self.t(user_id, "error_generic"))
+                    await self._replace_callback_message(cq, self.t(user_id, "error_generic"))
                 return
 
 
@@ -1326,7 +1507,11 @@ class CallbackHandler(BaseHandler):
 
         subs = get_user_subscriptions(user_id)
         if not subs:
-            await self._replace_callback_message(cq, self.t(user_id, "no_subs"))
+            await self._replace_callback_message(
+                cq,
+                self.t(user_id, "no_subs"),
+                reply_markup=self._empty_subscriptions_keyboard(user_id),
+            )
             return
 
         overview_text, overview_keyboard = build_subscriptions_overview(user_id, subs)
@@ -1597,7 +1782,11 @@ class CallbackHandler(BaseHandler):
         try:
             subs = get_user_subscriptions(user_id)
             if not subs:
-                await cq.message.edit_text(self.t(user_id, "no_subs"))
+                await self._replace_callback_message(
+                    cq,
+                    self.t(user_id, "no_subs"),
+                    reply_markup=self._empty_subscriptions_keyboard(user_id),
+                )
                 return
 
             lines = [self.t(user_id, "alerts_header")]
@@ -1622,10 +1811,16 @@ class CallbackHandler(BaseHandler):
 
             text = "\n".join(lines)
             if len(text) > 4000:
-                await cq.message.edit_text(self.t(user_id, "alerts_too_many"), parse_mode="HTML")
+                await self._replace_callback_message(
+                    cq,
+                    self.t(user_id, "alerts_too_many"),
+                    reply_markup=self._nav_keyboard(user_id),
+                    parse_mode="HTML",
+                )
                 return
 
-            await cq.message.edit_text(
+            await self._replace_callback_message(
+                cq,
                 text,
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
                 parse_mode="HTML",

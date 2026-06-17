@@ -164,6 +164,7 @@
   "history_fetching_short": "Fetching history...",
   "unsubscribed_all": "All your subscriptions have been removed.",
   "action_cancelled": "Action cancelled.",
+  "main_menu_opened": "<b>Main menu</b>\n\nChoose the next step below or use the menu buttons at the bottom of the chat.",
   "no_subs_found_id": "No product found for that number.",
   "provide_mode_options": "Please choose a notification mode: hourly or discount.",
   "cmd_setmode_usage": "Usage: /setmode <product number> <hourly|discount>",

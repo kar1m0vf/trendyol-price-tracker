@@ -159,6 +159,7 @@
   "history_fetching_short": "Ищу историю...",
   "unsubscribed_all": "Все ваши подписки удалены.",
   "action_cancelled": "Действие отменено.",
+  "main_menu_opened": "<b>Главное меню</b>\n\nВыберите следующий шаг ниже или используйте кнопки меню внизу чата.",
   "no_subs_found_id": "Товар с таким номером не найден.",
   "provide_mode_options": "Выберите режим уведомлений: hourly или discount.",
   "cmd_setmode_usage": "Использование: /setmode <номер товара> <hourly|discount>",

@@ -159,6 +159,7 @@
   "history_fetching_short": "Tarixçə axtarılır...",
   "unsubscribed_all": "Bütün abunəlikləriniz silindi.",
   "action_cancelled": "Əməliyyat ləğv edildi.",
+  "main_menu_opened": "<b>Əsas menyu</b>\n\nNövbəti addımı aşağıdan seçin və ya çatın altındakı menyu düymələrindən istifadə edin.",
   "no_subs_found_id": "Bu nömrə ilə məhsul tapılmadı.",
   "provide_mode_options": "Zəhmət olmasa bildiriş rejimini seçin: hourly və ya discount.",
   "cmd_setmode_usage": "İstifadə: /setmode <məhsul nömrəsi> <hourly|discount>",
