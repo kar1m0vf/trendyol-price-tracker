@@ -6,6 +6,8 @@
     "payment_not_pending": "Bu fatura zaten işlendi. /premium bölümünde yeni bir fatura oluşturun.",
     "payment_amount_mismatch": "Ödeme tutarı faturayla eşleşmiyor. /premium bölümünde yeni bir fatura oluşturun.",
     "payment_apply_failed": "<b>Ödeme alındı, ancak erişim otomatik uygulanmadı</b>\n\nDesteğe yazın, yönetici ödemeyi kontrol edecek.",
+    "bot_profile_description": "Trendyol ürün fiyatlarını takip edin ve indirim bildirimleri alın.\n\nBaşlamak için ürün linkini gönderin. Bot ürünü kaydeder, güncel fiyatı ve fiyat geçmişini gösterir, hedef fiyat ayarlamaya yardımcı olur.\n\nTrendyol ile bağlantılı olmayan bağımsız bir projedir.",
+    "bot_profile_short_description": "Trendyol ürünleri için fiyat, indirim ve hedef fiyat takibi.",
     "premium_payment_success_until": "<b>Premium etkinleştirildi</b>\n\nÖdeme başarılı. Erişim <b>{date}</b> tarihine kadar aktif.\nTakip edilen ürün limiti: <b>{limit}</b>.",
     "donation_payment_success": "<b>Projeyi desteklediğiniz için teşekkürler</b>\n\nTelegram Stars bağışınız alındı.",
     "donation_choose_amount": "<b>Projeyi destekle</b>\n\nBağış tutarını seçin veya kendi tutarınızı yazın. <b>{min}</b> ile <b>{max}</b> ⭐ arasında gönderebilirsiniz.",

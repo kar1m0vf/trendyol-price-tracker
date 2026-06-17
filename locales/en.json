@@ -6,6 +6,8 @@
     "payment_not_pending": "This invoice has already been processed. Please create a new invoice in /premium.",
     "payment_amount_mismatch": "The payment amount does not match this invoice. Please create a new invoice in /premium.",
     "payment_apply_failed": "<b>Payment received, but access was not applied automatically</b>\n\nPlease contact support so the administrator can check it.",
+    "bot_profile_description": "Track Trendyol product prices and get discount alerts.\n\nSend a product link to start. The bot saves the item, shows the current price, price history and helps set a target price.\n\nIndependent project, not affiliated with Trendyol.",
+    "bot_profile_short_description": "Price, discount and target-price tracking for Trendyol products.",
     "premium_payment_success_until": "<b>Premium activated</b>\n\nPayment was successful. Access is active until <b>{date}</b>.\nTracked product limit: <b>{limit}</b>.",
     "donation_payment_success": "<b>Thank you for supporting the project</b>\n\nYour Telegram Stars donation has been received.",
     "donation_choose_amount": "<b>Support the project</b>\n\nChoose a donation amount or enter your own. You can send from <b>{min}</b> to <b>{max}</b> ⭐.",

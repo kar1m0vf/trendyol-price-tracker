@@ -6,6 +6,8 @@
   "payment_not_pending": "Bu hesab artıq emal olunub. /premium bölməsində yeni hesab yaradın.",
   "payment_amount_mismatch": "Ödəniş məbləği hesabla uyğun gəlmir. /premium bölməsində yeni hesab yaradın.",
   "payment_apply_failed": "<b>Ödəniş alındı, amma giriş avtomatik tətbiq olunmadı</b>\n\nDəstəyə yazın, administrator ödənişi yoxlayacaq.",
+  "bot_profile_description": "Trendyol məhsullarının qiymətlərini izləyin və endirim bildirişləri alın.\n\nBaşlamaq üçün məhsul linkini göndərin. Bot məhsulu saxlayacaq, cari qiyməti, qiymət tarixçəsini göstərəcək və hədəf qiymət qurmağa kömək edəcək.\n\nTrendyol ilə əlaqəli olmayan müstəqil layihə.",
+  "bot_profile_short_description": "Trendyol məhsulları üçün qiymət, endirim və hədəf qiymət izləmə.",
   "premium_payment_success_until": "<b>Premium aktiv edildi</b>\n\nÖdəniş uğurludur. Giriş <b>{date}</b> tarixinə qədər aktivdir.\nİzlənən məhsul limiti: <b>{limit}</b>.",
   "donation_payment_success": "<b>Layihəyə dəstəyiniz üçün təşəkkürlər</b>\n\nTelegram Stars ianəniz qəbul edildi.",
   "donation_choose_amount": "<b>Layihəni dəstəklə</b>\n\nİanə məbləğini seçin və ya öz məbləğinizi yazın. <b>{min}</b>-<b>{max}</b> ⭐ aralığında göndərə bilərsiniz.",
