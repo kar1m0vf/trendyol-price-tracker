@@ -2,6 +2,7 @@
 Handlers for callback queries (button clicks).
 """
 from datetime import datetime
+import inspect
 import sys
 
 from aiogram import types
@@ -231,9 +232,20 @@ class CallbackHandler(BaseHandler):
         )
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
+    def _donation_cancel_kb(self, user_id: int) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=self.t(user_id, "btn_cancel"),
+                    callback_data="premium:donate:cancel",
+                )
+            ]
+        ])
+
     async def _show_donation_amount_menu(self, cq: CallbackQuery, user_id: int) -> None:
         clear_donation_amount_entry(user_id)
-        await cq.message.answer(
+        await self._replace_callback_message(
+            cq,
             self.t(
                 user_id,
                 "donation_choose_amount",
@@ -260,21 +272,25 @@ class CallbackHandler(BaseHandler):
             except Exception:
                 logger.debug("Failed to send durable callback error", exc_info=True)
 
-    async def _replace_callback_message(self, cq: CallbackQuery, text: str, **kwargs) -> None:
+    async def _replace_callback_message(self, cq: CallbackQuery, text: str, **kwargs):
         """Replace text/caption behind a callback, falling back to a new message."""
         message = getattr(cq, "message", None)
         if message is None:
-            return
+            return None
 
-        try:
-            await message.edit_text(text, **kwargs)
-            return
-        except TelegramBadRequest as exc:
-            message_text = str(exc).lower()
-            if "no text" not in message_text and "message is not modified" not in message_text:
-                raise
-            if "message is not modified" in message_text:
-                return
+        edit_text = getattr(message, "edit_text", None)
+        if callable(edit_text):
+            try:
+                result = edit_text(text, **kwargs)
+                if inspect.isawaitable(result):
+                    await result
+                return message
+            except TelegramBadRequest as exc:
+                message_text = str(exc).lower()
+                if "no text" not in message_text and "message is not modified" not in message_text:
+                    raise
+                if "message is not modified" in message_text:
+                    return message
 
         caption_kwargs = {
             key: value
@@ -284,18 +300,22 @@ class CallbackHandler(BaseHandler):
         edit_caption = getattr(message, "edit_caption", None)
         if callable(edit_caption):
             try:
-                await edit_caption(caption=text, **caption_kwargs)
-                return
+                result = edit_caption(caption=text, **caption_kwargs)
+                if inspect.isawaitable(result):
+                    await result
+                return message
             except TelegramBadRequest as exc:
                 message_text = str(exc).lower()
                 if "message is not modified" in message_text:
-                    return
+                    return message
                 logger.debug("Could not edit callback message caption", exc_info=True)
 
         answer = getattr(message, "answer", None)
         if callable(answer):
-            await answer(text, **kwargs)
-            return
+            result = answer(text, **kwargs)
+            if inspect.isawaitable(result):
+                return await result
+            return result
         raise RuntimeError("Callback message cannot be edited or answered")
 
     async def _show_product_card_message(
@@ -360,14 +380,14 @@ class CallbackHandler(BaseHandler):
 
             if data == "help:full":
                 await cq.answer()
-                await cq.message.edit_text(self.t(user_id, "help_full"))
+                await self._replace_callback_message(cq, self.t(user_id, "help_full"))
                 return
 
             if data == "onboarding:add":
                 await cq.answer()
-                await cq.message.answer(
+                await self._replace_callback_message(
+                    cq,
                     self.t(user_id, "send_link_prompt"),
-                    reply_markup=get_main_kb(user_id),
                 )
                 return
 
@@ -399,7 +419,8 @@ class CallbackHandler(BaseHandler):
                         source="premium_plan_button",
                     )
                     return
-                await cq.message.answer(
+                await self._replace_callback_message(
+                    cq,
                     self.t(
                         user_id,
                         "premium_payment_soon",
@@ -415,7 +436,8 @@ class CallbackHandler(BaseHandler):
                 if TELEGRAM_STARS_PAYMENTS_ENABLED:
                     await self._show_donation_amount_menu(cq, user_id)
                     return
-                await cq.message.answer(
+                await self._replace_callback_message(
+                    cq,
                     self.t(user_id, "premium_donate_soon"),
                     reply_markup=self._premium_contact_kb(user_id),
                     parse_mode="HTML",
@@ -453,13 +475,15 @@ class CallbackHandler(BaseHandler):
             if data == "premium:donate:custom":
                 await cq.answer()
                 start_donation_amount_entry(user_id)
-                await cq.message.answer(
+                await self._replace_callback_message(
+                    cq,
                     self.t(
                         user_id,
                         "donation_custom_amount_prompt",
                         min=MIN_DONATION_STARS,
                         max=MAX_DONATION_STARS,
                     ),
+                    reply_markup=self._donation_cancel_kb(user_id),
                     parse_mode="HTML",
                 )
                 return
@@ -467,12 +491,13 @@ class CallbackHandler(BaseHandler):
             if data == "premium:donate:cancel":
                 await cq.answer()
                 clear_donation_amount_entry(user_id)
-                await cq.message.answer(self.t(user_id, "donation_custom_amount_cancelled"), parse_mode="HTML")
+                await self._replace_callback_message(cq, self.t(user_id, "action_cancelled"), parse_mode="HTML")
                 return
 
             if data == "premium:support":
                 await cq.answer()
-                await cq.message.answer(
+                await self._replace_callback_message(
+                    cq,
                     self.t(user_id, "support_text"),
                     parse_mode="HTML",
                     disable_web_page_preview=True,
@@ -487,7 +512,8 @@ class CallbackHandler(BaseHandler):
                 ):
                     await self._send_callback_problem(cq, user_id)
                     return
-                await cq.message.answer(
+                await self._replace_callback_message(
+                    cq,
                     self.t(user_id, "premium_request_prompt"),
                     parse_mode="HTML",
                 )
@@ -778,21 +804,13 @@ class CallbackHandler(BaseHandler):
 
                     _set_compare_first(user_id, _compare_product_from_subscription(sub))
                     await cq.answer()
-                    try:
-                        await cq.message.answer(
-                            self.t(user_id, "compare_prompt_button"),
-                            reply_markup=_compare_prompt_keyboard(user_id),
-                            parse_mode="HTML",
-                            disable_web_page_preview=True,
-                        )
-                    except Exception:
-                        await self.bot.send_message(
-                            user_id,
-                            self.t(user_id, "compare_prompt_button"),
-                            reply_markup=_compare_prompt_keyboard(user_id),
-                            parse_mode="HTML",
-                            disable_web_page_preview=True,
-                        )
+                    await self._replace_callback_message(
+                        cq,
+                        self.t(user_id, "compare_prompt_button"),
+                        reply_markup=_compare_prompt_keyboard(user_id),
+                        parse_mode="HTML",
+                        disable_web_page_preview=True,
+                    )
                 except ValueError:
                     await cq.answer(self.t(user_id, "error_invalid_id"), show_alert=True)
                 except Exception as e:
@@ -1645,7 +1663,13 @@ class CallbackHandler(BaseHandler):
 
         status_text = self.t(user_id, "status_checking_product")
         await cq.answer(status_text)
-        status_message = await self.send_status_message(user_id, status_text)
+        status_message = await self._replace_callback_message(
+            cq,
+            status_text,
+            reply_markup=None,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
 
         values = list(sub)
         while len(values) < 7:

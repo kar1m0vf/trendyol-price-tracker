@@ -337,7 +337,6 @@ async def test_refresh_price_callback_rejects_foreign_subscription(monkeypatch):
 @pytest.mark.asyncio
 async def test_refresh_price_callback_updates_changed_price(monkeypatch):
     handler = CallbackHandler()
-    status_message = MagicMock()
     sub = (
         42,
         12345,
@@ -366,7 +365,7 @@ async def test_refresh_price_callback_updates_changed_price(monkeypatch):
     monkeypatch.setattr(callback_module, "save_price_point", save_point)
     monkeypatch.setattr(callback_module, "clear_subscription_check_failure", clear_failure)
     monkeypatch.setattr(callback_module, "action_event", lambda *args, **kwargs: None)
-    handler.send_status_message = AsyncMock(return_value=status_message)
+    handler.send_status_message = AsyncMock()
     handler.replace_status_message = AsyncMock(return_value=True)
     handler._subscription_detail_keyboard = MagicMock(return_value=None)
 
@@ -375,15 +374,20 @@ async def test_refresh_price_callback_updates_changed_price(monkeypatch):
     cq.from_user.id = 12345
     cq.answer = AsyncMock()
     cq.message = MagicMock()
+    cq.message.edit_text = AsyncMock()
 
     await handler.handle_main_callback(cq)
 
+    handler.send_status_message.assert_not_awaited()
+    cq.message.edit_text.assert_awaited_once()
+    assert cq.message.edit_text.await_args.args[0] == handler.t(12345, "status_checking_product")
     fetch.assert_awaited_once_with("https://www.trendyol.com/test/product-p-42")
     update_meta.assert_called_once_with(42, "Fresh title", "https://img.example/1.jpg")
     save_point.assert_called_once_with(42, 179.0)
     update_last.assert_called_once_with(42, 179.0)
     clear_failure.assert_called_once_with(42)
     handler.replace_status_message.assert_awaited_once()
+    assert handler.replace_status_message.await_args.args[0] is cq.message
     result_text = handler.replace_status_message.await_args.args[1]
     assert "Fresh title" in result_text
     assert "199" in result_text
@@ -394,7 +398,6 @@ async def test_refresh_price_callback_updates_changed_price(monkeypatch):
 @pytest.mark.asyncio
 async def test_refresh_price_callback_records_failure_when_price_missing(monkeypatch):
     handler = CallbackHandler()
-    status_message = MagicMock()
     sub = (
         42,
         12345,
@@ -420,7 +423,7 @@ async def test_refresh_price_callback_records_failure_when_price_missing(monkeyp
     monkeypatch.setattr(callback_module, "record_subscription_check_failure", record_failure)
     monkeypatch.setattr(callback_module, "update_last_price", update_last)
     monkeypatch.setattr(callback_module, "save_price_point", save_point)
-    handler.send_status_message = AsyncMock(return_value=status_message)
+    handler.send_status_message = AsyncMock()
     handler.replace_status_message = AsyncMock(return_value=True)
     handler._subscription_detail_keyboard = MagicMock(return_value=None)
 
@@ -429,13 +432,18 @@ async def test_refresh_price_callback_records_failure_when_price_missing(monkeyp
     cq.from_user.id = 12345
     cq.answer = AsyncMock()
     cq.message = MagicMock()
+    cq.message.edit_text = AsyncMock()
 
     await handler.handle_main_callback(cq)
 
+    handler.send_status_message.assert_not_awaited()
+    cq.message.edit_text.assert_awaited_once()
+    assert cq.message.edit_text.await_args.args[0] == handler.t(12345, "status_checking_product")
     record_failure.assert_called_once_with(42, "manual_price_not_found")
     update_last.assert_not_called()
     save_point.assert_not_called()
     handler.replace_status_message.assert_awaited_once()
+    assert handler.replace_status_message.await_args.args[0] is cq.message
     assert handler.t(12345, "refresh_price_unavailable") in handler.replace_status_message.await_args.args[1]
 
 

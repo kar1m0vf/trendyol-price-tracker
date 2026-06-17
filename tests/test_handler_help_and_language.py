@@ -8,7 +8,11 @@ from handlers.basic import BasicHandler
 import handlers.basic as basic_module
 from handlers.callback_handler import CallbackHandler
 import handlers.callback_handler as callback_module
-from handlers.payment_handler import clear_donation_amount_entry, is_waiting_for_donation_amount
+from handlers.payment_handler import (
+    clear_donation_amount_entry,
+    is_waiting_for_donation_amount,
+    start_donation_amount_entry,
+)
 
 
 @pytest.mark.asyncio
@@ -324,15 +328,14 @@ async def test_callback_onboarding_add_prompts_for_link():
         data="onboarding:add",
         from_user=SimpleNamespace(id=42),
         answer=AsyncMock(),
-        message=SimpleNamespace(answer=AsyncMock()),
+        message=SimpleNamespace(edit_text=AsyncMock(), answer=AsyncMock()),
     )
 
     await handler.handle_main_callback(cq)
 
     cq.answer.assert_awaited_once()
-    cq.message.answer.assert_awaited_once()
-    assert cq.message.answer.await_args.args[0] == "SEND_LINK"
-    assert "reply_markup" in cq.message.answer.await_args.kwargs
+    cq.message.edit_text.assert_awaited_once_with("SEND_LINK")
+    cq.message.answer.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -349,7 +352,7 @@ async def test_callback_premium_request_starts_report_state(monkeypatch):
         data="premium:request",
         from_user=SimpleNamespace(id=42),
         answer=AsyncMock(),
-        message=SimpleNamespace(answer=AsyncMock()),
+        message=SimpleNamespace(edit_text=AsyncMock(), answer=AsyncMock()),
     )
 
     await handler.handle_main_callback(cq)
@@ -359,10 +362,11 @@ async def test_callback_premium_request_starts_report_state(monkeypatch):
         "step": "waiting_text",
         "source": "premium_request",
     }
-    cq.message.answer.assert_awaited_once_with(
+    cq.message.edit_text.assert_awaited_once_with(
         "PREMIUM_REQUEST_PROMPT",
         parse_mode="HTML",
     )
+    cq.message.answer.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -386,14 +390,15 @@ async def test_callback_premium_plan_shows_payment_notice(monkeypatch):
         data="premium:plan:90",
         from_user=SimpleNamespace(id=42),
         answer=AsyncMock(),
-        message=SimpleNamespace(answer=AsyncMock()),
+        message=SimpleNamespace(edit_text=AsyncMock(), answer=AsyncMock()),
     )
 
     await handler.handle_main_callback(cq)
 
     cq.answer.assert_awaited_once()
-    cq.message.answer.assert_awaited_once()
-    args, kwargs = cq.message.answer.await_args
+    cq.message.edit_text.assert_awaited_once()
+    cq.message.answer.assert_not_awaited()
+    args, kwargs = cq.message.edit_text.await_args
     assert args[0] == "PAYMENT_SOON PLAN_90"
     assert kwargs["parse_mode"] == "HTML"
     assert [
@@ -459,14 +464,15 @@ async def test_callback_premium_donate_shows_donate_notice(monkeypatch):
         data="premium:donate",
         from_user=SimpleNamespace(id=42),
         answer=AsyncMock(),
-        message=SimpleNamespace(answer=AsyncMock()),
+        message=SimpleNamespace(edit_text=AsyncMock(), answer=AsyncMock()),
     )
 
     await handler.handle_main_callback(cq)
 
     cq.answer.assert_awaited_once()
-    cq.message.answer.assert_awaited_once()
-    args, kwargs = cq.message.answer.await_args
+    cq.message.edit_text.assert_awaited_once()
+    cq.message.answer.assert_not_awaited()
+    args, kwargs = cq.message.edit_text.await_args
     assert args[0] == "DONATE_SOON"
     assert kwargs["parse_mode"] == "HTML"
     assert [
@@ -490,14 +496,15 @@ async def test_callback_premium_donate_shows_amount_menu_when_enabled(monkeypatc
         data="premium:donate",
         from_user=SimpleNamespace(id=42),
         answer=AsyncMock(),
-        message=SimpleNamespace(answer=AsyncMock()),
+        message=SimpleNamespace(edit_text=AsyncMock(), answer=AsyncMock()),
     )
 
     await handler.handle_main_callback(cq)
 
     cq.answer.assert_awaited_once()
-    cq.message.answer.assert_awaited_once()
-    args, kwargs = cq.message.answer.await_args
+    cq.message.edit_text.assert_awaited_once()
+    cq.message.answer.assert_not_awaited()
+    args, kwargs = cq.message.edit_text.await_args
     assert args[0].startswith("CHOOSE ")
     callbacks = [
         button.callback_data
@@ -553,6 +560,7 @@ async def test_callback_premium_donate_custom_starts_amount_entry():
     handler = CallbackHandler()
     handler.t = lambda _uid, key, **kwargs: {
         "donation_custom_amount_prompt": "PROMPT {min} {max}",
+        "btn_cancel": "CANCEL",
         "error_generic": "ERROR",
     }[key].format(**kwargs)
 
@@ -560,7 +568,7 @@ async def test_callback_premium_donate_custom_starts_amount_entry():
         data="premium:donate:custom",
         from_user=SimpleNamespace(id=42),
         answer=AsyncMock(),
-        message=SimpleNamespace(answer=AsyncMock()),
+        message=SimpleNamespace(edit_text=AsyncMock(), answer=AsyncMock()),
     )
 
     clear_donation_amount_entry(42)
@@ -568,10 +576,36 @@ async def test_callback_premium_donate_custom_starts_amount_entry():
 
     cq.answer.assert_awaited_once()
     assert is_waiting_for_donation_amount(42) is True
-    cq.message.answer.assert_awaited_once()
-    assert cq.message.answer.await_args.args[0].startswith("PROMPT ")
+    cq.message.edit_text.assert_awaited_once()
+    cq.message.answer.assert_not_awaited()
+    assert cq.message.edit_text.await_args.args[0].startswith("PROMPT ")
+    assert cq.message.edit_text.await_args.kwargs["reply_markup"].inline_keyboard[0][0].callback_data == "premium:donate:cancel"
 
     clear_donation_amount_entry(42)
+
+
+@pytest.mark.asyncio
+async def test_callback_premium_donate_cancel_replaces_message():
+    handler = CallbackHandler()
+    handler.t = lambda _uid, key, **_kwargs: {
+        "action_cancelled": "CANCELLED",
+        "error_generic": "ERROR",
+    }[key]
+
+    cq = SimpleNamespace(
+        data="premium:donate:cancel",
+        from_user=SimpleNamespace(id=42),
+        answer=AsyncMock(),
+        message=SimpleNamespace(edit_text=AsyncMock(), answer=AsyncMock()),
+    )
+
+    start_donation_amount_entry(42)
+    await handler.handle_main_callback(cq)
+
+    cq.answer.assert_awaited_once()
+    assert is_waiting_for_donation_amount(42) is False
+    cq.message.edit_text.assert_awaited_once_with("CANCELLED", parse_mode="HTML")
+    cq.message.answer.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -586,17 +620,18 @@ async def test_callback_premium_support_sends_support_text():
         data="premium:support",
         from_user=SimpleNamespace(id=42),
         answer=AsyncMock(),
-        message=SimpleNamespace(answer=AsyncMock()),
+        message=SimpleNamespace(edit_text=AsyncMock(), answer=AsyncMock()),
     )
 
     await handler.handle_main_callback(cq)
 
     cq.answer.assert_awaited_once()
-    cq.message.answer.assert_awaited_once_with(
+    cq.message.edit_text.assert_awaited_once_with(
         "SUPPORT_TEXT",
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
+    cq.message.answer.assert_not_awaited()
 
 
 @pytest.mark.asyncio

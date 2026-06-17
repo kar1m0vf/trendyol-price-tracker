@@ -142,6 +142,42 @@ async def test_compare_pick_second_subscription_runs_compare(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_compare_button_replaces_current_card_with_prompt(monkeypatch):
+    import bot
+    from handlers import callback_handler as callback_module
+    from handlers import CallbackHandler
+
+    bot.compare_state.pop(12345, None)
+    sub = _sub(42, "https://www.trendyol.com/brand/current-p-1", "Current product")
+    monkeypatch.setattr(callback_module, "get_subscription", lambda _sub_id: sub)
+
+    handler = CallbackHandler()
+    handler.t = lambda _uid, key, **_kwargs: {
+        "compare_prompt_button": "COMPARE_PROMPT",
+        "error_not_your_sub": "NOT_YOURS",
+        "error_invalid_id": "BAD_ID",
+        "error_generic": "ERROR",
+    }[key]
+
+    cq = SimpleNamespace(
+        data="compare:42",
+        from_user=SimpleNamespace(id=12345),
+        answer=AsyncMock(),
+        message=SimpleNamespace(edit_text=AsyncMock(), answer=AsyncMock()),
+    )
+
+    await handler.handle_main_callback(cq)
+
+    cq.answer.assert_awaited_once()
+    cq.message.edit_text.assert_awaited_once()
+    cq.message.answer.assert_not_awaited()
+    args, kwargs = cq.message.edit_text.await_args
+    assert args[0] == "COMPARE_PROMPT"
+    assert kwargs["reply_markup"].inline_keyboard[-1][0].callback_data == "compare_cancel"
+    assert bot.compare_state[12345]["first"]["sub_id"] == 42
+
+
+@pytest.mark.asyncio
 async def test_compare_subs_excludes_first_subscription(monkeypatch):
     import bot
     from handlers import callback_handler as callback_module
