@@ -192,6 +192,21 @@ class PaymentHandler(BaseHandler):
     async def handle_donation_amount_text(self, message: types.Message) -> None:
         user_id = int(message.from_user.id)
         raw_amount = (message.text or "").strip()
+        cancel_words = {
+            "cancel",
+            "отмена",
+            "ləğv et",
+            "iptal",
+        }
+        try:
+            cancel_words.add(self.t(user_id, "btn_cancel").strip().casefold())
+        except Exception:
+            logger.debug("Donation cancel translation is unavailable", exc_info=True)
+        if raw_amount.casefold() in cancel_words:
+            clear_donation_amount_entry(user_id)
+            await message.answer(self.t(user_id, "donation_custom_amount_cancelled"), parse_mode="HTML")
+            return
+
         try:
             amount = normalize_donation_amount(raw_amount)
         except ValueError:

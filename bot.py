@@ -17,7 +17,7 @@ from aiogram import Bot, Dispatcher, Router, types
 from aiogram.filters import Command
 from aiogram.types import (
     InlineKeyboardButton, InlineKeyboardMarkup,
-    ReplyKeyboardMarkup, KeyboardButton
+    ReplyKeyboardMarkup, KeyboardButton, ForceReply
 )
 
 from config import (
@@ -412,6 +412,16 @@ import_state = set()
 
 
 onboarding_state = {}
+
+
+def force_reply_markup(user_id: int, placeholder_key: str) -> ForceReply:
+    """Open Telegram's reply UI for short user input prompts."""
+    placeholder = t(user_id, placeholder_key)
+    return ForceReply(
+        force_reply=True,
+        selective=True,
+        input_field_placeholder=placeholder[:64],
+    )
 
 
 scheduler_lock = asyncio.Lock()
@@ -1913,7 +1923,11 @@ async def cmd_report(message: types.Message):
     if len(parts) < 2:
 
         report_state[user_id] = {"step": "waiting_text"}
-        await message.answer(t(user_id, "report_prompt"), parse_mode="HTML")
+        await message.answer(
+            t(user_id, "report_prompt"),
+            reply_markup=force_reply_markup(user_id, "force_reply_report_placeholder"),
+            parse_mode="HTML",
+        )
         return
 
 

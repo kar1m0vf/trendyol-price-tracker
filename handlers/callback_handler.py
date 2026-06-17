@@ -7,7 +7,7 @@ import sys
 
 from aiogram import types
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
+from aiogram.types import CallbackQuery, ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
 import html
 import re
 
@@ -84,6 +84,14 @@ class CallbackHandler(BaseHandler):
                 report_state[user_id] = dict(state)
                 updated = True
         return updated
+
+    def _force_reply_markup(self, user_id: int, placeholder_key: str) -> ForceReply:
+        placeholder = self.t(user_id, placeholder_key)
+        return ForceReply(
+            force_reply=True,
+            selective=True,
+            input_field_placeholder=placeholder[:64],
+        )
 
     def _premium_contact_kb(self, user_id: int) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(
@@ -231,16 +239,6 @@ class CallbackHandler(BaseHandler):
             ]
         )
         return InlineKeyboardMarkup(inline_keyboard=rows)
-
-    def _donation_cancel_kb(self, user_id: int) -> InlineKeyboardMarkup:
-        return InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=self.t(user_id, "btn_cancel"),
-                    callback_data="premium:donate:cancel",
-                )
-            ]
-        ])
 
     async def _show_donation_amount_menu(self, cq: CallbackQuery, user_id: int) -> None:
         clear_donation_amount_entry(user_id)
@@ -475,15 +473,14 @@ class CallbackHandler(BaseHandler):
             if data == "premium:donate:custom":
                 await cq.answer()
                 start_donation_amount_entry(user_id)
-                await self._replace_callback_message(
-                    cq,
+                await cq.message.answer(
                     self.t(
                         user_id,
                         "donation_custom_amount_prompt",
                         min=MIN_DONATION_STARS,
                         max=MAX_DONATION_STARS,
                     ),
-                    reply_markup=self._donation_cancel_kb(user_id),
+                    reply_markup=self._force_reply_markup(user_id, "force_reply_donation_placeholder"),
                     parse_mode="HTML",
                 )
                 return
@@ -512,9 +509,9 @@ class CallbackHandler(BaseHandler):
                 ):
                     await self._send_callback_problem(cq, user_id)
                     return
-                await self._replace_callback_message(
-                    cq,
+                await cq.message.answer(
                     self.t(user_id, "premium_request_prompt"),
+                    reply_markup=self._force_reply_markup(user_id, "force_reply_premium_request_placeholder"),
                     parse_mode="HTML",
                 )
                 return
@@ -1511,17 +1508,10 @@ class CallbackHandler(BaseHandler):
             f"🎯 {html.escape(self.t(user_id, 'alerts_current'))}: {html.escape(current_alert)}\n\n"
             f"{self.t(user_id, 'alerts_edit_help')}"
         )
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text=f"⬅️ {self.t(user_id, 'btn_back')}",
-                callback_data=f"sub_settings:{sub_id}",
-            )],
-        ])
-
         await self.bot.send_message(
             user_id,
             alert_text,
-            reply_markup=keyboard,
+            reply_markup=self._force_reply_markup(user_id, "force_reply_price_placeholder"),
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
@@ -1573,21 +1563,10 @@ class CallbackHandler(BaseHandler):
                 f"{self.t(user_id, 'alerts_edit_help')}"
             )
 
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(
-                    text=f"❌ {self.t(user_id, 'alerts_remove')}",
-                    callback_data=f"alert_remove:{sub_id}",
-                )],
-                [InlineKeyboardButton(
-                    text=f"🔙 {self.t(user_id, 'btn_back')}",
-                    callback_data="alerts_back",
-                )],
-            ])
-
             await self.bot.send_message(
                 user_id,
                 alert_text,
-                reply_markup=keyboard,
+                reply_markup=self._force_reply_markup(user_id, "force_reply_price_placeholder"),
                 parse_mode="HTML",
                 disable_web_page_preview=True,
             )

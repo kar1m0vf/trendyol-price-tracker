@@ -343,6 +343,7 @@ async def test_callback_premium_request_starts_report_state(monkeypatch):
     handler = CallbackHandler()
     handler.t = lambda _uid, key, **_kwargs: {
         "premium_request_prompt": "PREMIUM_REQUEST_PROMPT",
+        "force_reply_premium_request_placeholder": "PREMIUM_PLACEHOLDER",
         "error_generic": "ERROR",
     }[key]
     fake_bot_module = SimpleNamespace(report_state={})
@@ -362,11 +363,15 @@ async def test_callback_premium_request_starts_report_state(monkeypatch):
         "step": "waiting_text",
         "source": "premium_request",
     }
-    cq.message.edit_text.assert_awaited_once_with(
+    cq.message.answer.assert_awaited_once_with(
         "PREMIUM_REQUEST_PROMPT",
+        reply_markup=cq.message.answer.await_args.kwargs["reply_markup"],
         parse_mode="HTML",
     )
-    cq.message.answer.assert_not_awaited()
+    cq.message.edit_text.assert_not_awaited()
+    reply_markup = cq.message.answer.await_args.kwargs["reply_markup"]
+    assert reply_markup.force_reply is True
+    assert reply_markup.input_field_placeholder == "PREMIUM_PLACEHOLDER"
 
 
 @pytest.mark.asyncio
@@ -560,6 +565,7 @@ async def test_callback_premium_donate_custom_starts_amount_entry():
     handler = CallbackHandler()
     handler.t = lambda _uid, key, **kwargs: {
         "donation_custom_amount_prompt": "PROMPT {min} {max}",
+        "force_reply_donation_placeholder": "DONATION_PLACEHOLDER",
         "btn_cancel": "CANCEL",
         "error_generic": "ERROR",
     }[key].format(**kwargs)
@@ -576,12 +582,45 @@ async def test_callback_premium_donate_custom_starts_amount_entry():
 
     cq.answer.assert_awaited_once()
     assert is_waiting_for_donation_amount(42) is True
-    cq.message.edit_text.assert_awaited_once()
-    cq.message.answer.assert_not_awaited()
-    assert cq.message.edit_text.await_args.args[0].startswith("PROMPT ")
-    assert cq.message.edit_text.await_args.kwargs["reply_markup"].inline_keyboard[0][0].callback_data == "premium:donate:cancel"
+    cq.message.answer.assert_awaited_once()
+    cq.message.edit_text.assert_not_awaited()
+    assert cq.message.answer.await_args.args[0].startswith("PROMPT ")
+    reply_markup = cq.message.answer.await_args.kwargs["reply_markup"]
+    assert reply_markup.force_reply is True
+    assert reply_markup.input_field_placeholder == "DONATION_PLACEHOLDER"
 
     clear_donation_amount_entry(42)
+
+
+@pytest.mark.asyncio
+async def test_cmd_report_without_text_uses_force_reply(monkeypatch):
+    import bot
+
+    bot.report_state.pop(42, None)
+    monkeypatch.setattr(
+        bot,
+        "t",
+        lambda _uid, key, **_kwargs: {
+            "report_prompt": "REPORT_PROMPT",
+            "force_reply_report_placeholder": "REPORT_PLACEHOLDER",
+        }[key],
+    )
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=42),
+        text="/report",
+        answer=AsyncMock(),
+    )
+
+    await bot.cmd_report(message)
+
+    assert bot.report_state[42] == {"step": "waiting_text"}
+    message.answer.assert_awaited_once()
+    assert message.answer.await_args.args[0] == "REPORT_PROMPT"
+    reply_markup = message.answer.await_args.kwargs["reply_markup"]
+    assert reply_markup.force_reply is True
+    assert reply_markup.input_field_placeholder == "REPORT_PLACEHOLDER"
+    assert message.answer.await_args.kwargs["parse_mode"] == "HTML"
+    bot.report_state.pop(42, None)
 
 
 @pytest.mark.asyncio

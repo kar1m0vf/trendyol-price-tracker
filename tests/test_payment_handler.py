@@ -198,3 +198,26 @@ async def test_custom_donation_amount_text_sends_invoice(temp_db_path):
     assert event["payload"]["source"] == "donation_custom_amount_text"
 
     clear_donation_amount_entry(user_id)
+
+
+@pytest.mark.asyncio
+async def test_custom_donation_amount_text_can_be_cancelled():
+    user_id = 12345
+    handler = PaymentHandler()
+    handler.t = lambda _uid, key, **_kwargs: {
+        "btn_cancel": "Cancel",
+        "donation_custom_amount_cancelled": "CANCELLED",
+    }[key]
+    start_donation_amount_entry(user_id)
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=user_id),
+        text="Cancel",
+        answer=AsyncMock(),
+        answer_invoice=AsyncMock(),
+    )
+
+    await handler.handle_donation_amount_text(message)
+
+    assert is_waiting_for_donation_amount(user_id) is False
+    message.answer.assert_awaited_once_with("CANCELLED", parse_mode="HTML")
+    message.answer_invoice.assert_not_awaited()

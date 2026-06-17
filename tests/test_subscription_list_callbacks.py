@@ -843,6 +843,7 @@ async def test_settings_alert_edit_keeps_code_tag_formatted(monkeypatch):
             "alerts_current": "Alert",
             "alerts_not_set": "not set",
             "alerts_edit_help": "Send <code>price</code>",
+            "force_reply_price_placeholder": "PRICE_PLACEHOLDER",
             "btn_back": "Back",
         }.get(key, key),
     )
@@ -859,6 +860,9 @@ async def test_settings_alert_edit_keeps_code_tag_formatted(monkeypatch):
     assert "<code>price</code>" in sent_text
     assert "&lt;code&gt;" not in sent_text
     assert handler._bot.send_message.await_args.kwargs["parse_mode"] == "HTML"
+    reply_markup = handler._bot.send_message.await_args.kwargs["reply_markup"]
+    assert reply_markup.force_reply is True
+    assert reply_markup.input_field_placeholder == "PRICE_PLACEHOLDER"
 
 
 @pytest.mark.asyncio
