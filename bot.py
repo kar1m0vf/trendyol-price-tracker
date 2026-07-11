@@ -28,6 +28,9 @@ from config import (
     HEAVY_COMMAND_COOLDOWN_SECONDS,
     MAX_SUBSCRIPTIONS_PER_USER,
     PREMIUM_EXPIRY_GRACE_DAYS,
+    PRODUCT_INFO_CACHE_MAX_ENTRIES,
+    PRODUCT_INFO_CACHE_TTL_SECONDS,
+    PRODUCT_INFO_NEGATIVE_CACHE_TTL_SECONDS,
     USE_NEW_HANDLERS,
     _check_bot_token,
 )
@@ -109,6 +112,7 @@ from scraper import (
 )
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from services.notification_service import NotificationService
+from services.product_fetch_service import ProductFetchService
 from handlers.admin_handler import (
     admin_backup,
     admin_check_blocked,
@@ -250,6 +254,12 @@ bot: Optional[Bot] = None
 dp: Optional[Dispatcher] = None
 router = Router(name="telegrambot")
 notification_service: Optional[NotificationService] = None
+product_fetch_service = ProductFetchService(
+    get_product_info_async,
+    ttl_seconds=PRODUCT_INFO_CACHE_TTL_SECONDS,
+    negative_ttl_seconds=PRODUCT_INFO_NEGATIVE_CACHE_TTL_SECONDS,
+    max_entries=PRODUCT_INFO_CACHE_MAX_ENTRIES,
+)
 _database_initialized = False
 _middleware_configured = False
 heavy_command_last_used: Dict[Tuple[int, str], float] = {}
@@ -3238,6 +3248,7 @@ async def _check_all_impl(trigger: str = "scheduler") -> Dict[str, Any]:
     total = get_subscriptions_count()
     logger.info("Found %d subscriptions to check", total)
     action_event("JOB", "price check started", trigger=trigger, subscriptions=total)
+    fetch_metrics_before = product_fetch_service.metrics_snapshot()
 
     task_batch_size = _get_env_int(
         "CHECK_ALL_TASK_BATCH_SIZE",
@@ -3319,7 +3330,8 @@ async def _check_all_impl(trigger: str = "scheduler") -> Dict[str, Any]:
 
 
                 try:
-                    price, title, image = await get_product_info_async(url)
+                    snapshot = await product_fetch_service.get(url)
+                    price, title, image = snapshot.price, snapshot.title, snapshot.image
                 except asyncio.TimeoutError:
                     logger.warning("Timeout fetching product info for sub %s", sub_id)
                     remember_check_failure(sub_id, "timeout_fetching_product_info")
@@ -3517,13 +3529,31 @@ async def _check_all_impl(trigger: str = "scheduler") -> Dict[str, Any]:
 
     await send_grouped_notifications(grouped_notifications)
 
+    fetch_metrics_after = product_fetch_service.metrics_snapshot()
+    external_fetches = (
+        fetch_metrics_after["cache_misses"]
+        - fetch_metrics_before["cache_misses"]
+    )
+    cache_hits = (
+        fetch_metrics_after["cache_hits"]
+        - fetch_metrics_before["cache_hits"]
+    )
+    coalesced_fetches = (
+        fetch_metrics_after["coalesced_requests"]
+        - fetch_metrics_before["coalesced_requests"]
+    )
+
     logger.info(
-        "Scheduler job finished (trigger=%s) — processed %d, failed %d, skipped %d, alerted %d",
+        "Scheduler job finished (trigger=%s) — processed %d, failed %d, skipped %d, alerted %d, "
+        "external fetches %d, cache hits %d, coalesced %d",
         trigger,
         processed_count,
         failed_count,
         skipped_count,
         alerted_count,
+        external_fetches,
+        cache_hits,
+        coalesced_fetches,
     )
     return {
         "status": "completed",
@@ -3533,6 +3563,9 @@ async def _check_all_impl(trigger: str = "scheduler") -> Dict[str, Any]:
         "failed": failed_count,
         "skipped": skipped_count,
         "alerted": alerted_count,
+        "external_fetches": external_fetches,
+        "cache_hits": cache_hits,
+        "coalesced_fetches": coalesced_fetches,
     }
 
 
@@ -4372,6 +4405,9 @@ async def cmd_health(message: types.Message):
                 f"<code>total={html.escape(str(last_check_all_result.get('total', '-')))}, "
                 f"processed={html.escape(str(last_check_all_result.get('processed', '-')))}, "
                 f"failed={html.escape(str(last_check_all_result.get('failed', '-')))}, "
+                f"fetches={html.escape(str(last_check_all_result.get('external_fetches', '-')))}, "
+                f"cache_hits={html.escape(str(last_check_all_result.get('cache_hits', '-')))}, "
+                f"coalesced={html.escape(str(last_check_all_result.get('coalesced_fetches', '-')))}, "
                 f"duration={html.escape(str(last_check_all_result.get('duration_sec', '-')))}s</code>"
             )
         health_text += f"\nDatabase: <code>{html.escape(DATABASE_PATH)}</code>"

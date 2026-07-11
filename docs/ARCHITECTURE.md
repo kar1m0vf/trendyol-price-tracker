@@ -144,6 +144,9 @@ The price checker uses:
 - batched database iteration;
 - task batching;
 - network concurrency limits;
+- a shared `ProductSnapshot` model for progressively richer product data;
+- an in-memory product cache that coalesces simultaneous requests for the same URL;
+- fetch/cache/coalescing counters exposed in the latest runtime health summary;
 - grouped notifications;
 - batch price-history writes with fallback.
 

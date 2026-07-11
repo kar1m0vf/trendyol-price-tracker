@@ -96,7 +96,7 @@ Read the full product flow in [User Guide](docs/guides/USER_GUIDE.md).
 | UX state | Inline callbacks, reply keyboards, in-place product cards, user-facing numbering |
 | Persistence | SQLite schema, migrations, indexes, price history, recommendations, custom texts, access tiers, payment events |
 | Scheduler | APScheduler jobs for price checks and daily backups |
-| Concurrency | Scheduler lock, task batching, network fetch semaphore, grouped notifications |
+| Concurrency | Scheduler lock, task batching, network fetch semaphore, per-URL request coalescing, grouped notifications |
 | Notifications | Safe send helpers, image fallback, grouped updates, chart delivery |
 | Scraping | Private Trendyol data extraction module used by the owner runtime |
 | Admin tools | Stats, users, broadcasts, reports, cleanup, backups, recommendations, premium access, broken subscription diagnostics |

@@ -93,6 +93,24 @@ PREMIUM_EXPIRY_GRACE_DAYS = _parse_int_env(
     max_value=365,
 )
 HEAVY_COMMAND_COOLDOWN_SECONDS = _parse_int_env("HEAVY_COMMAND_COOLDOWN_SECONDS", 20, min_value=0, max_value=3600)
+PRODUCT_INFO_CACHE_TTL_SECONDS = _parse_int_env(
+    "PRODUCT_INFO_CACHE_TTL_SECONDS",
+    15 * 60,
+    min_value=30,
+    max_value=24 * 60 * 60,
+)
+PRODUCT_INFO_NEGATIVE_CACHE_TTL_SECONDS = _parse_int_env(
+    "PRODUCT_INFO_NEGATIVE_CACHE_TTL_SECONDS",
+    60,
+    min_value=10,
+    max_value=60 * 60,
+)
+PRODUCT_INFO_CACHE_MAX_ENTRIES = _parse_int_env(
+    "PRODUCT_INFO_CACHE_MAX_ENTRIES",
+    2000,
+    min_value=10,
+    max_value=100000,
+)
 TELEGRAM_STARS_PAYMENTS_ENABLED = _parse_bool_env("TELEGRAM_STARS_PAYMENTS_ENABLED", False)
 TELEGRAM_STARS_PROVIDER_TOKEN = os.getenv("TELEGRAM_STARS_PROVIDER_TOKEN", "")
 TELEGRAM_STARS_CURRENCY = "XTR"
