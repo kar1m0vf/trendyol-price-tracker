@@ -3768,226 +3768,136 @@ def analyze_user_preferences(user_id: int) -> Dict[str, Any]:
         logger.exception(f"Error analyzing user preferences for {user_id}: {e}")
         return {"categories": [], "brands": [], "has_subscriptions": False}
 
-async def generate_recommendations(user_id: int, limit: int = 5) -> List[Dict[str, Any]]:
-    """Generate personalized product recommendations"""
-    try:
-        import random
-        preferences = analyze_user_preferences(user_id)
+_RECOMMENDATION_CATEGORY_ALIASES = {
+    "phone": "smartphones",
+    "phones": "smartphones",
+    "smartphone": "smartphones",
+    "telefon": "smartphones",
+    "appliances": "home_appliances",
+    "home": "home_appliances",
+    "robot_vacuum": "home_appliances",
+    "beauty": "cosmetics",
+    "cosmetic": "cosmetics",
+    "clothing": "fashion",
+    "shoe": "fashion",
+    "shoes": "fashion",
+    "computer": "electronics",
+    "computers": "electronics",
+    "laptop": "electronics",
+    "laptops": "electronics",
+}
 
+_RECOMMENDATION_REASON_KEYS = {
+    "smartphones": "recommend_reason_smartphones",
+    "home_appliances": "recommend_reason_home_appliances",
+    "cosmetics": "recommend_reason_cosmetics",
+    "fashion": "recommend_reason_fashion",
+    "electronics": "recommend_reason_electronics",
+    "accessories": "recommend_reason_accessories",
+}
+
+
+def _normalize_recommendation_category(value: Any) -> str:
+    category = str(value or "other").strip().lower().replace(" ", "_")
+    return _RECOMMENDATION_CATEGORY_ALIASES.get(category, category)
+
+
+def _recommendation_reason(
+    user_id: int,
+    product: Dict[str, Any],
+    user_brands: set[str],
+) -> str:
+    brand = str(product.get("brand") or "").strip()
+    if brand and brand.lower() in user_brands:
+        return t(user_id, "recommend_reason_brand", brand=brand)
+
+    category = _normalize_recommendation_category(product.get("category"))
+    reason_key = _RECOMMENDATION_REASON_KEYS.get(category, "recommend_reason_catalog")
+    return t(user_id, reason_key)
+
+
+async def generate_recommendations(
+    user_id: int,
+    limit: int = 5,
+    *,
+    available_products: Optional[List[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    """Rank verified admin-catalog products using the user's subscriptions."""
+    try:
+        safe_limit = max(0, int(limit))
+        if safe_limit == 0:
+            return []
+
+        preferences = analyze_user_preferences(user_id)
         if not preferences["has_subscriptions"]:
             return []
 
-        recommendations = []
-        available_products = get_available_products()
+        products = list(available_products) if available_products is not None else get_available_products()
+        if not products:
+            return []
 
+        user_brands = {
+            str(brand).strip().lower()
+            for brand, _count in preferences.get("brands", [])
+            if str(brand).strip()
+        }
+        user_categories = {
+            _normalize_recommendation_category(category)
+            for category, _count in preferences.get("categories", [])
+        }
 
-        user_brands = [brand.lower() for brand, _ in preferences["brands"]]
+        def relevance(item: Tuple[int, Dict[str, Any]]) -> Tuple[int, int, int, int]:
+            index, product = item
+            brand = str(product.get("brand") or "").strip().lower()
+            category = _normalize_recommendation_category(product.get("category"))
+            try:
+                priority = int(product.get("priority") or 0)
+            except (TypeError, ValueError):
+                priority = 0
+            return (
+                int(bool(brand and brand in user_brands)),
+                int(category in user_categories),
+                priority,
+                -index,
+            )
 
-        for category, count in preferences["categories"]:
-            category_products = [p for p in available_products if p["category"] == category]
+        ranked_products = [
+            product
+            for _index, product in sorted(
+                enumerate(products),
+                key=relevance,
+                reverse=True,
+            )
+        ]
 
+        recommendations: List[Dict[str, Any]] = []
+        for product in ranked_products:
+            title = str(product.get("title") or "").strip()
+            url = normalize_url(str(product.get("url") or "").strip())
+            if not title or not (
+                is_trendyol_product_url(url) or is_trendyol_short_url(url)
+            ):
+                continue
 
-            preferred_products = []
-            other_products = []
+            price = str(product.get("price") or "").strip()
+            recommendations.append({
+                "title": title,
+                "url": url,
+                "price": price or t(user_id, "recommend_price_unknown"),
+                "reason": _recommendation_reason(user_id, product, user_brands),
+            })
+            if len(recommendations) >= safe_limit:
+                break
 
-            for product in category_products:
-                product_brand = product.get("brand", "").lower()
-                if product_brand in user_brands:
-                    preferred_products.append(product)
-                else:
-                    other_products.append(product)
-
-
-            selected_products = []
-            preferred_count = min(len(preferred_products), max(1, int(limit * 0.7)))
-            other_count = min(len(other_products), limit - preferred_count)
-
-            if preferred_products:
-                selected_products.extend(random.sample(preferred_products, min(preferred_count, len(preferred_products))))
-            if other_products and len(selected_products) < limit:
-                remaining_slots = limit - len(selected_products)
-                selected_products.extend(random.sample(other_products, min(other_count, remaining_slots, len(other_products))))
-
-
-            for product in selected_products:
-                if len(recommendations) >= limit:
-                    break
-
-                reason = product.get("reason_template", "Рекомендуемый товар")
-                if product.get("brand", "").lower() in user_brands:
-                    reason = f"Вам нравится бренд {product['brand']}"
-                elif category == "smartphones":
-                    reason = "Популярный смартфон"
-                elif category == "home_appliances":
-                    reason = "Качественная бытовая техника"
-                elif category == "cosmetics":
-                    reason = "Популярное косметическое средство"
-                elif category == "fashion":
-                    reason = "Модная одежда"
-
-                recommendations.append({
-                    "title": product["title"],
-                    "url": product["url"],
-                    "price": product["price"],
-                    "reason": reason
-                })
-
-
-        if not recommendations:
-            general_products = [p for p in available_products if p.get("popular", False)]
-            if general_products:
-                selected = random.sample(general_products, min(limit, len(general_products)))
-                for product in selected:
-                    recommendations.append({
-                        "title": product["title"],
-                        "url": product["url"],
-                        "price": product["price"],
-                        "reason": "Популярный товар"
-                    })
-
-
-        random.shuffle(recommendations)
-
-        return recommendations[:limit]
-
+        return recommendations
     except Exception as e:
-        logger.exception(f"Error generating recommendations for {user_id}: {e}")
+        logger.exception("Error generating recommendations for %s: %s", user_id, e)
         return []
 
 def get_available_products() -> List[Dict[str, Any]]:
-    """Get list of available products for recommendations"""
-
+    """Return only active products from the owner-managed catalog."""
     from database import get_recommended_products
-    recommended_products = get_recommended_products()
-
-
-    if recommended_products:
-        return recommended_products
-
-
-    return [
-
-        {
-            "title": "Samsung Galaxy S25 Ultra",
-            "url": "https://www.trendyol.com/samsung/galaxy-s25-ultra-akilli-telefon-p-123456789",
-            "price": "₺45,000",
-            "category": "smartphones",
-            "brand": "samsung",
-            "reason_template": "Флагман Samsung"
-        },
-        {
-            "title": "iPhone 16 Pro Max",
-            "url": "https://www.trendyol.com/apple/iphone-16-pro-max-akilli-telefon-p-123456790",
-            "price": "₺52,000",
-            "category": "smartphones",
-            "brand": "apple",
-            "reason_template": "Новинка Apple"
-        },
-        {
-            "title": "Xiaomi 14 Ultra",
-            "url": "https://www.trendyol.com/xiaomi/xiaomi-14-ultra-akilli-telefon-p-123456791",
-            "price": "₺35,000",
-            "category": "smartphones",
-            "brand": "xiaomi",
-            "reason_template": "Отличное соотношение цена/качество"
-        },
-        {
-            "title": "Huawei P60 Pro",
-            "url": "https://www.trendyol.com/huawei/p60-pro-akilli-telefon-p-123456792",
-            "price": "₺28,000",
-            "category": "smartphones",
-            "brand": "huawei",
-            "reason_template": "Камера премиум-класса"
-        },
-
-
-        {
-            "title": "Dyson V15 Detect",
-            "url": "https://www.trendyol.com/dyson/v15-detect-robot-supurge-p-123456793",
-            "price": "₺25,000",
-            "category": "home_appliances",
-            "brand": "dyson",
-            "reason_template": "Премиум пылесос"
-        },
-        {
-            "title": "iRobot Roomba j7",
-            "url": "https://www.trendyol.com/irobot/roomba-j7-robot-supurge-p-123456794",
-            "price": "₺22,000",
-            "category": "home_appliances",
-            "brand": "irobot",
-            "reason_template": "Умный помощник по уборке"
-        },
-        {
-            "title": "Narwal Freo X Ultra",
-            "url": "https://www.trendyol.com/narwal/freo-x-ultra-robot-supurge-p-123456795",
-            "price": "₺18,000",
-            "category": "home_appliances",
-            "brand": "narwal",
-            "reason_template": "Компактный и мощный"
-        },
-
-
-        {
-            "title": "La Mer Crème de la Mer",
-            "url": "https://www.trendyol.com/la-mer/creme-de-la-mer-yuz-kremi-p-123456796",
-            "price": "₺8,500",
-            "category": "cosmetics",
-            "brand": "la mer",
-            "reason_template": "Люксовая косметика"
-        },
-        {
-            "title": "The Ordinary Hyaluronic Acid",
-            "url": "https://www.trendyol.com/the-ordinary/hyaluronic-acid-yuz-kremi-p-123456797",
-            "price": "₺120",
-            "category": "cosmetics",
-            "brand": "the ordinary",
-            "reason_template": "Доступная профессиональная косметика"
-        },
-        {
-            "title": "CeraVe Moisturizing Cream",
-            "url": "https://www.trendyol.com/cerave/moisturizing-cream-yuz-kremi-p-123456798",
-            "price": "₺85",
-            "category": "cosmetics",
-            "brand": "cerave",
-            "reason_template": "Для чувствительной кожи"
-        },
-
-
-        {
-            "title": "Nike Air Max 270",
-            "url": "https://www.trendyol.com/nike/air-max-270-erkek-spor-ayakkabi-p-123456799",
-            "price": "₺2,850",
-            "category": "fashion",
-            "brand": "nike",
-            "reason_template": "Популярные кроссовки"
-        },
-        {
-            "title": "Adidas Ultraboost 22",
-            "url": "https://www.trendyol.com/adidas/ultraboost-22-spor-ayakkabi-p-123456800",
-            "price": "₺3,200",
-            "category": "fashion",
-            "brand": "adidas",
-            "reason_template": "Комфорт и стиль"
-        },
-
-
-        {
-            "title": "Sony WH-1000XM5",
-            "url": "https://www.trendyol.com/sony/wh-1000xm5-kulaklik-p-123456801",
-            "price": "₺8,500",
-            "category": "electronics",
-            "brand": "sony",
-            "reason_template": "Шумоподавление премиум-класса"
-        },
-        {
-            "title": "Logitech MX Master 3S",
-            "url": "https://www.trendyol.com/logitech/mx-master-3s-mouse-p-123456802",
-            "price": "₺1,850",
-            "category": "electronics",
-            "brand": "logitech",
-            "reason_template": "Профессиональная мышь"
-        }
-    ]
+    return get_recommended_products()
 
 
 @router.message(Command("alerts"))
@@ -4358,7 +4268,20 @@ async def cmd_recommend(message: types.Message):
         lang = get_user_language(user_id)
         custom_text = get_bot_text("recommend_text", lang)
         custom_text = custom_text.strip() if custom_text else None
-        recommendations = await generate_recommendations(user_id, limit=5)
+        available_products = get_available_products()
+        if not available_products:
+            await _replace_progress_message(
+                status_message,
+                t(user_id, "recommend_catalog_empty"),
+                fallback_target=message,
+            )
+            return
+
+        recommendations = await generate_recommendations(
+            user_id,
+            limit=5,
+            available_products=available_products,
+        )
 
         if not recommendations:
             if custom_text:

@@ -100,6 +100,7 @@ async def test_recommend_command_escapes_dynamic_fields(monkeypatch):
     monkeypatch.setattr(bot, "_replace_progress_message", replace_status)
     monkeypatch.setattr(bot, "get_user_language", lambda _user_id: "ru")
     monkeypatch.setattr(bot, "get_bot_text", lambda _key, _lang: None)
+    monkeypatch.setattr(bot, "get_available_products", lambda: [{"id": 1}])
     monkeypatch.setattr(bot, "t", _fake_t)
     monkeypatch.setattr(
         bot,

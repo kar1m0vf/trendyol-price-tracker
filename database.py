@@ -1901,10 +1901,10 @@ def get_recommended_products() -> List[Dict[str, Any]]:
                 "id": row[0],
                 "title": row[1],
                 "url": row[2],
-                "price": row[3] or "Цена не указана",
+                "price": row[3] or "",
                 "category": row[4] or "other",
                 "brand": row[5] or "",
-                "reason_template": row[6] or "Рекомендуемый товар",
+                "reason_template": row[6] or "",
                 "priority": row[7],
                 "is_active": bool(row[8])
             } for row in rows]
