@@ -51,8 +51,128 @@ def test_add_subscription_and_price_flow(temp_db_path):
 
              
     assert database.remove_subscription(sub_id) is True
-                    
+
     assert database.get_subscription(sub_id) is None
+    assert database.get_price_history(sub_id) == []
+
+
+def test_database_connections_enforce_foreign_keys_and_subscription_owner(temp_db_path):
+    user_id = 12345
+
+    sub_id = database.add_subscription(
+        user_id,
+        "https://www.trendyol.com/owned-product-p-1",
+        product_title="Owned product",
+    )
+
+    assert database.get_user_profile(user_id) is not None
+    assert database.get_subscription(sub_id)[1] == user_id
+
+    with database.DatabaseConnection() as conn:
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+
+    with pytest.raises(sqlite3.IntegrityError):
+        with database.DatabaseConnection() as conn:
+            conn.execute(
+                """
+                INSERT INTO subscriptions (user_id, url, notify_mode)
+                VALUES (?, ?, ?)
+                """,
+                (999999, "https://www.trendyol.com/orphan-p-1", "discount"),
+            )
+
+
+def test_legacy_subscription_schema_gets_integrity_triggers(tmp_path, monkeypatch):
+    db_file = tmp_path / "legacy_subscriptions.db"
+    with sqlite3.connect(db_file) as conn:
+        conn.execute(
+            """
+            CREATE TABLE users (
+                user_id INTEGER PRIMARY KEY,
+                language TEXT DEFAULT 'ru'
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE subscriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                url TEXT NOT NULL,
+                notify_mode TEXT NOT NULL DEFAULT 'discount',
+                last_price REAL
+            )
+            """
+        )
+
+    monkeypatch.setattr(database, "DB", str(db_file))
+    database.init_db(run_maintenance=False)
+
+    with sqlite3.connect(db_file) as conn:
+        assert conn.execute("PRAGMA foreign_key_list(subscriptions)").fetchall() == []
+        trigger_names = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+            ).fetchall()
+        }
+        assert {
+            "subscriptions_require_user_insert",
+            "subscriptions_require_user_update",
+            "subscriptions_delete_price_history",
+            "users_delete_owned_data",
+        }.issubset(trigger_names)
+
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO subscriptions (user_id, url, notify_mode)
+                VALUES (?, ?, ?)
+                """,
+                (999999, "https://www.trendyol.com/legacy-orphan-p-1", "discount"),
+            )
+
+    sub_id = database.add_subscription(
+        12345,
+        "https://www.trendyol.com/legacy-owned-p-2",
+    )
+    database.add_price_point(
+        sub_id,
+        "https://www.trendyol.com/legacy-owned-p-2",
+        100.0,
+        1000,
+    )
+
+    assert database.remove_subscription(sub_id) is True
+    assert database.get_price_history(sub_id) == []
+
+    owned_sub_id = database.add_subscription(
+        54321,
+        "https://www.trendyol.com/legacy-user-delete-p-3",
+    )
+    database.add_price_point(
+        owned_sub_id,
+        "https://www.trendyol.com/legacy-user-delete-p-3",
+        200.0,
+        2000,
+    )
+    with sqlite3.connect(db_file) as conn:
+        conn.execute("DELETE FROM users WHERE user_id = ?", (54321,))
+
+    assert database.get_subscription(owned_sub_id) is None
+    assert database.get_price_history(owned_sub_id) == []
+
+
+def test_remove_all_user_subscriptions_cascades_price_history(temp_db_path):
+    user_id = 12345
+    first_id = database.add_subscription(user_id, "https://www.trendyol.com/first-p-1")
+    second_id = database.add_subscription(user_id, "https://www.trendyol.com/second-p-2")
+    database.add_price_point(first_id, "https://www.trendyol.com/first-p-1", 100.0, 1000)
+    database.add_price_point(second_id, "https://www.trendyol.com/second-p-2", 200.0, 2000)
+
+    assert database.remove_subscriptions_by_user(user_id) == 2
+    assert database.get_price_history(first_id) == []
+    assert database.get_price_history(second_id) == []
 
 
 def test_subscription_order_stays_stable_after_price_updates(temp_db_path, monkeypatch):
@@ -104,6 +224,27 @@ def test_price_history_functions_empty(temp_db_path):
                                                                        
     assert database.get_price_history(9999999) == []
     assert database.get_last_price_point(9999999) is None
+
+
+def test_get_price_history_limit_returns_latest_points_in_chronological_order(temp_db_path):
+    sub_id = database.add_subscription(
+        12345,
+        "https://www.trendyol.com/history-limit-p-1",
+        product_title="History limit",
+    )
+    url = "https://www.trendyol.com/history-limit-p-1"
+    for ts, price in ((100, 10.0), (200, 20.0), (300, 30.0), (400, 40.0), (500, 50.0)):
+        database.add_price_point(sub_id, url, price, ts)
+
+    assert database.get_price_history(sub_id, limit=3) == [
+        (300, 30.0),
+        (400, 40.0),
+        (500, 50.0),
+    ]
+    assert database.get_price_history(sub_id, limit=2, since_ts=250) == [
+        (400, 40.0),
+        (500, 50.0),
+    ]
 
 
 def test_delete_user_data_removes_profile_subscriptions_and_history(temp_db_path):

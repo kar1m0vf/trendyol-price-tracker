@@ -36,6 +36,7 @@ def get_connection():
     with _pool_lock:
         if thread_id not in _connection_pool:
             _connection_pool[thread_id] = sqlite3.connect(DB, timeout=30.0, check_same_thread=False)
+            _connection_pool[thread_id].execute("PRAGMA foreign_keys=ON")
             _connection_pool[thread_id].execute("PRAGMA journal_mode=WAL")
             _connection_pool[thread_id].execute("PRAGMA synchronous=NORMAL")
             _connection_pool[thread_id].execute("PRAGMA cache_size=10000")
@@ -412,6 +413,47 @@ def init_db(run_maintenance: bool = True):
         CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_events_provider_payment_id
         ON payment_events(provider, provider_payment_id)
         WHERE provider_payment_id IS NOT NULL
+        """)
+
+        # Older owner databases may predate the subscriptions foreign-key
+        # declaration above. SQLite cannot add that constraint with ALTER
+        # TABLE, so keep future writes and deletes safe with compatible
+        # triggers as well. Existing orphan rows are intentionally left for a
+        # separate, reviewed cleanup.
+        cur.execute("""
+        CREATE TRIGGER IF NOT EXISTS subscriptions_require_user_insert
+        BEFORE INSERT ON subscriptions
+        FOR EACH ROW
+        WHEN NOT EXISTS (SELECT 1 FROM users WHERE user_id = NEW.user_id)
+        BEGIN
+            SELECT RAISE(ABORT, 'subscription owner does not exist');
+        END
+        """)
+        cur.execute("""
+        CREATE TRIGGER IF NOT EXISTS subscriptions_require_user_update
+        BEFORE UPDATE OF user_id ON subscriptions
+        FOR EACH ROW
+        WHEN NOT EXISTS (SELECT 1 FROM users WHERE user_id = NEW.user_id)
+        BEGIN
+            SELECT RAISE(ABORT, 'subscription owner does not exist');
+        END
+        """)
+        cur.execute("""
+        CREATE TRIGGER IF NOT EXISTS subscriptions_delete_price_history
+        AFTER DELETE ON subscriptions
+        FOR EACH ROW
+        BEGIN
+            DELETE FROM price_history WHERE subscription_id = OLD.id;
+        END
+        """)
+        cur.execute("""
+        CREATE TRIGGER IF NOT EXISTS users_delete_owned_data
+        AFTER DELETE ON users
+        FOR EACH ROW
+        BEGIN
+            DELETE FROM subscriptions WHERE user_id = OLD.user_id;
+            DELETE FROM payment_events WHERE user_id = OLD.user_id;
+        END
         """)
 
                                                                    
@@ -975,6 +1017,10 @@ def add_subscription(
     """
     with DatabaseConnection() as conn:
         cur = conn.cursor()
+        # Keep this low-level helper safe when callers have not created the
+        # Telegram user profile yet. With foreign keys enabled this also
+        # prevents subscriptions that have no owner.
+        cur.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
         cur.execute("""
             INSERT INTO subscriptions (
                 user_id, url, product_title, product_image, notify_mode, min_price, max_price, 
@@ -1003,11 +1049,35 @@ def get_price_history(subscription_id: int, limit: int = 500, since_ts: int = No
     with DatabaseConnection() as conn:
         cur = conn.cursor()
         if since_ts:
-            cur.execute("SELECT ts, price FROM price_history WHERE subscription_id = ? AND ts >= ? ORDER BY ts ASC LIMIT ?",
-                        (subscription_id, since_ts, limit))
+            cur.execute(
+                """
+                SELECT ts, price
+                FROM (
+                    SELECT ts, price
+                    FROM price_history
+                    WHERE subscription_id = ? AND ts >= ?
+                    ORDER BY ts DESC
+                    LIMIT ?
+                ) AS recent_history
+                ORDER BY ts ASC
+                """,
+                (subscription_id, since_ts, limit),
+            )
         else:
-            cur.execute("SELECT ts, price FROM price_history WHERE subscription_id = ? ORDER BY ts ASC LIMIT ?",
-                        (subscription_id, limit))
+            cur.execute(
+                """
+                SELECT ts, price
+                FROM (
+                    SELECT ts, price
+                    FROM price_history
+                    WHERE subscription_id = ?
+                    ORDER BY ts DESC
+                    LIMIT ?
+                ) AS recent_history
+                ORDER BY ts ASC
+                """,
+                (subscription_id, limit),
+            )
         rows = cur.fetchall()
     return rows
 
@@ -1046,11 +1116,13 @@ def remove_subscription(sub_id: int) -> bool:
     Возвращает True если подписка была удалена.
     """
     try:
-        with sqlite3.connect(DB) as conn:
+        with DatabaseConnection() as conn:
             cur = conn.cursor()
+            # Keep deletion correct for legacy databases whose subscriptions
+            # table was created before its FK cascade was introduced.
+            cur.execute("DELETE FROM price_history WHERE subscription_id = ?", (sub_id,))
             cur.execute("DELETE FROM subscriptions WHERE id = ?", (sub_id,))
             deleted = cur.rowcount
-            conn.commit()
             if deleted:
                 logger.info("Removed subscription id=%s", sub_id)
             else:
@@ -1066,11 +1138,18 @@ def remove_subscriptions_by_user(user_id: int) -> int:
     Возвращает количество удаленных подписок.
     """
     try:
-        with sqlite3.connect(DB) as conn:
+        with DatabaseConnection() as conn:
             cur = conn.cursor()
+            cur.execute("SELECT id FROM subscriptions WHERE user_id = ?", (user_id,))
+            subscription_ids = [int(row[0]) for row in cur.fetchall()]
+            if subscription_ids:
+                placeholders = ",".join("?" for _ in subscription_ids)
+                cur.execute(
+                    f"DELETE FROM price_history WHERE subscription_id IN ({placeholders})",
+                    subscription_ids,
+                )
             cur.execute("DELETE FROM subscriptions WHERE user_id = ?", (user_id,))
             deleted_count = cur.rowcount
-            conn.commit()
             logger.info("Removed %d subscription(s) for user=%s", deleted_count, user_id)
             return deleted_count
     except sqlite3.Error as e:
