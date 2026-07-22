@@ -228,6 +228,73 @@ def get_notify_inline_kb(
     )
 
 
+def product_card_kb_for_user(
+    user_id: int,
+    sub_id: int,
+    url: str,
+    *,
+    expanded: bool = False,
+) -> InlineKeyboardMarkup:
+    """Return focused actions for compact or expanded product cards."""
+    rows = []
+    if str(url or "").startswith(("https://", "http://")):
+        rows.append([
+            InlineKeyboardButton(
+                text=translate_func(user_id, "btn_view_product"),
+                url=url,
+            )
+        ])
+
+    if expanded:
+        rows.append([
+            InlineKeyboardButton(
+                text=translate_func(user_id, "btn_product_compact"),
+                callback_data=f"product_compact:{sub_id}",
+            )
+        ])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    rows.extend([
+        [
+            InlineKeyboardButton(
+                text=translate_func(user_id, "btn_product_details"),
+                callback_data=f"product_details:{sub_id}",
+            ),
+            InlineKeyboardButton(
+                text=translate_func(user_id, "btn_refresh_price"),
+                callback_data=f"refresh_price:{sub_id}",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text=translate_func(user_id, "btn_history"),
+                callback_data=f"history:{sub_id}",
+            ),
+            InlineKeyboardButton(
+                text=translate_func(user_id, "btn_subscription_settings"),
+                callback_data=f"sub_settings:{sub_id}",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text=translate_func(user_id, "btn_compare"),
+                callback_data=f"compare:{sub_id}",
+            ),
+            InlineKeyboardButton(
+                text=translate_func(user_id, "btn_unsubscribe_inline"),
+                callback_data=f"unsubscribe:{sub_id}",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text=translate_func(user_id, "btn_subs"),
+                callback_data="subs:list",
+            )
+        ],
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def subscription_controls_kb_for_user(
     user_id: int, sub_id: int
 ) -> InlineKeyboardMarkup:

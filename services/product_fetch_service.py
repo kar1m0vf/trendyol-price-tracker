@@ -144,6 +144,22 @@ class ProductFetchService:
                 self._metrics.evictions += 1
         return snapshot
 
+    async def peek(self, url: str) -> Optional[ProductSnapshot]:
+        """Return a fresh cached snapshot without starting an external request."""
+        key = canonical_product_url(url)
+        if not key:
+            return None
+
+        async with self._lock:
+            entry = self._cache.get(key)
+            if entry is None:
+                return None
+            if entry.expires_at <= self._clock():
+                self._cache.pop(key, None)
+                return None
+            self._cache.move_to_end(key)
+            return entry.snapshot
+
     @staticmethod
     def _coerce_snapshot(
         url: str,

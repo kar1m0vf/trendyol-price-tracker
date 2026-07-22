@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 import time
-from typing import Mapping, Optional
+from typing import Mapping, Optional, Tuple
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,12 +23,21 @@ class ProductSnapshot:
     product_id: Optional[str] = None
     brand: Optional[str] = None
     category: Optional[str] = None
+    category_path: Tuple[str, ...] = ()
     old_price: Optional[float] = None
+    basket_price: Optional[float] = None
     discount_percent: Optional[float] = None
+    currency: Optional[str] = None
+    in_stock: Optional[bool] = None
     rating: Optional[float] = None
     review_count: Optional[int] = None
+    question_count: Optional[int] = None
     seller: Optional[str] = None
+    merchant_id: Optional[str] = None
+    seller_rating: Optional[float] = None
     delivery: Optional[str] = None
+    free_shipping: Optional[bool] = None
+    selected_variants: Mapping[str, str] = field(default_factory=dict)
     attributes: Mapping[str, str] = field(default_factory=dict)
     fetched_at: float = field(default_factory=time.time)
     source: str = "trendyol"

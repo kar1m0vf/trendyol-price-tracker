@@ -19,11 +19,14 @@ The bot tracks Trendyol products. A user sends a product link, the bot saves it 
 After a product is added, the bot shows a product card with:
 
 - product title;
-- current price;
-- notification mode;
-- controls for manual refresh, price history, comparison, target price, pause/resume, mode changes, settings, and unsubscribe.
+- current, previous, discount, and basket price when available;
+- rating, seller, and stock status when already available in the product cache;
+- notification mode, target price, and next expected check;
+- focused controls for product details, manual refresh, price history, comparison, settings, and unsubscribe.
 
-Saved product cards also show the next expected notification/check timing when the user opens the product from the watchlist.
+The compact card is designed for the common decision: understand the current price and decide what to do next without reading a long block. `Details` loads the richer Trendyol snapshot on demand and may show brand, category, selected variants, delivery, stock, characteristics, seller information, and the data update time. The expanded card keeps only safe navigation controls and lets the user return to the compact card.
+
+Opening a saved product from the watchlist does not force a Trendyol request: the bot uses subscription data and a fresh cached snapshot when one exists. External loading happens when the user opens `Details`, explicitly refreshes the price, or when a background price check is due.
 
 ## Personal Watchlist
 
@@ -121,9 +124,9 @@ Examples:
 
 The same per-product controls are also available through inline buttons:
 open `/mysubs`, choose a product, and use `⚙️ Settings` to change mode,
-notification interval, and target price without typing command arguments.
+notification interval, target price, or pause state without typing command arguments.
 
-Users can also pause a product from its card or settings menu. A paused product
+Users can pause a product from its settings menu. A paused product
 stays in `/mysubs`; history, manual price checks, settings, and deletion still
 work, but background price alerts are skipped until the user resumes it.
 

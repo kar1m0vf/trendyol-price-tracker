@@ -27,7 +27,9 @@ This repository contains the source code and documentation for Price Tracker for
 | [bot.py](bot.py) | Entry point, runtime, scheduler, common helpers |
 | [handlers/](handlers) | aiogram handler package |
 | [database.py](database.py) | SQLite schema, migrations, subscriptions, history, recommendations |
-| Private scraper module | Trendyol data collection and parsing, not distributed in the public portfolio source |
+| Private scraper module | Trendyol network collection used by the owner runtime, not distributed in the public portfolio source |
+| [parsers/](parsers) | Fixture-tested normalization of fetched Trendyol HTML into shared product snapshots |
+| [presenters/](presenters) | Compact and expanded Telegram product-card rendering |
 | [services/notification_service.py](services/notification_service.py) | Notifications and chart delivery |
 | [locales/](locales) | RU/EN/AZ/TR localization |
 | [tests/](tests) | pytest test suite |

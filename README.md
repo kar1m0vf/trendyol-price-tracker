@@ -47,6 +47,7 @@ Read the full product flow in [User Guide](docs/guides/USER_GUIDE.md).
 - Guide first-time users with a short `/start` explanation and quick-action buttons.
 - Track each user's own watchlist.
 - Show user-facing product numbers like `No. 1`, `No. 2`, `No. 3` instead of internal database IDs.
+- Keep the first product view compact, with price and alert status immediately visible, while richer Trendyol details are loaded only when the user asks for them.
 - Support discount-only mode, hourly mode, target price alerts, min/max thresholds, percent-change alerts, custom notification intervals, and quiet hours.
 - Let users change per-product mode, interval, and target price through inline settings buttons.
 - Let users pause and resume per-product alerts without deleting the product or losing history.
@@ -181,6 +182,8 @@ Key paths:
 - `handlers/` - aiogram handlers for user, analytics, callback, and admin flows.
 - `database.py` - SQLite schema, migrations, subscriptions, price history, recommendations, backups.
 - Private Trendyol scraper module - owner runtime dependency for product extraction, trends, and history helpers. The implementation is not distributed in the public portfolio source.
+- `parsers/trendyol_product.py` - tracked, fixture-tested normalization of fetched Trendyol HTML into the shared product/offer snapshot model.
+- `presenters/product_card.py` - compact and expanded Telegram product-card rendering with caption-length and HTML-safety guards.
 - `services/notification_service.py` - notifications and charts.
 - `services/payment_service.py` - internal premium/donation plan model and payment-event application layer used by the Telegram Stars flow.
 - `locales/` - translation files.
@@ -212,7 +215,7 @@ The project includes checks for:
 - scraper parsing helpers;
 - notification flow.
 
-Latest recorded owner-runtime verification: `293 passed, 3 skipped`. The public portfolio source does not include every private runtime asset required to run the production bot.
+Latest recorded owner-runtime verification: `344 passed, 1 skipped`. The public portfolio source does not include every private runtime asset required to run the production bot.
 
 ## Documentation
 

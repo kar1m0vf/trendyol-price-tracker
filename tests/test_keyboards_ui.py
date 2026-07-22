@@ -235,3 +235,56 @@ def test_subscription_controls_use_unsubscribe_inline_key_and_callback(monkeypat
     assert kb.inline_keyboard[4][0].callback_data == "compare:55"
     assert kb.inline_keyboard[4][1].text == "UNSUB_INLINE"
     assert kb.inline_keyboard[4][1].callback_data == "unsubscribe:55"
+
+
+def test_product_card_keyboard_prioritizes_user_scenario(monkeypatch):
+    labels = {
+        "btn_view_product": "OPEN",
+        "btn_product_details": "DETAILS",
+        "btn_refresh_price": "REFRESH",
+        "btn_history": "HISTORY",
+        "btn_subscription_settings": "SETTINGS",
+        "btn_compare": "COMPARE",
+        "btn_unsubscribe_inline": "UNSUBSCRIBE",
+        "btn_subs": "MY_PRODUCTS",
+        "btn_product_compact": "BACK_TO_CARD",
+    }
+    monkeypatch.setattr(keyboards, "translate_func", lambda _uid, key: labels[key])
+
+    compact = keyboards.product_card_kb_for_user(
+        101,
+        55,
+        "https://www.trendyol.com/brand/product-p-1",
+    )
+    callbacks = [
+        button.callback_data
+        for row in compact.inline_keyboard
+        for button in row
+        if button.callback_data
+    ]
+
+    assert compact.inline_keyboard[0][0].url.startswith("https://www.trendyol.com/")
+    assert callbacks == [
+        "product_details:55",
+        "refresh_price:55",
+        "history:55",
+        "sub_settings:55",
+        "compare:55",
+        "unsubscribe:55",
+        "subs:list",
+    ]
+    assert not any(value.startswith(("mode:", "toggle_active:", "nav:home")) for value in callbacks)
+
+    expanded = keyboards.product_card_kb_for_user(
+        101,
+        55,
+        "https://www.trendyol.com/brand/product-p-1",
+        expanded=True,
+    )
+    expanded_callbacks = [
+        button.callback_data
+        for row in expanded.inline_keyboard
+        for button in row
+        if button.callback_data
+    ]
+    assert expanded_callbacks == ["product_compact:55"]

@@ -107,16 +107,32 @@ Telegram Stars payments use `XTR` invoice currency and an internal payload that 
 
 ## Scraper Layer
 
-The private Trendyol scraper module is responsible for external product data in the owner runtime:
+The private Trendyol scraper module is responsible for fetching external data in the owner runtime. Fetched product HTML is normalized by the tracked `parsers/trendyol_product.py` adapter into `models.product.ProductSnapshot`.
 
 - current price;
+- original and basket/campaign prices;
 - product title;
 - product image;
+- product identity, brand, category path, and selected variants;
+- stock state, rating, review count, seller, seller score, and delivery hints;
+- category-specific attributes stored as a bounded key/value map;
 - Trendyol trends;
 - category/search trend flows;
 - external price history helpers where available.
 
-It is called by subscription creation, scheduled price checks, history flows, comparison, and trending flows. The implementation is not distributed in the public portfolio source.
+It is called by subscription creation, scheduled price checks, history flows, comparison, and trending flows. The network implementation is not distributed in the public portfolio source. Parser tests use synthetic HTML fixtures for electronics, clothing, and cosmetics and therefore do not make live Trendyol requests.
+
+Product identity and seller offer identity remain separate concepts. The same `product_id` may have multiple `merchant_id` values with different prices, campaigns, stock, and delivery. URL normalization therefore preserves query parameters that select the merchant context.
+
+## Presentation Layer
+
+`presenters/product_card.py` converts subscription state and an optional `ProductSnapshot` into Telegram-safe compact and expanded cards.
+
+- The compact card prioritizes price, discount, alert state, and the next likely user action.
+- Opening a subscription reads only the fresh in-memory cache and never starts an external request.
+- The expanded card requests richer product data on demand and exposes category-specific details without crowding the normal watchlist flow.
+- Dynamic values are HTML-escaped and optional detail blocks are bounded so photo captions remain within Telegram limits.
+- Compact-card buttons expose frequent actions; mode, interval, target, and pause controls remain grouped under Settings. Expanded cards omit destructive controls.
 
 ## Notification Layer
 
@@ -202,7 +218,7 @@ The main remaining architectural debt is that `bot.py` still contains too much m
 
 - history and comparison logic into a dedicated service;
 - scheduler setup into a runtime module;
-- card/list formatting into a presenter layer;
+- remaining list and notification formatting into presenter modules;
 - recommendation generation into a recommendation service;
 - scraper fallback strategies into adapters.
 

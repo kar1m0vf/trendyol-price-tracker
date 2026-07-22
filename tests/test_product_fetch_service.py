@@ -12,14 +12,22 @@ def test_product_snapshot_supports_progressive_card_fields():
         price=1200.0,
         title="Product",
         brand="Brand",
+        old_price=1400.0,
+        currency="TL",
+        in_stock=True,
         rating=4.8,
         review_count=250,
         seller="Store",
+        merchant_id="7",
+        selected_variants={"memory": "256 GB"},
         attributes={"memory": "256 GB"},
     )
 
     assert snapshot.current_price == 1200.0
     assert snapshot.has_core_data is True
+    assert snapshot.old_price == 1400.0
+    assert snapshot.merchant_id == "7"
+    assert snapshot.selected_variants["memory"] == "256 GB"
     assert snapshot.attributes["memory"] == "256 GB"
 
 
@@ -27,6 +35,26 @@ def test_canonical_product_url_preserves_query_and_removes_harmless_differences(
     assert canonical_product_url(
         " HTTPS://WWW.TRENDYOL.COM/brand/product-p-1/?merchantId=7#details "
     ) == "https://www.trendyol.com/brand/product-p-1?merchantId=7"
+
+
+@pytest.mark.asyncio
+async def test_product_fetch_service_peek_never_starts_external_request():
+    calls = 0
+
+    async def fetch(url):
+        nonlocal calls
+        calls += 1
+        return ProductSnapshot(url=url, price=100.0)
+
+    service = ProductFetchService(fetch, ttl_seconds=300)
+    url = "https://www.trendyol.com/brand/product-p-1"
+
+    assert await service.peek(url) is None
+    assert calls == 0
+
+    loaded = await service.get(url)
+    assert await service.peek(url) is loaded
+    assert calls == 1
 
 
 @pytest.mark.asyncio

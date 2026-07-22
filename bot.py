@@ -72,7 +72,7 @@ from database import (
     close_all_connections,
 )
 from localization import t, LOCALES
-from keyboards import get_about_inline_kb, get_help_inline_kb
+from keyboards import get_about_inline_kb, get_help_inline_kb, product_card_kb_for_user
 
 
 def _parse_kv_floats(text: Optional[str]) -> Dict[str, float]:
@@ -109,10 +109,13 @@ from scraper import (
     get_price_async,
     get_price_history_from_akakce_async,
     get_product_info_async,
+    get_product_snapshot_async,
 )
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from services.notification_service import NotificationService
 from services.product_fetch_service import ProductFetchService
+from models.product import ProductSnapshot
+from presenters.product_card import ProductCardView, render_product_card
 from handlers.admin_handler import (
     admin_backup,
     admin_check_blocked,
@@ -255,7 +258,7 @@ dp: Optional[Dispatcher] = None
 router = Router(name="telegrambot")
 notification_service: Optional[NotificationService] = None
 product_fetch_service = ProductFetchService(
-    get_product_info_async,
+    get_product_snapshot_async,
     ttl_seconds=PRODUCT_INFO_CACHE_TTL_SECONDS,
     negative_ttl_seconds=PRODUCT_INFO_NEGATIVE_CACHE_TTL_SECONDS,
     max_entries=PRODUCT_INFO_CACHE_MAX_ENTRIES,
@@ -1605,14 +1608,17 @@ def _subscription_active_map_for_user(user_id: int) -> Dict[int, bool]:
         return {}
 
 
-def format_subscription_card(user_id: int, sub: Tuple[Any, ...]) -> str:
+def format_subscription_card(
+    user_id: int,
+    sub: Tuple[Any, ...],
+    *,
+    snapshot: Optional[ProductSnapshot] = None,
+    expanded: bool = False,
+) -> str:
+    """Render the user's compact card or an on-demand expanded product view."""
     data = _subscription_fields(sub)
     sub_id = data["sub_id"]
     url = data["url"] or ""
-    public_label = html.escape(_subscription_public_label(user_id, sub_id))
-    title_text = html.escape(_short_title(data["product_title"], url))
-    price_text = html.escape(_format_price_for_user(user_id, data["last_price"]))
-    mode_text = html.escape(_mode_text_for_user(user_id, data["mode"]))
     failure_state = _subscription_failure_map_for_user(user_id).get(sub_id)
     is_active = _subscription_active_for_display(sub_id)
     status_icon, status_text = _subscription_status_for_display(
@@ -1621,39 +1627,28 @@ def format_subscription_card(user_id: int, sub: Tuple[Any, ...]) -> str:
         failure_state,
         is_active=is_active,
     )
-    next_notify = html.escape(_next_notification_for_subscription_card(user_id, data, is_active=is_active))
-
-    lines = [
-        f"{status_icon} <b>{html.escape(status_text)}</b> | <code>{public_label}</code>",
-        f"📦 <b>{title_text}</b>",
-        f"💰 {html.escape(t(user_id, 'current_price'))}: <b>{price_text}</b>",
-        f"🔔 {html.escape(t(user_id, 'mode'))}: {mode_text}",
-        f"⏱ {html.escape(t(user_id, 'subscription_card_next'))}: {next_notify}",
-    ]
-
-    if data["price_alert"] is not None:
-        lines.append(
-            f"🎯 {html.escape(t(user_id, 'price_alert_label'))}: "
-            f"{html.escape(_format_price_for_user(user_id, data['price_alert']))}"
-        )
-    if data["min_price"] is not None:
-        lines.append(
-            f"📉 {html.escape(t(user_id, 'min_price_label'))}: "
-            f"{html.escape(_format_price_for_user(user_id, data['min_price']))}"
-        )
-    if data["max_price"] is not None:
-        lines.append(
-            f"📈 {html.escape(t(user_id, 'max_price_label'))}: "
-            f"{html.escape(_format_price_for_user(user_id, data['max_price']))}"
-        )
-    if data["notify_percent"] is not None:
-        try:
-            lines.append(f"📊 {html.escape(t(user_id, 'notify_percent'))}: {float(data['notify_percent']):.1f}%")
-        except (TypeError, ValueError):
-            pass
-
-    lines.extend(["", _product_link_html(user_id, url)])
-    return "\n".join(lines)
+    view = ProductCardView(
+        subscription_label=_subscription_public_label(user_id, sub_id),
+        title=_short_title(data["product_title"], url, limit=120),
+        url=url,
+        status_icon=status_icon,
+        status_text=status_text,
+        current_price=data["last_price"],
+        mode_text=_mode_text_for_user(user_id, data["mode"]),
+        next_notification=_next_notification_for_subscription_card(
+            user_id,
+            data,
+            is_active=is_active,
+        ),
+        unknown_price_text=t(user_id, "unknown_price"),
+        price_alert=data["price_alert"],
+        snapshot=snapshot,
+    )
+    return render_product_card(
+        view,
+        lambda key: t(user_id, key),
+        expanded=expanded,
+    )
 
 
 def build_subscriptions_overview(
@@ -1729,7 +1724,7 @@ async def send_subscription_added_message(
     mode: Optional[str],
 ) -> None:
     text = format_subscription_added_card(user_id, sub_id, url, title, price, mode)
-    controls = subscription_controls_kb_for_user(user_id, sub_id)
+    controls = product_card_kb_for_user(user_id, sub_id, url)
 
     if image:
         try:

@@ -30,7 +30,13 @@ from database import (
     clear_subscription_check_failure, get_subscription_active, update_payment_event_status,
     get_subscription_failure_details, set_subscription_active
 )
-from keyboards import get_onboarding_inline_kb, get_premium_inline_kb, subscription_controls_kb_for_user, get_main_kb
+from keyboards import (
+    get_main_kb,
+    get_onboarding_inline_kb,
+    get_premium_inline_kb,
+    product_card_kb_for_user,
+    subscription_controls_kb_for_user,
+)
 from logging_utils import action_event, actor_label
 from localization import update_language_cache
 from user_texts import format_start_text
@@ -57,6 +63,8 @@ from services.trending_service import (
 )
 import sqlite3
 import logging
+
+from models.product import ProductSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -1172,6 +1180,24 @@ class CallbackHandler(BaseHandler):
                 await self._show_subscription_settings(cq, user_id, sub_id)
                 return
 
+            if data.startswith("product_details:"):
+                try:
+                    sub_id = int(data.split(":", 1)[1])
+                except ValueError:
+                    await cq.answer(self.t(user_id, "error_invalid_id"), show_alert=True)
+                    return
+                await self._show_product_details(cq, user_id, sub_id)
+                return
+
+            if data.startswith("product_compact:"):
+                try:
+                    sub_id = int(data.split(":", 1)[1])
+                except ValueError:
+                    await cq.answer(self.t(user_id, "error_invalid_id"), show_alert=True)
+                    return
+                await self._show_subscription_detail(cq, user_id, sub_id)
+                return
+
             if data.startswith("settings_mode:"):
                 parts = data.split(":")
                 if len(parts) != 3:
@@ -1361,15 +1387,29 @@ class CallbackHandler(BaseHandler):
         return str(ts_val)
 
     def _subscription_detail_keyboard(self, user_id: int, sub_id: int) -> InlineKeyboardMarkup:
-        controls = subscription_controls_kb_for_user(user_id, sub_id)
-        rows = [list(row) for row in controls.inline_keyboard]
-        rows.append([
-            InlineKeyboardButton(
-                text=f"⬅️ {self.t(user_id, 'btn_back')}",
-                callback_data="subs:list",
-            )
-        ])
-        return InlineKeyboardMarkup(inline_keyboard=rows)
+        sub = get_subscription(sub_id)
+        url = str(self._subscription_values(sub)[2] or "") if sub else ""
+        return product_card_kb_for_user(user_id, sub_id, url)
+
+    def _subscription_expanded_keyboard(self, user_id: int, sub_id: int, url: str) -> InlineKeyboardMarkup:
+        return product_card_kb_for_user(user_id, sub_id, url, expanded=True)
+
+    @staticmethod
+    async def _peek_product_snapshot(url: str) -> ProductSnapshot | None:
+        """Read enriched data from memory without creating a Trendyol request."""
+        try:
+            from bot import product_fetch_service
+
+            return await product_fetch_service.peek(url)
+        except Exception:
+            logger.debug("Could not read product snapshot cache for %s", url, exc_info=True)
+            return None
+
+    @staticmethod
+    async def _fetch_product_snapshot(url: str, *, force_refresh: bool = False) -> ProductSnapshot:
+        from bot import product_fetch_service
+
+        return await product_fetch_service.get(url, force_refresh=force_refresh)
 
     def _subscription_settings_keyboard(self, user_id: int, sub) -> InlineKeyboardMarkup:
         (
@@ -1538,17 +1578,54 @@ class CallbackHandler(BaseHandler):
             return
 
         await cq.answer(notice or None)
-        text = (
-            f"⚙️ <b>{html.escape(self.t(user_id, 'edit_subscription'))}</b>\n\n"
-            + format_subscription_card(user_id, sub)
-        )
-        product_image = str(self._subscription_values(sub)[6] or "").strip()
+        values = self._subscription_values(sub)
+        url = str(values[2] or "")
+        snapshot = await self._peek_product_snapshot(url)
+        text = format_subscription_card(user_id, sub, snapshot=snapshot)
+        product_image = str((snapshot.image if snapshot and snapshot.image else values[6]) or "").strip()
         await self._show_product_card_message(
             cq,
             user_id,
             text,
             image=product_image,
             reply_markup=self._subscription_detail_keyboard(user_id, sub_id),
+        )
+
+    async def _show_product_details(
+        self,
+        cq: CallbackQuery,
+        user_id: int,
+        sub_id: int,
+    ) -> None:
+        from bot import format_subscription_card
+
+        sub = get_subscription(sub_id)
+        if not sub or sub[1] != user_id:
+            await cq.answer(self.t(user_id, "error_not_your_sub"), show_alert=True)
+            return
+
+        values = self._subscription_values(sub)
+        url = str(values[2] or "")
+        await cq.answer(self.t(user_id, "status_loading_product_details"))
+        try:
+            snapshot = await self._fetch_product_snapshot(url)
+        except Exception:
+            logger.exception("Could not load expanded product details for sub %s", sub_id)
+            snapshot = None
+
+        text = format_subscription_card(
+            user_id,
+            sub,
+            snapshot=snapshot,
+            expanded=True,
+        )
+        product_image = str((snapshot.image if snapshot and snapshot.image else values[6]) or "").strip()
+        await self._show_product_card_message(
+            cq,
+            user_id,
+            text,
+            image=product_image,
+            reply_markup=self._subscription_expanded_keyboard(user_id, sub_id, url),
         )
 
     async def _show_subscription_settings(
@@ -1851,7 +1928,8 @@ class CallbackHandler(BaseHandler):
         _, _, url, _, old_price, old_title, old_image = values[:7]
 
         try:
-            new_price, new_title, new_image = await get_product_info_async(url)
+            snapshot = await self._fetch_product_snapshot(url, force_refresh=True)
+            new_price, new_title, new_image = snapshot.price, snapshot.title, snapshot.image
             if new_price is None:
                 record_subscription_check_failure(sub_id, "manual_price_not_found")
                 await self.replace_status_message(

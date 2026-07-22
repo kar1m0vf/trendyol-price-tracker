@@ -7,6 +7,7 @@ from aiogram.exceptions import TelegramBadRequest
 
 from handlers import callback_handler as callback_module
 from handlers import CallbackHandler
+from models.product import ProductSnapshot
 
 
 def test_base_handler_resolves_runtime_bot_from_main_module(monkeypatch):
@@ -90,6 +91,56 @@ async def test_edit_subscription_callback_edits_list_message(monkeypatch):
     cq.message.edit_text.assert_awaited_once()
     handler._bot.send_message.assert_not_awaited()
     assert "CARD" in cq.message.edit_text.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_product_details_loads_enriched_snapshot_and_can_return_to_card(monkeypatch):
+    handler = CallbackHandler()
+    sub = (
+        42,
+        12345,
+        "https://www.trendyol.com/test/product-p-42",
+        "discount",
+        199.0,
+        "Test product",
+        None,
+        None,
+        None,
+        None,
+        60,
+        None,
+        None,
+    )
+    snapshot = ProductSnapshot(
+        url=sub[2],
+        price=189.0,
+        brand="Brand",
+        seller="Store",
+    )
+    fetch = AsyncMock(return_value=snapshot)
+    handler._fetch_product_snapshot = fetch
+    monkeypatch.setattr(callback_module, "get_subscription", lambda sub_id: sub)
+
+    cq = MagicMock()
+    cq.data = "product_details:42"
+    cq.from_user.id = 12345
+    cq.answer = AsyncMock()
+    cq.message.edit_text = AsyncMock()
+
+    with patch("bot.format_subscription_card", return_value="EXPANDED") as formatter:
+        await handler.handle_main_callback(cq)
+
+    fetch.assert_awaited_once_with(sub[2])
+    formatter.assert_called_once_with(12345, sub, snapshot=snapshot, expanded=True)
+    cq.answer.assert_awaited_once_with(handler.t(12345, "status_loading_product_details"))
+    kwargs = cq.message.edit_text.await_args.kwargs
+    callbacks = [
+        button.callback_data
+        for row in kwargs["reply_markup"].inline_keyboard
+        for button in row
+        if button.callback_data
+    ]
+    assert callbacks == ["product_compact:42"]
 
 
 @pytest.mark.asyncio
@@ -315,11 +366,11 @@ async def test_refresh_price_callback_rejects_foreign_subscription(monkeypatch):
         None,
         None,
     )
-    fetch = AsyncMock(return_value=(179.0, "Fresh title", None))
+    fetch = AsyncMock(return_value=ProductSnapshot(price=179.0, title="Fresh title"))
     handler.send_status_message = AsyncMock()
+    handler._fetch_product_snapshot = fetch
 
     monkeypatch.setattr(callback_module, "get_subscription", lambda sub_id: foreign_sub)
-    monkeypatch.setattr(callback_module, "get_product_info_async", fetch)
 
     cq = MagicMock()
     cq.data = "refresh_price:42"
@@ -352,14 +403,19 @@ async def test_refresh_price_callback_updates_changed_price(monkeypatch):
         None,
         None,
     )
-    fetch = AsyncMock(return_value=(179.0, "Fresh title", "https://img.example/1.jpg"))
+    fetch = AsyncMock(
+        return_value=ProductSnapshot(
+            price=179.0,
+            title="Fresh title",
+            image="https://img.example/1.jpg",
+        )
+    )
     update_last = MagicMock()
     update_meta = MagicMock()
     save_point = MagicMock(return_value=1)
     clear_failure = MagicMock()
 
     monkeypatch.setattr(callback_module, "get_subscription", lambda sub_id: sub)
-    monkeypatch.setattr(callback_module, "get_product_info_async", fetch)
     monkeypatch.setattr(callback_module, "update_last_price", update_last)
     monkeypatch.setattr(callback_module, "update_subscription_meta", update_meta)
     monkeypatch.setattr(callback_module, "save_price_point", save_point)
@@ -368,6 +424,7 @@ async def test_refresh_price_callback_updates_changed_price(monkeypatch):
     handler.send_status_message = AsyncMock()
     handler.replace_status_message = AsyncMock(return_value=True)
     handler._subscription_detail_keyboard = MagicMock(return_value=None)
+    handler._fetch_product_snapshot = fetch
 
     cq = MagicMock()
     cq.data = "refresh_price:42"
@@ -381,7 +438,10 @@ async def test_refresh_price_callback_updates_changed_price(monkeypatch):
     handler.send_status_message.assert_not_awaited()
     cq.message.edit_text.assert_awaited_once()
     assert cq.message.edit_text.await_args.args[0] == handler.t(12345, "status_checking_product")
-    fetch.assert_awaited_once_with("https://www.trendyol.com/test/product-p-42")
+    fetch.assert_awaited_once_with(
+        "https://www.trendyol.com/test/product-p-42",
+        force_refresh=True,
+    )
     update_meta.assert_called_once_with(42, "Fresh title", "https://img.example/1.jpg")
     save_point.assert_called_once_with(42, 179.0)
     update_last.assert_called_once_with(42, 179.0)
@@ -413,19 +473,19 @@ async def test_refresh_price_callback_records_failure_when_price_missing(monkeyp
         None,
         None,
     )
-    fetch = AsyncMock(return_value=(None, None, None))
+    fetch = AsyncMock(return_value=ProductSnapshot())
     record_failure = MagicMock()
     update_last = MagicMock()
     save_point = MagicMock()
 
     monkeypatch.setattr(callback_module, "get_subscription", lambda sub_id: sub)
-    monkeypatch.setattr(callback_module, "get_product_info_async", fetch)
     monkeypatch.setattr(callback_module, "record_subscription_check_failure", record_failure)
     monkeypatch.setattr(callback_module, "update_last_price", update_last)
     monkeypatch.setattr(callback_module, "save_price_point", save_point)
     handler.send_status_message = AsyncMock()
     handler.replace_status_message = AsyncMock(return_value=True)
     handler._subscription_detail_keyboard = MagicMock(return_value=None)
+    handler._fetch_product_snapshot = fetch
 
     cq = MagicMock()
     cq.data = "refresh_price:42"
